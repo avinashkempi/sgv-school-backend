@@ -11,6 +11,9 @@ const _Class = require('../models/Class');
 // @route   GET /api/exams/standardized
 // @desc    Get status of standardized exams for a class/subject
 // @access  Private (Teacher)
+// @route   GET /api/exams/standardized
+// @desc    Get status of standardized exams for a class/subject
+// @access  Private (Teacher)
 router.get('/standardized', auth, async (req, res) => {
     try {
         const { classId, subjectId } = req.query;
@@ -21,27 +24,39 @@ router.get('/standardized', auth, async (req, res) => {
 
         // Get active academic year
         const AcademicYear = require('../models/AcademicYear');
-        const activeYear = await AcademicYear.findOne({ isActive: true });
+        const activeYear = await AcademicYear.findOne({ isActive: true }).lean();
 
         if (!activeYear) {
             return res.status(404).json({ message: 'No active academic year found' });
         }
 
         const standardizedTypes = ['FA1', 'FA2', 'SA1', 'FA3', 'FA4', 'SA2'];
+
+        // 1. Fetch all standardized exams for this class/subject
         const exams = await Exam.find({
             class: classId,
             subject: subjectId,
             academicYear: activeYear._id,
             isStandardized: true
+        }).lean();
+
+        // 2. Aggregate marks counts for these exams in one query
+        const examIds = exams.map(e => e._id);
+        const marksCounts = await Marks.aggregate([
+            { $match: { exam: { $in: examIds } } },
+            { $group: { _id: '$exam', count: { $sum: 1 } } }
+        ]);
+
+        // Create a map for fast lookup: examId -> count
+        const marksCountMap = {};
+        marksCounts.forEach(item => {
+            marksCountMap[item._id.toString()] = item.count;
         });
 
-        const result = await Promise.all(standardizedTypes.map(async (type) => {
+        // 3. Map results
+        const result = standardizedTypes.map(type => {
             const exam = exams.find(e => e.standardizedType === type);
-            let marksCount = 0;
-
-            if (exam) {
-                marksCount = await Marks.countDocuments({ exam: exam._id });
-            }
+            const marksCount = exam ? (marksCountMap[exam._id.toString()] || 0) : 0;
 
             return {
                 type,
@@ -50,7 +65,7 @@ router.get('/standardized', auth, async (req, res) => {
                 marksEntered: marksCount > 0,
                 marksCount
             };
-        }));
+        });
 
         res.json(result);
     } catch (err) {
@@ -221,6 +236,108 @@ router.post('/standardized/bulk', auth, async (req, res) => {
         }
 
         res.json(results);
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).send('Server Error');
+    }
+});
+
+// @route   POST /api/exams/school-wide/init
+// @desc    Initialize a specific standardized exam for ALL classes and subjects
+// @access  Private (Admin/Super Admin)
+router.post('/school-wide/init', auth, async (req, res) => {
+    try {
+        const { type, totalMarks, date, instructions, duration } = req.body;
+
+        // Validate Admin/Super Admin
+        const userRole = req.user.role;
+        if (userRole !== 'admin' && userRole !== 'super admin') {
+            return res.status(403).json({ message: 'Not authorized. Only Admins can perform school-wide initialization.' });
+        }
+
+        if (!['FA1', 'FA2', 'SA1', 'FA3', 'FA4', 'SA2'].includes(type)) {
+            return res.status(400).json({ message: 'Invalid exam type. Must be one of: FA1, FA2, SA1, FA3, FA4, SA2' });
+        }
+
+        // Get active academic year
+        const AcademicYear = require('../models/AcademicYear');
+        const activeYear = await AcademicYear.findOne({ isActive: true }).lean();
+
+        if (!activeYear) {
+            return res.status(404).json({ message: 'No active academic year found' });
+        }
+
+        const examNames = {
+            'FA1': 'Formative Assessment 1',
+            'FA2': 'Formative Assessment 2',
+            'SA1': 'Summative Assessment 1',
+            'FA3': 'Formative Assessment 3',
+            'FA4': 'Formative Assessment 4',
+            'SA2': 'Summative Assessment 2'
+        };
+
+        // 1. Fetch all Classes and Subjects in parallel
+        const [classes, allSubjects] = await Promise.all([
+            _Class.find().lean(),
+            Subject.find().lean()
+        ]);
+
+        // 2. Fetch all existing exams of this type for this year
+        const existingExams = await Exam.find({
+            academicYear: activeYear._id,
+            standardizedType: type,
+            isStandardized: true
+        }).select('class subject').lean();
+
+        // Create a Set for fast lookup: "classId-subjectId"
+        const existingExamSet = new Set(
+            existingExams.map(e => `${e.class.toString()}-${e.subject.toString()}`)
+        );
+
+        const newExams = [];
+        let skippedCount = 0;
+
+        // 3. Iterate in memory
+        for (const cls of classes) {
+            // Filter subjects for this class
+            const classSubjects = allSubjects.filter(s => s.class.toString() === cls._id.toString());
+
+            for (const subject of classSubjects) {
+                const key = `${cls._id.toString()}-${subject._id.toString()}`;
+
+                if (!existingExamSet.has(key)) {
+                    newExams.push({
+                        name: examNames[type],
+                        type: type.startsWith('SA') ? 'mid-term' : 'unit-test',
+                        isStandardized: true,
+                        standardizedType: type,
+                        class: cls._id,
+                        subject: subject._id,
+                        totalMarks: totalMarks || 100,
+                        date: date || Date.now(),
+                        academicYear: activeYear._id,
+                        createdBy: req.user.userId,
+                        instructions,
+                        duration
+                    });
+                } else {
+                    skippedCount++;
+                }
+            }
+        }
+
+        // 4. Bulk Insert
+        if (newExams.length > 0) {
+            await Exam.insertMany(newExams);
+        }
+
+        res.json({
+            message: `Initialization complete for ${type}`,
+            created: newExams.length,
+            skipped: skippedCount,
+            totalProcessed: newExams.length + skippedCount
+        });
+
     } catch (err) {
         console.error(err.message);
         res.status(500).send('Server Error');
