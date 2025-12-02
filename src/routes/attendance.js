@@ -14,7 +14,7 @@ router.post('/mark', auth, async (req, res) => {
         const { classId, subjectId, date, attendanceRecords } = req.body;
 
         // Validate teacher authorization
-        const teacherUser = await User.findById(req.user.userId);
+        const _teacherUser = await User.findById(req.user.userId);
         let isAuthorized = false;
 
         // Check if teacher
@@ -38,7 +38,7 @@ router.post('/mark', auth, async (req, res) => {
         }
 
         for (const record of attendanceRecords) {
-            const { studentId, status, remarks, period } = record;
+            const { studentId, status, remarks, _period } = record;
             // Ensure date is a Date object, not a timestamp number
             const attendanceDate = new Date(date);
             attendanceDate.setHours(0, 0, 0, 0);

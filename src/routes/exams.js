@@ -3,10 +3,10 @@ const router = express.Router();
 const { authenticateToken: auth } = require('../middleware/auth');
 const Exam = require('../models/Exam');
 const Marks = require('../models/Marks');
-const GradeConfig = require('../models/GradeConfig');
+const _GradeConfig = require('../models/GradeConfig');
 const User = require('../models/User');
 const Subject = require('../models/Subject');
-const Class = require('../models/Class');
+const _Class = require('../models/Class');
 
 // @route   GET /api/exams/standardized
 // @desc    Get status of standardized exams for a class/subject
@@ -80,7 +80,11 @@ router.post('/standardized', auth, async (req, res) => {
             return res.status(404).json({ message: 'Subject not found' });
         }
 
-        if (!subject.teachers.includes(req.user.userId)) {
+        // Validate teacher authorization
+        const userRole = req.user.role;
+        const isAdmin = userRole === 'admin' || userRole === 'super admin';
+
+        if (!isAdmin && !subject.teachers.includes(req.user.userId)) {
             return res.status(403).json({ message: 'Not authorized to create exam for this subject' });
         }
 
@@ -411,7 +415,7 @@ router.get('/history', auth, async (req, res) => {
 router.get('/performance/class/:classId', auth, async (req, res) => {
     try {
         const { academicYearId } = req.query;
-        const user = await User.findById(req.user.userId);
+        const _user = await User.findById(req.user.userId);
 
         // Get active academic year if not provided
         let yearId = academicYearId;

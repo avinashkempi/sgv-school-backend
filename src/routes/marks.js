@@ -21,7 +21,7 @@ const calculateGrade = async (percentage, examId) => {
 
         const result = gradeConfig.getGrade(percentage);
         return result.grade;
-    } catch (error) {
+    } catch (_error) {
         return getDefaultGrade(percentage);
     }
 };

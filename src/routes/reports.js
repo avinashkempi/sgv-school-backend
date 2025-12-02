@@ -4,7 +4,7 @@ const { authenticateToken: auth } = require('../middleware/auth');
 const Exam = require('../models/Exam');
 const Marks = require('../models/Marks');
 const User = require('../models/User');
-const GradeConfig = require('../models/GradeConfig');
+const _GradeConfig = require('../models/GradeConfig');
 
 // Helper to get grade
 const getGrade = (percentage) => {

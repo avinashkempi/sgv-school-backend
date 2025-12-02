@@ -1,4 +1,4 @@
-const mongoose = require('mongoose');
+
 const connectDB = require('../config/database');
 const User = require('../models/User');
 require('dotenv').config(); // Load .env from current directory

@@ -7,9 +7,7 @@ const User = require('../models/User');
 const AcademicYear = require('../models/AcademicYear');
 const Timetable = require('../models/Timetable');
 const { authenticateToken: auth, checkRole } = require('../middleware/auth');
-const notificationService = require('../services/notificationService');
-
-
+const _notificationService = require('../services/notificationService');
 
 // @route   GET /api/classes
 // @desc    Get all classes
@@ -453,7 +451,7 @@ router.post('/:id/subjects', auth, async (req, res) => {
             name: subjectName,
             class: classId,
             globalSubject: globalSubjectRef,
-            globalSubject: globalSubjectRef,
+
             teachers: [] // Start with no teachers assigned
         });
 

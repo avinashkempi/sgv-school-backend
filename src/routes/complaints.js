@@ -3,7 +3,7 @@ const router = express.Router();
 const { authenticateToken: auth, checkRole } = require('../middleware/auth');
 const Complaint = require('../models/Complaint');
 const User = require('../models/User');
-const Class = require('../models/Class');
+const _Class = require('../models/Class');
 
 // @route   POST /api/complaints
 // @desc    Create a new complaint
