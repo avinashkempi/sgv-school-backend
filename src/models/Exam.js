@@ -8,7 +8,7 @@ const ExamSchema = new mongoose.Schema({
     type: {
         type: String,
         enum: ['unit-test', 'mid-term', 'final', 'practical'],
-        required: true
+        required: false  // Made optional for backward compatibility
     },
     class: {
         type: mongoose.Schema.Types.ObjectId,
@@ -51,12 +51,12 @@ const ExamSchema = new mongoose.Schema({
     },
     isStandardized: {
         type: Boolean,
-        default: false
+        default: true  // Now defaults to true - all new exams are standardized
     },
     standardizedType: {
         type: String,
-        enum: ['FA1', 'FA2', 'SA1', 'FA3', 'FA4', 'SA2', null],
-        default: null
+        enum: ['FA1', 'FA2', 'SA1', 'FA3', 'FA4', 'SA2'],
+        required: true  // Made required - must be one of the 6 fixed types
     }
 });
 
