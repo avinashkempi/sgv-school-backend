@@ -8,6 +8,120 @@ const User = require('../models/User');
 const Subject = require('../models/Subject');
 const Class = require('../models/Class');
 
+// @route   GET /api/exams/standardized
+// @desc    Get status of standardized exams for a class/subject
+// @access  Private (Teacher)
+router.get('/standardized', auth, async (req, res) => {
+    try {
+        const { classId, subjectId } = req.query;
+
+        if (!classId || !subjectId) {
+            return res.status(400).json({ message: 'Class ID and Subject ID are required' });
+        }
+
+        // Get active academic year
+        const AcademicYear = require('../models/AcademicYear');
+        const activeYear = await AcademicYear.findOne({ isActive: true });
+
+        if (!activeYear) {
+            return res.status(404).json({ message: 'No active academic year found' });
+        }
+
+        const standardizedTypes = ['FA1', 'FA2', 'SA1', 'FA3', 'FA4', 'SA2'];
+        const exams = await Exam.find({
+            class: classId,
+            subject: subjectId,
+            academicYear: activeYear._id,
+            isStandardized: true
+        });
+
+        const result = await Promise.all(standardizedTypes.map(async (type) => {
+            const exam = exams.find(e => e.standardizedType === type);
+            let marksCount = 0;
+
+            if (exam) {
+                marksCount = await Marks.countDocuments({ exam: exam._id });
+            }
+
+            return {
+                type,
+                exists: !!exam,
+                exam: exam || null,
+                marksEntered: marksCount > 0,
+                marksCount
+            };
+        }));
+
+        res.json(result);
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).send('Server Error');
+    }
+});
+
+// @route   POST /api/exams/standardized
+// @desc    Create/Initialize a standardized exam
+// @access  Private (Teacher)
+router.post('/standardized', auth, async (req, res) => {
+    try {
+        const { type, classId, subjectId, totalMarks, date, instructions } = req.body;
+
+        if (!['FA1', 'FA2', 'SA1', 'FA3', 'FA4', 'SA2'].includes(type)) {
+            return res.status(400).json({ message: 'Invalid exam type' });
+        }
+
+        // Validate teacher authorization
+        const subject = await Subject.findById(subjectId);
+        if (!subject) {
+            return res.status(404).json({ message: 'Subject not found' });
+        }
+
+        if (!subject.teachers.includes(req.user.userId)) {
+            return res.status(403).json({ message: 'Not authorized' });
+        }
+
+        // Get active academic year
+        const AcademicYear = require('../models/AcademicYear');
+        const activeYear = await AcademicYear.findOne({ isActive: true });
+
+        if (!activeYear) {
+            return res.status(404).json({ message: 'No active academic year found' });
+        }
+
+        // Check if already exists
+        let exam = await Exam.findOne({
+            class: classId,
+            subject: subjectId,
+            academicYear: activeYear._id,
+            standardizedType: type
+        });
+
+        if (exam) {
+            return res.status(400).json({ message: 'Exam already exists' });
+        }
+
+        exam = new Exam({
+            name: type, // Fixed name
+            type: type.startsWith('SA') ? 'mid-term' : 'unit-test', // Map to existing types roughly
+            isStandardized: true,
+            standardizedType: type,
+            class: classId,
+            subject: subjectId,
+            totalMarks,
+            date: date || Date.now(),
+            academicYear: activeYear._id,
+            createdBy: req.user.userId,
+            instructions
+        });
+
+        await exam.save();
+        res.json(exam);
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).send('Server Error');
+    }
+});
+
 // @route   POST /api/exams
 // @desc    Create new exam
 // @access  Private (Teacher)

@@ -48,6 +48,15 @@ const ExamSchema = new mongoose.Schema({
     createdAt: {
         type: Date,
         default: Date.now
+    },
+    isStandardized: {
+        type: Boolean,
+        default: false
+    },
+    standardizedType: {
+        type: String,
+        enum: ['FA1', 'FA2', 'SA1', 'FA3', 'FA4', 'SA2', null],
+        default: null
     }
 });
 
@@ -55,5 +64,14 @@ const ExamSchema = new mongoose.Schema({
 ExamSchema.index({ class: 1, subject: 1 });
 ExamSchema.index({ academicYear: 1 });
 ExamSchema.index({ date: 1 });
+
+// Ensure unique standardized exam per class+subject+academicYear
+ExamSchema.index(
+    { class: 1, subject: 1, academicYear: 1, standardizedType: 1 },
+    {
+        unique: true,
+        partialFilterExpression: { isStandardized: true }
+    }
+);
 
 module.exports = mongoose.model('Exam', ExamSchema);
