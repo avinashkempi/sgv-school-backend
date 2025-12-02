@@ -148,6 +148,85 @@ router.post('/standardized', auth, async (req, res) => {
     }
 });
 
+// @route   POST /api/exams/standardized/bulk
+// @desc    Initialize all missing standardized exams for a class/subject
+// @access  Private (Teacher/Admin)
+router.post('/standardized/bulk', auth, async (req, res) => {
+    try {
+        const { classId, subjectId, totalMarks, date, instructions, duration } = req.body;
+
+        // Validate teacher authorization
+        const subject = await Subject.findById(subjectId);
+        if (!subject) {
+            return res.status(404).json({ message: 'Subject not found' });
+        }
+
+        const userRole = req.user.role;
+        const isAdmin = userRole === 'admin' || userRole === 'super admin';
+
+        if (!isAdmin && !subject.teachers.includes(req.user.userId)) {
+            return res.status(403).json({ message: 'Not authorized to create exams for this subject' });
+        }
+
+        // Get active academic year
+        const AcademicYear = require('../models/AcademicYear');
+        const activeYear = await AcademicYear.findOne({ isActive: true });
+
+        if (!activeYear) {
+            return res.status(404).json({ message: 'No active academic year found' });
+        }
+
+        const examTypes = ['FA1', 'FA2', 'SA1', 'FA3', 'FA4', 'SA2'];
+        const examNames = {
+            'FA1': 'Formative Assessment 1',
+            'FA2': 'Formative Assessment 2',
+            'SA1': 'Summative Assessment 1',
+            'FA3': 'Formative Assessment 3',
+            'FA4': 'Formative Assessment 4',
+            'SA2': 'Summative Assessment 2'
+        };
+
+        const results = [];
+
+        for (const type of examTypes) {
+            // Check if exists
+            let exam = await Exam.findOne({
+                class: classId,
+                subject: subjectId,
+                academicYear: activeYear._id,
+                standardizedType: type,
+                isStandardized: true
+            });
+
+            if (!exam) {
+                exam = new Exam({
+                    name: examNames[type],
+                    type: type.startsWith('SA') ? 'mid-term' : 'unit-test',
+                    isStandardized: true,
+                    standardizedType: type,
+                    class: classId,
+                    subject: subjectId,
+                    totalMarks: totalMarks || 100,
+                    date: date || Date.now(),
+                    academicYear: activeYear._id,
+                    createdBy: req.user.userId,
+                    instructions,
+                    duration
+                });
+                await exam.save();
+                results.push({ type, status: 'created', exam });
+            } else {
+                results.push({ type, status: 'exists', exam });
+            }
+        }
+
+        res.json(results);
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).send('Server Error');
+    }
+});
+
 // @route   POST /api/exams
 // @desc    Create new exam (DEPRECATED - Use /api/exams/standardized instead)
 // @access  Private (Admin only)

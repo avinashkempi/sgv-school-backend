@@ -53,7 +53,11 @@ router.post('/bulk', auth, async (req, res) => {
         // Validate teacher authorization
         const Subject = require('../models/Subject');
         const subject = await Subject.findById(exam.subject);
-        if (!subject.teachers.includes(req.user.userId)) {
+
+        const userRole = req.user.role;
+        const isAdmin = userRole === 'admin' || userRole === 'super admin';
+
+        if (!isAdmin && !subject.teachers.includes(req.user.userId)) {
             return res.status(403).json({ message: 'Not authorized to enter marks for this exam' });
         }
 
@@ -142,7 +146,11 @@ router.post('/', auth, async (req, res) => {
         // Validate teacher authorization
         const Subject = require('../models/Subject');
         const subject = await Subject.findById(exam.subject);
-        if (!subject.teachers.includes(req.user.userId)) {
+
+        const userRole = req.user.role;
+        const isAdmin = userRole === 'admin' || userRole === 'super admin';
+
+        if (!isAdmin && !subject.teachers.includes(req.user.userId)) {
             return res.status(403).json({ message: 'Not authorized' });
         }
 
