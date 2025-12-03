@@ -52,7 +52,12 @@ const login = async (req, res) => {
         email: user.email,
         role: user.role,
         currentClass: user.currentClass,
-        academicYear: user.academicYear
+        academicYear: user.academicYear,
+        guardianName: user.guardianName,
+        guardianPhone: user.guardianPhone,
+        admissionDate: user.admissionDate,
+        joiningDate: user.joiningDate,
+        designation: user.designation
       }
     });
   } catch (error) {
@@ -83,7 +88,12 @@ const getMe = async (req, res) => {
         email: user.email,
         role: user.role,
         currentClass: user.currentClass,
-        academicYear: user.academicYear
+        academicYear: user.academicYear,
+        guardianName: user.guardianName,
+        guardianPhone: user.guardianPhone,
+        admissionDate: user.admissionDate,
+        joiningDate: user.joiningDate,
+        designation: user.designation
       }
     });
   } catch (error) {

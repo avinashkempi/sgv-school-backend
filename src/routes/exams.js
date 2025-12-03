@@ -136,7 +136,7 @@ router.post('/standardized', auth, async (req, res) => {
 
         exam = new Exam({
             name: examNames[type],
-            type: type.startsWith('SA') ? 'mid-term' : 'unit-test',
+            type: type === 'SA2' ? 'final' : (type.startsWith('SA') ? 'mid-term' : 'unit-test'),
             isStandardized: true,
             standardizedType: type,
             class: classId,
@@ -216,7 +216,7 @@ router.post('/standardized/bulk', auth, async (req, res) => {
             if (!exam) {
                 exam = new Exam({
                     name: examNames[type],
-                    type: type.startsWith('SA') ? 'mid-term' : 'unit-test',
+                    type: type === 'SA2' ? 'final' : (type.startsWith('SA') ? 'mid-term' : 'unit-test'),
                     isStandardized: true,
                     standardizedType: type,
                     class: classId,
@@ -308,7 +308,7 @@ router.post('/school-wide/init', auth, async (req, res) => {
                 if (!existingExamSet.has(key)) {
                     newExams.push({
                         name: examNames[type],
-                        type: type.startsWith('SA') ? 'mid-term' : 'unit-test',
+                        type: type === 'SA2' ? 'final' : (type.startsWith('SA') ? 'mid-term' : 'unit-test'),
                         isStandardized: true,
                         standardizedType: type,
                         class: cls._id,
