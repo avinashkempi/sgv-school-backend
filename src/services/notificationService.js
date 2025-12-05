@@ -230,8 +230,86 @@ async function sendClassContentNotification(classId, content) {
     }
 }
 
+/**
+ * Send targeted notification based on criteria
+ * @param {string} target - The target type ('all', 'class', 'user', 'teacher', 'staff')
+ * @param {string} targetId - The ID of the target (if applicable)
+ * @param {Object} notificationData - The notification data { title, message, type }
+ */
+async function sendTargetedNotification(target, targetId, notificationData) {
+    try {
+        if (!admin) {
+            console.warn('[Notifications] Firebase not initialized, skipping targeted notification');
+            return { success: false, error: 'Firebase not configured' };
+        }
+
+        const User = require('../models/User');
+        let userIds = [];
+        let tokenQuery = {};
+
+        // Determine which users to send to
+        if (target === 'user') {
+            if (targetId) userIds = [targetId];
+        } else if (target === 'class') {
+            if (targetId) {
+                const students = await User.find({ currentClass: targetId, role: 'student' }).select('_id');
+                userIds = students.map(s => s._id);
+            }
+        } else if (target === 'teacher') {
+            const teachers = await User.find({ role: 'teacher' }).select('_id');
+            userIds = teachers.map(t => t._id);
+        } else if (target === 'staff') {
+            const staff = await User.find({ role: { $in: ['staff', 'admin', 'super admin'] } }).select('_id');
+            userIds = staff.map(s => s._id);
+        } else if (target === 'all') {
+            // No user filtering, send to all tokens
+            userIds = null;
+        }
+
+        // Build token query
+        if (userIds) {
+            if (userIds.length === 0) {
+                console.log(`[Notifications] No users found for target: ${target}`);
+                return { success: true, message: 'No users found for target' };
+            }
+            tokenQuery = { userId: { $in: userIds } };
+        } else {
+            // Send to all
+            tokenQuery = {};
+        }
+
+        const fcmTokenDocs = await FCMToken.find(tokenQuery);
+        const tokens = fcmTokenDocs.map(doc => doc.token);
+
+        console.log(`[Notifications] Sending notification to ${tokens.length} devices (Target: ${target})`);
+
+        if (tokens.length === 0) {
+            return { success: true, message: 'No tokens found' };
+        }
+
+        const notification = {
+            title: notificationData.title,
+            body: notificationData.message,
+        };
+
+        const data = {
+            type: 'general',
+            notificationType: notificationData.type || 'General',
+            target: target,
+            targetId: targetId ? targetId.toString() : '',
+        };
+
+        return await sendBatchNotifications(tokens, notification, data);
+
+    } catch (error) {
+        console.error('[Notifications] Error sending targeted notification:', error);
+        return { success: false, error: error.message };
+    }
+}
+
 module.exports = {
     sendBatchNotifications,
     sendNewsNotification,
-    sendClassContentNotification
+    sendClassContentNotification,
+    sendTargetedNotification
 };

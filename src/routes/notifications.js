@@ -3,6 +3,7 @@ const router = express.Router();
 const { authenticateToken: auth } = require('../middleware/auth');
 const Notification = require('../models/Notification');
 const User = require('../models/User');
+const { sendTargetedNotification } = require('../services/notificationService');
 
 // @route   GET /api/notifications
 // @desc    Get current user's notifications
@@ -136,11 +137,12 @@ router.post('/send', auth, async (req, res) => {
             targetRole
         });
 
-        await notification.save();
-
-        // TODO: Trigger FCM push notification here
-        // const fcmTokens = await getFCMTokensForTarget(target, targetId);
-        // sendPushNotification(fcmTokens, title, message);
+        // Send push notification
+        await sendTargetedNotification(target, targetId, {
+            title,
+            message,
+            type
+        });
 
         res.json(notification);
     } catch (err) {
