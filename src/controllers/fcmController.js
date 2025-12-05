@@ -84,7 +84,35 @@ const unregisterFCMToken = async (req, res) => {
     }
 };
 
+/**
+ * Get registered FCM tokens for debugging
+ */
+const getRegisteredTokens = async (req, res) => {
+    try {
+        const count = await FCMToken.countDocuments();
+        const tokens = await FCMToken.find().sort({ updatedAt: -1 }).limit(10);
+
+        res.status(200).json({
+            success: true,
+            count,
+            recentTokens: tokens.map(t => ({
+                id: t._id,
+                userId: t.userId,
+                platform: t.platform,
+                isAuthenticated: t.isAuthenticated,
+                updatedAt: t.updatedAt,
+                // Mask token for security, show last 6 chars
+                tokenMask: '...' + t.token.slice(-6) 
+            }))
+        });
+    } catch (error) {
+        console.error('[FCM] Debug error:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+};
+
 module.exports = {
     registerFCMToken,
     unregisterFCMToken,
+    getRegisteredTokens
 };
