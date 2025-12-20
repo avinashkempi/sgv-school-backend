@@ -44,16 +44,20 @@ router.get('/my-classes', auth, async (req, res) => {
 // @access  Admin/Super Admin
 router.get('/admin/init', [auth, checkRole(['admin', 'super admin'])], async (req, res) => {
     try {
-        const [classes, academicYears, teachers] = await Promise.all([
+        const [classes, academicYears, teachers, subjects, timetables] = await Promise.all([
             Class.find().populate('classTeacher', 'name email').sort({ name: 1 }),
             AcademicYear.find().sort({ startDate: -1 }),
-            User.find({ role: { $in: ['teacher', 'staff'] } }).select('name email role')
+            User.find({ role: { $in: ['teacher', 'staff'] } }).select('name email role'),
+            Subject.find().populate('teachers', 'name email'),
+            Timetable.find()
         ]);
 
         res.json({
             classes,
             academicYears,
-            teachers
+            teachers,
+            subjects,
+            timetables
         });
     } catch (err) {
         console.error(err.message);

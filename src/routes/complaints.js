@@ -26,17 +26,16 @@ router.post('/', auth, async (req, res) => {
 
         if (userRole === 'student') {
             // Student can raise to Teacher or Headmaster (Admin)
+            // UPDATE: Strict segregation - Teachers have no inbox.
+            // All Student complaints go to Admin (Headmaster).
             if (visibility === 'teacher') {
-                complaintData.visibility = 'teacher';
+                // Force to admin as teacher can't see inbox
+                complaintData.visibility = 'admin';
 
-                // Find class teacher
+                // Still try to assign class teacher for record, even if they can't see it in inbox
                 const student = await User.findById(userId).populate('currentClass');
                 if (student.currentClass && student.currentClass.classTeacher) {
                     complaintData.assignedTo = student.currentClass.classTeacher;
-                } else {
-                    // Fallback if no class teacher assigned, maybe go to admin?
-                    // For now, let's keep it as teacher visibility but unassigned, or default to admin
-                    complaintData.visibility = 'admin'; // Fallback
                 }
             } else {
                 // Default to Admin (Headmaster)
@@ -75,30 +74,18 @@ router.get('/my-complaints', auth, async (req, res) => {
 });
 
 // @route   GET /api/complaints/inbox
-// @desc    Get complaints visible to the logged-in user (Teacher/Admin)
-// @access  Private (Teacher/Admin/Super Admin)
-router.get('/inbox', [auth, checkRole(['teacher', 'admin', 'super admin'])], async (req, res) => {
+// @desc    Get complaints visible to the logged-in user (Admin/Super Admin)
+// @access  Private (Admin/Super Admin)
+router.get('/inbox', [auth, checkRole(['admin', 'super admin'])], async (req, res) => {
     try {
         const { role, userId } = req.user;
         let filter = {};
 
-        if (role === 'teacher') {
-            // Teacher sees complaints assigned to them (visibility: teacher)
-            filter = {
-                visibility: 'teacher',
-                assignedTo: userId
-            };
-        } else if (role === 'admin') {
-            // Admin sees 'admin' visibility (Student -> Headmaster)
-            // And maybe 'teacher' visibility for oversight?
-            filter = {
-                $or: [
-                    { visibility: 'admin' },
-                    { visibility: 'teacher' }
-                ]
-            };
+        if (role === 'admin') {
+            // Admin (Headmaster) sees 'admin' visibility (Student -> Headmaster)
+            filter = { visibility: 'admin' };
         } else if (role === 'super admin') {
-            // Super Admin sees everything, including Teacher -> Management
+            // Super Admin (Management) sees EVERYTHING (Student + Teacher)
             filter = {};
         }
 
@@ -116,8 +103,8 @@ router.get('/inbox', [auth, checkRole(['teacher', 'admin', 'super admin'])], asy
 
 // @route   PUT /api/complaints/:id/status
 // @desc    Update complaint status
-// @access  Private (Teacher/Admin/Super Admin)
-router.put('/:id/status', [auth, checkRole(['teacher', 'admin', 'super admin'])], async (req, res) => {
+// @access  Private (Admin/Super Admin)
+router.put('/:id/status', [auth, checkRole(['admin', 'super admin'])], async (req, res) => {
     try {
         const { status, adminResponse } = req.body;
         const { role, userId } = req.user;
@@ -128,11 +115,6 @@ router.put('/:id/status', [auth, checkRole(['teacher', 'admin', 'super admin'])]
         }
 
         // Authorization check
-        if (role === 'teacher') {
-            if (complaint.visibility !== 'teacher' || complaint.assignedTo?.toString() !== userId) {
-                return res.status(403).json({ message: 'Not authorized to update this complaint' });
-            }
-        }
         // Admin/Super Admin can update mostly anything, maybe restrict Admin from 'super_admin' visibility?
         if (role === 'admin' && complaint.visibility === 'super_admin') {
             return res.status(403).json({ message: 'Not authorized' });

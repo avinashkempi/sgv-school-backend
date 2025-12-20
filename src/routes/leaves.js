@@ -88,12 +88,17 @@ router.get('/my-leaves', authenticateToken, async (req, res) => {
     }
 });
 
-// @desc    Get pending leaves (Role based)
-// @route   GET /api/leaves/pending
+// @desc    Get leave requests (Role based) with filters
+// @route   GET /api/leaves/requests
 // @access  Private (Teacher, Admin, Super Admin)
-router.get('/pending', authenticateToken, checkRole(['teacher', 'admin', 'super admin']), async (req, res) => {
+router.get('/requests', authenticateToken, checkRole(['teacher', 'admin', 'super admin']), async (req, res) => {
     try {
-        let query = { status: 'pending' };
+        const { status } = req.query; // 'pending', 'approved', 'rejected', or undefined (all)
+        let query = {};
+
+        if (status) {
+            query.status = status;
+        }
 
         if (req.user.role === 'teacher') {
             // Teacher sees pending leaves for students in their class
@@ -105,7 +110,6 @@ router.get('/pending', authenticateToken, checkRole(['teacher', 'admin', 'super 
             query.applicantRole = 'student';
         } else if (req.user.role === 'admin') {
             // Admin sees pending leaves for Students (All) AND Teachers
-            // Can filter by role if needed, but "pending" implies all pending they can act on
             query.applicantRole = { $in: ['student', 'teacher'] };
         } else if (req.user.role === 'super admin') {
             // Super Admin sees ALL pending leaves (including Admins)
@@ -147,6 +151,8 @@ router.put('/:id/action', authenticateToken, checkRole(['teacher', 'admin', 'sup
             return res.status(404).json({ success: false, message: 'Leave request not found' });
         }
 
+        const previousStatus = leaveRequest.status;
+
         // Authorization Check (Any One Approves logic)
         let isAuthorized = false;
         const applicantRole = leaveRequest.applicantRole;
@@ -186,23 +192,24 @@ router.put('/:id/action', authenticateToken, checkRole(['teacher', 'admin', 'sup
         if (status === 'rejected') {
             leaveRequest.rejectionReason = rejectionReason;
             leaveRequest.rejectionComments = rejectionComments;
+        } else {
+            // Clear rejection fields if approved
+            leaveRequest.rejectionReason = undefined;
+            leaveRequest.rejectionComments = undefined;
         }
         leaveRequest.actionDate = Date.now();
 
         await leaveRequest.save();
 
-        // Auto-mark attendance as absent if approved
-        if (status === 'approved') {
-            const startDate = new Date(leaveRequest.startDate);
-            const endDate = new Date(leaveRequest.endDate);
+        const startDate = new Date(leaveRequest.startDate);
+        const endDate = new Date(leaveRequest.endDate);
 
+        // Auto-mark attendance as absent if approved
+        if (status === 'approved' && previousStatus !== 'approved') {
             // Loop through dates
             for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
                 const dateToMark = new Date(d);
                 dateToMark.setHours(0, 0, 0, 0);
-
-                // Skip if it's a holiday or weekend? (Optional, but for now mark all days in range)
-                // Ideally we should check for weekends, but simplified for now.
 
                 const filter = {
                     user: leaveRequest.applicant,
@@ -227,6 +234,20 @@ router.put('/:id/action', authenticateToken, checkRole(['teacher', 'admin', 'sup
                         remarks: 'Leave Approved'
                     });
                 }
+            }
+        } else if (status === 'rejected' && previousStatus === 'approved') {
+            // Revert attendance (Delete the attendance record IF it was marked as Leave Approved)
+            // This is a simplified revert. If the user was actually absent, this might delete that record too if it matches.
+            // But generally, we want to remove the specific "Leave Approved" record.
+            for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
+                const dateToMark = new Date(d);
+                dateToMark.setHours(0, 0, 0, 0);
+
+                await Attendance.deleteOne({
+                    user: leaveRequest.applicant._id,
+                    date: dateToMark,
+                    remarks: 'Leave Approved'
+                });
             }
         }
 

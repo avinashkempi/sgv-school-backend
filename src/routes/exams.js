@@ -243,11 +243,11 @@ router.post('/standardized/bulk', auth, async (req, res) => {
 });
 
 // @route   POST /api/exams/school-wide/init
-// @desc    Initialize a specific standardized exam for ALL classes and subjects
+// @desc    Initialize a specific standardized exam for ALL classes or SELECTED classes
 // @access  Private (Admin/Super Admin)
 router.post('/school-wide/init', auth, async (req, res) => {
     try {
-        const { type, totalMarks, date, instructions, duration } = req.body;
+        const { type, totalMarks, date, instructions, duration, classIds } = req.body;
 
         // Validate Admin/Super Admin
         const userRole = req.user.role;
@@ -276,13 +276,22 @@ router.post('/school-wide/init', auth, async (req, res) => {
             'SA2': 'Summative Assessment 2'
         };
 
-        // 1. Fetch all Classes and Subjects in parallel
+        // 1. Fetch Classes based on input
+        let classQuery = {};
+        if (classIds && Array.isArray(classIds) && classIds.length > 0) {
+            classQuery = { _id: { $in: classIds } };
+        }
+
         const [classes, allSubjects] = await Promise.all([
-            _Class.find().lean(),
+            _Class.find(classQuery).lean(),
             Subject.find().lean()
         ]);
 
-        // 2. Fetch all existing exams of this type for this year
+        if (classes.length === 0) {
+            return res.status(404).json({ message: 'No classes found to initialize exams for.' });
+        }
+
+        // 2. Fetch all existing exams of this type for this year (optimization: limit strictly to relevant classes if possible, but fetching all for year is safe)
         const existingExams = await Exam.find({
             academicYear: activeYear._id,
             standardizedType: type,
@@ -335,7 +344,8 @@ router.post('/school-wide/init', auth, async (req, res) => {
             message: `Initialization complete for ${type}`,
             created: newExams.length,
             skipped: skippedCount,
-            totalProcessed: newExams.length + skippedCount
+            totalProcessed: newExams.length + skippedCount,
+            targetClasses: classes.length
         });
 
     } catch (err) {
