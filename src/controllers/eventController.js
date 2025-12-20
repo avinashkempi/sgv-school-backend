@@ -1,6 +1,7 @@
 const { validationResult } = require('express-validator');
 const Event = require('../models/Event');
 const Notification = require('../models/Notification');
+const { sendTargetedNotification } = require('../services/notificationService');
 
 const createEvent = async (req, res) => {
   try {
@@ -32,6 +33,14 @@ const createEvent = async (req, res) => {
       eventId: event._id
     });
     await notification.save();
+
+    // Trigger Push Notification
+    await sendTargetedNotification('all', null, {
+      title: 'New Event: ' + title,
+      message: `A new event "${title}" has been scheduled for ${new Date(date).toDateString()}.`,
+      type: 'Event',
+      eventId: event._id
+    });
 
     res.status(201).json({
       success: true,
@@ -100,7 +109,7 @@ const getEvent = async (req, res) => {
 
     // Build query
     const query = {};
-    
+
     // Date range filter
     if (req.query.startDate || req.query.endDate) {
       query.date = {};

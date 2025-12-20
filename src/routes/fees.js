@@ -5,6 +5,7 @@ const FeeStructure = require('../models/FeeStructure');
 const FeePayment = require('../models/FeePayment');
 const User = require('../models/User');
 const Class = require('../models/Class');
+const { sendTargetedNotification } = require('../services/notificationService');
 
 // Helper to generate receipt number
 const generateReceiptNumber = async () => {
@@ -86,6 +87,24 @@ router.post('/structure', [auth, checkRole(['admin', 'super admin'])], async (re
         }
 
         await feeStructure.save();
+
+        // Notify relevant users
+        if (type === 'class_default') {
+            await sendTargetedNotification('class', classId, {
+                title: 'New Fee Structure',
+                message: 'A new fee structure has been updated for your class.',
+                type: 'Fee'
+            });
+        } else if (type === 'student_specific' && students && students.length > 0) {
+            for (const studentId of students) {
+                await sendTargetedNotification('user', studentId, {
+                    title: 'New Fee Structure',
+                    message: 'Your fee structure has been updated.',
+                    type: 'Fee'
+                });
+            }
+        }
+
         res.json(feeStructure);
     } catch (err) {
         console.error("Error in POST /structure:", err);
@@ -192,6 +211,14 @@ router.post('/payment', [auth, checkRole(['admin', 'super admin'])], async (req,
         });
 
         await payment.save();
+
+        // Notify Student
+        await sendTargetedNotification('user', studentId, {
+            title: 'Fee Payment Successful',
+            message: `Payment of ${amount} received. Receipt: ${receiptNumber}`,
+            type: 'Fee'
+        });
+
         res.json(payment);
     } catch (err) {
         console.error(err.message);

@@ -7,6 +7,7 @@ const _GradeConfig = require('../models/GradeConfig');
 const User = require('../models/User');
 const Subject = require('../models/Subject');
 const _Class = require('../models/Class');
+const { sendTargetedNotification } = require('../services/notificationService');
 
 // @route   GET /api/exams/standardized
 // @desc    Get status of standardized exams for a class/subject
@@ -235,6 +236,15 @@ router.post('/standardized/bulk', auth, async (req, res) => {
             }
         }
 
+        // Notify Class about new exams
+        if (results.some(r => r.status === 'created')) {
+            await sendTargetedNotification('class', classId, {
+                title: 'New Exams Scheduled',
+                message: `New exams have been scheduled for ${subject.name}. Check your schedule.`,
+                type: 'Exam'
+            });
+        }
+
         res.json(results);
     } catch (err) {
         console.error(err.message);
@@ -338,6 +348,19 @@ router.post('/school-wide/init', auth, async (req, res) => {
         // 4. Bulk Insert
         if (newExams.length > 0) {
             await Exam.insertMany(newExams);
+
+            // Notify all affected classes
+            // Get unique class IDs from newExams
+            const affectedClassIds = [...new Set(newExams.map(e => e.class.toString()))];
+
+            // Loop and notify (or optimize to bulk notify if service supported it, but loop is fine for now)
+            for (const cId of affectedClassIds) {
+                await sendTargetedNotification('class', cId, {
+                    title: `Exam Scheduled: ${type}`,
+                    message: `${examNames[type]} has been scheduled for your class.`,
+                    type: 'Exam'
+                });
+            }
         }
 
         res.json({
