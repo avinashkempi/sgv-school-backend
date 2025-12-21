@@ -37,19 +37,28 @@ const getAllUsers = async (req, res) => {
       sort = { [sortBy]: sortOrder };
     }
 
-    const users = await User.find(filter, '-password')
-      .populate('currentClass', 'name section')
-      .populate('academicYear', 'name')
-      .sort(sort)
-      .skip(skip)
-      .limit(limit);
+    // Parallel Execution: Fetch users and total count
+    const [users, total] = await Promise.all([
+      User.find(filter, '-password')
+        .populate('currentClass', 'name section')
+        .populate('academicYear', 'name')
+        .sort(sort)
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      User.countDocuments(filter)
+    ]);
 
-    const total = await User.countDocuments(filter);
+    // Map _id to id for frontend compatibility
+    const usersWithId = users.map(user => ({
+      ...user,
+      id: user._id
+    }));
 
     // Return paginated response
     res.json({
       success: true,
-      data: users,
+      data: usersWithId,
       pagination: {
         current: page,
         pages: Math.ceil(total / limit),
@@ -70,7 +79,7 @@ const getAllUsers = async (req, res) => {
 const getUserById = async (req, res) => {
   try {
     const { id } = req.params;
-    const user = await User.findById(id, '-password'); // Exclude password field
+    const user = await User.findById(id, '-password').lean(); // Exclude password field
 
     if (!user) {
       return res.status(404).json({
@@ -78,6 +87,9 @@ const getUserById = async (req, res) => {
         message: 'User not found'
       });
     }
+
+    // Ensure id property exists
+    user.id = user._id;
 
     res.json({
       success: true,
@@ -315,9 +327,16 @@ const searchUsers = async (req, res) => {
       .populate('currentClass', 'name section')
       .populate('academicYear', 'name')
       .limit(20) // Limit results to 20
-      .sort({ name: 1 }); // Sort by name
+      .sort({ name: 1 }) // Sort by name
+      .lean();
 
-    res.json(users);
+    // Map _id to id
+    const usersWithId = users.map(user => ({
+      ...user,
+      id: user._id
+    }));
+
+    res.json(usersWithId);
   } catch (error) {
     console.error('Search users error:', error);
     res.status(500).json({

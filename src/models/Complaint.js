@@ -68,4 +68,11 @@ const ComplaintSchema = new mongoose.Schema({
     }
 });
 
+// Indexes
+ComplaintSchema.index({ student: 1 });
+ComplaintSchema.index({ raisedBy: 1 });
+ComplaintSchema.index({ role: 1 });
+ComplaintSchema.index({ status: 1 });
+ComplaintSchema.index({ createdAt: -1 });
+
 module.exports = mongoose.model('Complaint', ComplaintSchema);

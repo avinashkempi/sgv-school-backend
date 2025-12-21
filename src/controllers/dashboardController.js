@@ -16,20 +16,38 @@ const getActiveYear = async () => {
 // Admin Stats
 exports.getAdminStats = async (req, res) => {
     try {
-        // 1. Overview Counts
-        const totalStudents = await User.countDocuments({ role: 'student' });
-        const totalTeachers = await User.countDocuments({ role: 'teacher' });
-
-        // 2. Today's Attendance
         const today = new Date();
         today.setHours(0, 0, 0, 0);
         const tomorrow = new Date(today);
         tomorrow.setDate(tomorrow.getDate() + 1);
 
-        const attendanceToday = await Attendance.find({
-            date: { $gte: today, $lt: tomorrow },
-            role: 'student'
-        });
+        // Parallel Execution
+        const [
+            totalStudents,
+            totalTeachers,
+            attendanceToday,
+            collectedFees,
+            recentComplaints,
+            activeYear
+        ] = await Promise.all([
+            User.countDocuments({ role: 'student' }),
+            User.countDocuments({ role: 'teacher' }),
+            Attendance.find({
+                date: { $gte: today, $lt: tomorrow },
+                role: 'student'
+            }).lean(),
+            FeePayment.aggregate([
+                { $match: { status: 'success' } },
+                { $group: { _id: null, total: { $sum: "$amount" } } }
+            ]),
+            Complaint.find()
+                .sort({ createdAt: -1 })
+                .limit(5)
+                .populate('student', 'name')
+                .select('title status student createdAt')
+                .lean(),
+            getActiveYear()
+        ]);
 
         const presentCount = attendanceToday.filter(a => a.status === 'present').length;
         const absentCount = attendanceToday.filter(a => a.status === 'absent').length;
@@ -37,32 +55,16 @@ exports.getAdminStats = async (req, res) => {
             ? ((presentCount / attendanceToday.length) * 100).toFixed(1)
             : 0;
 
-        // 3. Fee Stats (Simplified for now - pending vs collected)
-        // This logic might need adjustment based on valid FeeStructure relation
-        const collectedFees = await FeePayment.aggregate([
-            { $match: { status: 'success' } },
-            { $group: { _id: null, total: { $sum: "$amount" } } }
-        ]);
         const totalCollected = collectedFees.length > 0 ? collectedFees[0].total : 0;
 
-        // 4. Recent Complaints
-        const recentComplaints = await Complaint.find()
-            .sort({ createdAt: -1 })
-            .limit(5)
-            .populate('student', 'name')
-            .select('title status student createdAt');
-
-        // 5. Fee Collection Trend (Current Academic Year)
-        const activeYear = await getActiveYear();
+        // Fee Trend Logic
         const feeMatchQuery = { status: 'success' };
-
         if (activeYear) {
             feeMatchQuery.paymentDate = {
                 $gte: activeYear.startDate,
                 $lte: activeYear.endDate
             };
         } else {
-            // Fallback to last 6 months if no active year found
             const sixMonthsAgo = new Date();
             sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
             feeMatchQuery.paymentDate = { $gte: sixMonthsAgo };
@@ -147,34 +149,33 @@ exports.getStudentStats = async (req, res) => {
     try {
         const studentId = req.user.id;
 
+        const [
+            totalDays,
+            presentDays,
+            pendingFees,
+            recentMarks
+        ] = await Promise.all([
+            Attendance.countDocuments({ user: studentId, role: 'student' }),
+            Attendance.countDocuments({ user: studentId, role: 'student', status: 'present' }),
+            FeePayment.find({ student: studentId, status: 'pending' }).lean(),
+            Marks.find({ student: studentId })
+                .sort({ createdAt: -1 })
+                .limit(10)
+                .populate('exam', 'name')
+                .populate({
+                    path: 'exam',
+                    populate: { path: 'subject', select: 'name' }
+                })
+                .lean()
+        ]);
+
         // 1. Attendance %
-        const totalDays = await Attendance.countDocuments({ user: studentId, role: 'student' });
-        const presentDays = await Attendance.countDocuments({ user: studentId, role: 'student', status: 'present' });
         const attendancePercentage = totalDays > 0 ? ((presentDays / totalDays) * 100).toFixed(1) : 0;
 
         // 2. Fee Due
-        // Simplified: check for any pending fee payments or logic link to FeeStructure
-        // For now, returning hardcoded or simple query
-        const pendingFees = await FeePayment.find({ student: studentId, status: 'pending' });
         const dueAmount = pendingFees.reduce((acc, curr) => acc + curr.amount, 0);
 
-        // 3. Recent Marks (Current Academic Year)
-        const activeYear = await getActiveYear();
-        const marksQuery = { student: studentId };
-
-        // If we want to filter by academic year, we'd ideally check if the Exam belongs to it.
-        // For now, filtering by date if Exam has one, or just limit to recent ones as before but within year range.
-        // Assuming exams are within the academic year.
-
-        const recentMarks = await Marks.find(marksQuery)
-            .sort({ createdAt: -1 })
-            .limit(10) // Show more for academic year trend
-            .populate('exam', 'name')
-            .populate({
-                path: 'exam',
-                populate: { path: 'subject', select: 'name' }
-            });
-
+        // 3. Recent Marks Trend
         const performanceTrend = recentMarks.map(m => ({
             exam: m.exam?.name || 'Unknown',
             subject: m.exam?.subject?.name || 'Subject',

@@ -62,4 +62,11 @@ const FeePaymentSchema = new mongoose.Schema({
     }
 });
 
+// Indexes
+FeePaymentSchema.index({ student: 1 });
+FeePaymentSchema.index({ class: 1 });
+FeePaymentSchema.index({ academicYear: 1 });
+FeePaymentSchema.index({ status: 1 });
+FeePaymentSchema.index({ paymentDate: -1 });
+
 module.exports = mongoose.model('FeePayment', FeePaymentSchema);

@@ -33,7 +33,7 @@ exports.createYear = async (req, res) => {
 
 exports.getAllYears = async (req, res) => {
     try {
-        const years = await AcademicYear.find().sort({ startDate: -1 });
+        const years = await AcademicYear.find().sort({ startDate: -1 }).lean();
         res.json(years);
     } catch (err) {
         console.error(err.message);
@@ -136,10 +136,47 @@ exports.getReports = async (req, res) => {
         const year = await AcademicYear.findById(academicYearId);
         if (!year) return res.status(404).json({ msg: 'Academic year not found' });
 
-        // 1. Student History (Class-wise list)
-        const history = await StudentHistory.find({ academicYear: academicYearId })
-            .populate('student', 'name email phone')
-            .populate('class', 'name section');
+        // 1. Parallel Fetching: History, Exams, Leaves, Attendance
+        const [history, exams, teacherLeaves, teacherAttendance] = await Promise.all([
+            StudentHistory.find({ academicYear: academicYearId })
+                .populate('student', 'name email phone')
+                .populate('class', 'name section')
+                .lean(),
+            Exam.find({ academicYear: academicYearId }).lean(),
+            LeaveRequest.find({
+                applicantRole: { $in: ['teacher', 'class teacher', 'staff'] },
+                startDate: { $gte: year.startDate, $lte: year.endDate }
+            }).populate('applicant', 'name role').lean(),
+            Attendance.aggregate([
+                {
+                    $match: {
+                        role: { $in: ['teacher', 'class teacher', 'staff'] },
+                        date: { $gte: year.startDate, $lte: year.endDate }
+                    }
+                },
+                {
+                    $group: {
+                        _id: { user: '$user', status: '$status' },
+                        count: { $sum: 1 }
+                    }
+                },
+                {
+                    $lookup: {
+                        from: 'users',
+                        localField: '_id.user',
+                        foreignField: '_id',
+                        as: 'userInfo'
+                    }
+                },
+                {
+                    $project: {
+                        user: { $arrayElemAt: ['$userInfo.name', 0] },
+                        status: '$_id.status',
+                        count: 1
+                    }
+                }
+            ])
+        ]);
 
         // Group by class
         const classWiseStudents = history.reduce((acc, curr) => {
@@ -149,52 +186,12 @@ exports.getReports = async (req, res) => {
             return acc;
         }, {});
 
-        // 2. Exam Results
-        // Find exams in this year
-        const exams = await Exam.find({ academicYear: academicYearId });
+        // 2. Fetch Marks using exam IDs
         const examIds = exams.map(e => e._id);
         const marks = await Marks.find({ exam: { $in: examIds } })
             .populate('student', 'name')
-            .populate('exam', 'name subject totalMarks');
-
-        // 3. Teacher Leaves
-        const teacherLeaves = await LeaveRequest.find({
-            applicantRole: { $in: ['teacher', 'class teacher', 'staff'] },
-            startDate: { $gte: year.startDate, $lte: year.endDate }
-        }).populate('applicant', 'name role');
-
-        // 4. Teacher Attendance
-        // This might be heavy. Just get summary?
-        // Let's get count of present/absent for each teacher
-        const teacherAttendance = await Attendance.aggregate([
-            {
-                $match: {
-                    role: { $in: ['teacher', 'class teacher', 'staff'] },
-                    date: { $gte: year.startDate, $lte: year.endDate }
-                }
-            },
-            {
-                $group: {
-                    _id: { user: '$user', status: '$status' },
-                    count: { $sum: 1 }
-                }
-            },
-            {
-                $lookup: {
-                    from: 'users',
-                    localField: '_id.user',
-                    foreignField: '_id',
-                    as: 'userInfo'
-                }
-            },
-            {
-                $project: {
-                    user: { $arrayElemAt: ['$userInfo.name', 0] },
-                    status: '$_id.status',
-                    count: 1
-                }
-            }
-        ]);
+            .populate('exam', 'name subject totalMarks')
+            .lean();
 
         res.json({
             academicYear: year,
