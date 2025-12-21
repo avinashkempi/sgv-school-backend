@@ -5,6 +5,7 @@ const Marks = require('../models/Marks');
 const Exam = require('../models/Exam');
 const GradeConfig = require('../models/GradeConfig');
 const User = require('../models/User');
+const notificationController = require('../controllers/notificationController');
 
 // Helper function to calculate grade
 const calculateGrade = async (percentage, examId) => {
@@ -110,6 +111,16 @@ router.post('/bulk', auth, async (req, res) => {
                     success: true,
                     marks: marks
                 });
+
+                // Trigger Notification for Student
+                notificationController.triggerNotification({
+                    title: 'New Marks Posted',
+                    message: `Marks for ${exam.name} have been updated.`,
+                    type: 'Exam',
+                    target: 'user',
+                    targetId: studentId,
+                    metadata: { examId: exam._id, marksId: marks._id }
+                });
             } catch (error) {
                 results.push({
                     studentId,
@@ -188,6 +199,16 @@ router.post('/', auth, async (req, res) => {
             .populate('enteredBy', 'name');
 
         res.json(populatedMarks);
+
+        // Trigger Notification for Student
+        notificationController.triggerNotification({
+            title: 'New Marks Posted',
+            message: `Marks for ${exam.name} have been updated.`,
+            type: 'Exam',
+            target: 'user',
+            targetId: studentId,
+            metadata: { examId: exam._id, marksId: marks._id }
+        });
     } catch (err) {
         console.error(err.message);
         res.status(500).send('Server Error');

@@ -5,6 +5,7 @@ const User = require('../models/User');
 const Class = require('../models/Class');
 const Attendance = require('../models/Attendance');
 const { authenticateToken, checkRole } = require('../middleware/auth');
+const notificationController = require('../controllers/notificationController');
 
 // @desc    Apply for leave
 // @route   POST /api/leaves/apply
@@ -67,6 +68,16 @@ router.post('/apply', authenticateToken, async (req, res) => {
         });
 
         res.status(201).json({ success: true, data: leaveRequest });
+
+        // Trigger Notification for Admin/Teacher
+        const targetRole = req.user.role === 'student' ? 'teacher' : 'admin';
+        notificationController.triggerNotification({
+            title: 'New Leave Request',
+            message: `${user.name} has applied for leave from ${startDate} to ${endDate}.`,
+            type: 'Emergency', // Or appropriate type
+            target: targetRole,
+            metadata: { leaveId: leaveRequest._id }
+        });
     } catch (error) {
         console.error('[Leave Apply] Error:', error);
         res.status(500).json({ success: false, message: 'Server Error', error: error.message });
@@ -252,6 +263,16 @@ router.put('/:id/action', authenticateToken, checkRole(['teacher', 'admin', 'sup
         }
 
         res.status(200).json({ success: true, data: leaveRequest });
+
+        // Trigger Notification for Student
+        notificationController.triggerNotification({
+            title: `Leave Request ${status.charAt(0).toUpperCase() + status.slice(1)}`,
+            message: `Your leave request for ${leaveRequest.startDate.toDateString()} has been ${status}.`,
+            type: 'General',
+            target: 'user',
+            targetId: leaveRequest.applicant._id,
+            metadata: { leaveId: leaveRequest._id }
+        });
     } catch (error) {
         console.error(error);
         res.status(500).json({ success: false, message: 'Server Error' });
