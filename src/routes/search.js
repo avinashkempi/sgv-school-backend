@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const searchController = require('../controllers/searchController');
-const auth = require('../middleware/auth');
+const { authenticateToken: auth } = require('../middleware/auth');
 
 // Global search - all authenticated users
 router.get('/global', auth, searchController.globalSearch);

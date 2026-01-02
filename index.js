@@ -48,6 +48,9 @@ app.use('/api/reports', require('./src/routes/reports'));
 app.use('/api/feedback', require('./src/routes/feedback'));
 app.use('/api/dashboard', require('./src/routes/dashboardRoutes'));
 app.use('/api/search', require('./src/routes/search'));
+app.use('/api/attendance-enhancements', require('./src/routes/attendanceEnhancements'));
+app.use('/api/fee-enhancements', require('./src/routes/feeEnhancements'));
+app.use('/api/analytics', require('./src/routes/analytics'));
 
 app.get('/', (req, res) => {
   res.send('Hello from Express Backend!');
