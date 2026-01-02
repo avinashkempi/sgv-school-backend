@@ -72,8 +72,7 @@ exports.getAdminStats = async (req, res) => {
             collectedFees,
             prevCollectedFees,
             prevAttendance,
-            recentComplaints,
-            activeYear
+            recentComplaints
         ] = await Promise.all([
             User.countDocuments({ role: 'student' }),
             User.countDocuments({ role: 'teacher' }),
@@ -98,8 +97,7 @@ exports.getAdminStats = async (req, res) => {
                 .limit(5)
                 .populate('student', 'name')
                 .select('title status student createdAt')
-                .lean(),
-            getActiveYear()
+                .lean()
         ]);
 
         const presentCount = attendanceToday.filter(a => a.status === 'present').length;
