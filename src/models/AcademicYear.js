@@ -28,6 +28,92 @@ const academicYearSchema = new mongoose.Schema({
     createdAt: {
         type: Date,
         default: Date.now
+    },
+
+    // NEW FIELDS
+    status: {
+        type: String,
+        enum: ['draft', 'current', 'archived'],
+        default: 'draft'
+    },
+
+    description: {
+        type: String,
+        default: ''
+    },
+
+    // Term Structure
+    terms: [{
+        name: {
+            type: String,
+            required: true
+        },
+        startDate: {
+            type: Date,
+            required: true
+        },
+        endDate: {
+            type: Date,
+            required: true
+        },
+        examPeriodStart: Date,
+        examPeriodEnd: Date
+    }],
+
+    // Metadata
+    totalSchoolDays: {
+        type: Number,
+        default: 0
+    },
+    totalHolidays: {
+        type: Number,
+        default: 0
+    },
+
+    // Statistics Snapshot (captured during archival)
+    snapshot: {
+        totalStudents: Number,
+        totalClasses: Number,
+        totalExams: Number,
+        averageAttendance: Number,
+        totalSubjects: Number,
+        totalTeachers: Number,
+        capturedAt: Date
+    },
+
+    // Transition Tracking
+    promotedFrom: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'AcademicYear'
+    },
+    promotedTo: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'AcademicYear'
+    },
+    transitionDate: Date,
+    transitionBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
+    },
+
+    // Configuration
+    settings: {
+        autoPromoteStudents: {
+            type: Boolean,
+            default: true
+        },
+        preserveTimetables: {
+            type: Boolean,
+            default: false
+        },
+        carryForwardSubjects: {
+            type: Boolean,
+            default: true
+        },
+        resetAttendance: {
+            type: Boolean,
+            default: true
+        }
     }
 });
 

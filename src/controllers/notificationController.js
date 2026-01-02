@@ -1,17 +1,20 @@
 const Notification = require('../models/Notification');
+const NotificationPreference = require('../models/NotificationPreference');
 const User = require('../models/User');
 const { sendTargetedNotification } = require('../services/notificationService');
 
 /**
- * Get notifications for current user
+ * Get notifications for current user with filtering
  */
 exports.getNotifications = async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 20;
         const skip = (page - 1) * limit;
+        const { category, isRead, isArchived = 'false' } = req.query;
 
         let query = {
+            isArchived: isArchived === 'true',
             $or: [
                 { recipient: req.user.userId },
                 {
@@ -22,38 +25,55 @@ exports.getNotifications = async (req, res) => {
             ]
         };
 
+        // Filter by category
+        if (category && category !== 'all') {
+            query.category = category;
+        }
+
+        // Filter by read status
+        if (isRead !== undefined) {
+            query.isRead = isRead === 'true';
+        }
+
         if (req.user.role === 'student') {
             const user = await User.findById(req.user.userId);
             if (user && user.currentClass) {
                 query.$or.push({
                     recipient: null,
-                    targetClass: user.currentClass
+                    targetClass: user.currentClass,
+                    isArchived: isArchived === 'true'
                 });
             }
         }
 
         if (req.user.role === 'super admin') {
             query = {
+                isArchived: isArchived === 'true',
                 $or: [
                     { recipient: req.user.userId },
                     { recipient: null }
                 ]
             };
+            if (category && category !== 'all') query.category = category;
+            if (isRead !== undefined) query.isRead = isRead === 'true';
         }
 
         const notifications = await Notification.find(query)
             .sort({ createdAt: -1 })
             .skip(skip)
-            .limit(limit);
+            .limit(limit)
+            .lean();
 
         const total = await Notification.countDocuments(query);
+        const unreadCount = await Notification.countDocuments({ ...query, isRead: false });
 
         res.json({
             success: true,
             notifications,
             currentPage: page,
             totalPages: Math.ceil(total / limit),
-            totalNotifications: total
+            totalNotifications: total,
+            unreadCount
         });
     } catch (err) {
         console.error('[Notification Controller] Get Error:', err.message);
@@ -62,20 +82,47 @@ exports.getNotifications = async (req, res) => {
 };
 
 /**
- * Mark a single notification as read
+ * Get unread notification count
+ */
+exports.getUnreadCount = async (req, res) => {
+    try {
+        let query = {
+            isRead: false,
+            isArchived: false,
+            $or: [
+                { recipient: req.user.userId },
+                {
+                    recipient: null,
+                    targetClass: null,
+                    targetRole: { $in: ['all', req.user.role] }
+                }
+            ]
+        };
+
+        const count = await Notification.countDocuments(query);
+
+        res.json({ success: true, unreadCount: count });
+    } catch (err) {
+        console.error('[Notification Controller] Unread Count Error:', err.message);
+        res.status(500).json({ success: false, message: 'Server Error' });
+    }
+};
+
+/**
+ * Mark a single notification as read/unread
  */
 exports.markAsRead = async (req, res) => {
     try {
+        const { isRead = true } = req.body;
         const notification = await Notification.findById(req.params.id);
+
         if (!notification) {
             return res.status(404).json({ success: false, message: 'Notification not found' });
         }
 
-        // Only mark as read if it's a direct message to this user
-        if (notification.recipient && notification.recipient.toString() === req.user.userId) {
-            notification.read = true;
-            await notification.save();
-        }
+        notification.isRead = isRead;
+        notification.readAt = isRead ? new Date() : null;
+        await notification.save();
 
         res.json({ success: true, notification });
     } catch (err) {
@@ -89,15 +136,68 @@ exports.markAsRead = async (req, res) => {
  */
 exports.markAllAsRead = async (req, res) => {
     try {
-        // Mark all direct notifications as read
-        await Notification.updateMany(
-            { recipient: req.user.userId, read: false },
-            { $set: { read: true } }
+        const result = await Notification.updateMany(
+            {
+                isRead: false,
+                isArchived: false,
+                $or: [
+                    { recipient: req.user.userId },
+                    { targetRole: { $in: ['all', req.user.role] } }
+                ]
+            },
+            {
+                $set: { isRead: true, readAt: new Date() }
+            }
         );
 
-        res.json({ success: true, message: 'All notifications marked as read' });
+        res.json({
+            success: true,
+            message: 'All notifications marked as read',
+            modifiedCount: result.modifiedCount
+        });
     } catch (err) {
         console.error('[Notification Controller] Mark All Read Error:', err.message);
+        res.status(500).json({ success: false, message: 'Server Error' });
+    }
+};
+
+/**
+ * Archive/Unarchive notification
+ */
+exports.archiveNotification = async (req, res) => {
+    try {
+        const { isArchived = true } = req.body;
+        const notification = await Notification.findById(req.params.id);
+
+        if (!notification) {
+            return res.status(404).json({ success: false, message: 'Notification not found' });
+        }
+
+        notification.isArchived = isArchived;
+        notification.archivedAt = isArchived ? new Date() : null;
+        await notification.save();
+
+        res.json({ success: true, notification });
+    } catch (err) {
+        console.error('[Notification Controller] Archive Error:', err.message);
+        res.status(500).json({ success: false, message: 'Server Error' });
+    }
+};
+
+/**
+ * Delete notification (admin only)
+ */
+exports.deleteNotification = async (req, res) => {
+    try {
+        const notification = await Notification.findByIdAndDelete(req.params.id);
+
+        if (!notification) {
+            return res.status(404).json({ success: false, message: 'Notification not found' });
+        }
+
+        res.json({ success: true, message: 'Notification deleted' });
+    } catch (err) {
+        console.error('[Notification Controller] Delete Error:', err.message);
         res.status(500).json({ success: false, message: 'Server Error' });
     }
 };
@@ -107,7 +207,7 @@ exports.markAllAsRead = async (req, res) => {
  */
 exports.sendNotification = async (req, res) => {
     try {
-        const { title, message, type, target, targetId, metadata } = req.body;
+        const { title, message, type, category, priority, target, targetId, actionType, actionData, metadata } = req.body;
 
         let recipient = null;
         let targetClass = null;
@@ -130,20 +230,25 @@ exports.sendNotification = async (req, res) => {
             title,
             message,
             type: type || 'General',
+            category: category || 'general',
+            priority: priority || 'medium',
             recipient,
             targetClass,
             targetRole,
+            actionType: actionType || 'none',
+            actionData,
             metadata
         });
 
-        // Save to database (Fixed Bug)
         await notification.save();
 
         // Send Push Notification
         await sendTargetedNotification(target, targetId, {
             title,
             message,
-            type
+            type,
+            category,
+            priority
         });
 
         res.status(201).json({ success: true, notification });
@@ -154,28 +259,47 @@ exports.sendNotification = async (req, res) => {
 };
 
 /**
+ * Get user notification preferences
+ */
+exports.getPreferences = async (req, res) => {
+    try {
+        let preferences = await NotificationPreference.findOne({ user: req.user.userId });
+
+        if (!preferences) {
+            // Create default preferences
+            preferences = new NotificationPreference({ user: req.user.userId });
+            await preferences.save();
+        }
+
+        res.json({ success: true, preferences });
+    } catch (err) {
+        console.error('[Notification Controller] Get Preferences Error:', err.message);
+        res.status(500).json({ success: false, message: 'Server Error' });
+    }
+};
+
+/**
  * Update notification preferences
  */
 exports.updatePreferences = async (req, res) => {
     try {
-        const { preferences } = req.body;
-        const user = await User.findById(req.user.userId);
+        const updates = req.body;
 
-        if (!user) {
-            return res.status(404).json({ success: false, message: 'User not found' });
+        let preferences = await NotificationPreference.findOne({ user: req.user.userId });
+
+        if (!preferences) {
+            preferences = new NotificationPreference({ user: req.user.userId, ...updates });
+        } else {
+            Object.keys(updates).forEach(key => {
+                preferences[key] = updates[key];
+            });
         }
 
-        if (preferences) {
-            user.notificationPreferences = {
-                ...user.notificationPreferences,
-                ...preferences
-            };
-            await user.save();
-        }
+        await preferences.save();
 
-        res.json({ success: true, preferences: user.notificationPreferences });
+        res.json({ success: true, preferences });
     } catch (err) {
-        console.error('[Notification Controller] Update Pref Error:', err.message);
+        console.error('[Notification Controller] Update Preferences Error:', err.message);
         res.status(500).json({ success: false, message: 'Server Error' });
     }
 };
@@ -185,22 +309,26 @@ exports.updatePreferences = async (req, res) => {
  */
 exports.triggerNotification = async (data) => {
     try {
-        const { title, message, type, target, targetId, metadata, recipient } = data;
+        const { title, message, type, category, priority, target, targetId, actionType, actionData, metadata, recipient } = data;
 
         const notification = new Notification({
             title,
             message,
             type: type || 'General',
+            category: category || 'general',
+            priority: priority || 'medium',
             recipient: recipient || (target === 'user' ? targetId : null),
             targetClass: target === 'class' ? targetId : null,
             targetRole: target !== 'user' && target !== 'class' ? target : (target === 'class' ? 'student' : 'all'),
+            actionType: actionType || 'none',
+            actionData,
             metadata
         });
 
         await notification.save();
 
         // Push
-        sendTargetedNotification(target, targetId, { title, message, type });
+        sendTargetedNotification(target, targetId, { title, message, type, category, priority });
 
         return notification;
     } catch (error) {

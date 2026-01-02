@@ -8,18 +8,61 @@ const Subject = require('../models/Subject');
 const Exam = require('../models/Exam');
 const AcademicYear = require('../models/AcademicYear');
 
-// Helper to get active academic year
-const getActiveYear = async () => {
-    return await AcademicYear.findOne({ isActive: true });
+// Helper to calculate date range
+const getDateRange = (range) => {
+    const now = new Date();
+    let startDate, endDate = now;
+
+    switch (range) {
+        case 'today':
+            startDate = new Date(now);
+            startDate.setHours(0, 0, 0, 0);
+            endDate = new Date(now);
+            endDate.setHours(23, 59, 59, 999);
+            break;
+        case 'thisWeek':
+            const startOfWeek = now.getDate() - now.getDay();
+            startDate = new Date(now.setDate(startOfWeek));
+            startDate.setHours(0, 0, 0, 0);
+            break;
+        case 'last30Days':
+            startDate = new Date(now);
+            startDate.setDate(startDate.getDate() - 30);
+            break;
+        case 'thisYear':
+            startDate = new Date(now.getFullYear(), 0, 1);
+            break;
+        case 'lastYear':
+            startDate = new Date(now.getFullYear() - 1, 0, 1);
+            endDate = new Date(now.getFullYear() - 1, 11, 31);
+            break;
+        case 'allTime':
+            startDate = new Date(2020, 0, 1); // Or your school's founding date
+            break;
+        case 'thisMonth':
+        default:
+            startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+            break;
+    }
+
+    return { startDate, endDate };
 };
 
 // Admin Stats
 exports.getAdminStats = async (req, res) => {
     try {
+        const { range = 'thisMonth' } = req.query;
+        const { startDate, endDate } = getDateRange(range);
+
         const today = new Date();
         today.setHours(0, 0, 0, 0);
         const tomorrow = new Date(today);
         tomorrow.setDate(tomorrow.getDate() + 1);
+
+        // Get previous period for trend calculation
+        const periodDuration = endDate - startDate;
+        const prevStartDate = new Date(startDate.getTime() - periodDuration);
+        const prevEndDate = new Date(startDate);
 
         // Parallel Execution
         const [
@@ -27,6 +70,8 @@ exports.getAdminStats = async (req, res) => {
             totalTeachers,
             attendanceToday,
             collectedFees,
+            prevCollectedFees,
+            prevAttendance,
             recentComplaints,
             activeYear
         ] = await Promise.all([
@@ -37,9 +82,17 @@ exports.getAdminStats = async (req, res) => {
                 role: 'student'
             }).lean(),
             FeePayment.aggregate([
-                { $match: { status: 'success' } },
+                { $match: { status: 'success', paymentDate: { $gte: startDate, $lte: endDate } } },
                 { $group: { _id: null, total: { $sum: "$amount" } } }
             ]),
+            FeePayment.aggregate([
+                { $match: { status: 'success', paymentDate: { $gte: prevStartDate, $lt: prevEndDate } } },
+                { $group: { _id: null, total: { $sum: "$amount" } } }
+            ]),
+            Attendance.find({
+                date: { $gte: prevStartDate, $lt: prevEndDate },
+                role: 'student'
+            }).lean(),
             Complaint.find()
                 .sort({ createdAt: -1 })
                 .limit(5)
@@ -55,20 +108,21 @@ exports.getAdminStats = async (req, res) => {
             ? ((presentCount / attendanceToday.length) * 100).toFixed(1)
             : 0;
 
+        // Calculate attendance trend
+        const prevPresentCount = prevAttendance.filter(a => a.status === 'present').length;
+        const prevAttendancePercentage = prevAttendance.length > 0
+            ? ((prevPresentCount / prevAttendance.length) * 100)
+            : 0;
+        const attendanceTrend = (attendancePercentage - prevAttendancePercentage).toFixed(1);
+
         const totalCollected = collectedFees.length > 0 ? collectedFees[0].total : 0;
+        const prevTotalCollected = prevCollectedFees.length > 0 ? prevCollectedFees[0].total : 0;
+        const feeCollectionTrend = prevTotalCollected > 0
+            ? (((totalCollected - prevTotalCollected) / prevTotalCollected) * 100).toFixed(1)
+            : 0;
 
         // Fee Trend Logic
-        const feeMatchQuery = { status: 'success' };
-        if (activeYear) {
-            feeMatchQuery.paymentDate = {
-                $gte: activeYear.startDate,
-                $lte: activeYear.endDate
-            };
-        } else {
-            const sixMonthsAgo = new Date();
-            sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
-            feeMatchQuery.paymentDate = { $gte: sixMonthsAgo };
-        }
+        const feeMatchQuery = { status: 'success', paymentDate: { $gte: startDate, $lte: endDate } };
 
         const feeTrend = await FeePayment.aggregate([
             { $match: feeMatchQuery },
@@ -85,8 +139,10 @@ exports.getAdminStats = async (req, res) => {
             overview: {
                 totalStudents,
                 totalTeachers,
-                attendancePercentage,
-                totalCollected
+                attendancePercentage: parseFloat(attendancePercentage),
+                attendanceTrend: parseFloat(attendanceTrend),
+                totalCollected,
+                feeCollectionTrend: parseFloat(feeCollectionTrend)
             },
             charts: {
                 attendance: { present: presentCount, absent: absentCount },
@@ -148,15 +204,45 @@ exports.getTeacherStats = async (req, res) => {
 exports.getStudentStats = async (req, res) => {
     try {
         const studentId = req.user.id;
+        const { range = 'thisMonth' } = req.query;
+        const { startDate, endDate } = getDateRange(range);
+
+        // Get previous period for trend
+        const periodDuration = endDate - startDate;
+        const prevStartDate = new Date(startDate.getTime() - periodDuration);
+        const prevEndDate = new Date(startDate);
 
         const [
             totalDays,
             presentDays,
+            prevTotalDays,
+            prevPresentDays,
             pendingFees,
-            recentMarks
+            recentMarks,
+            nextExam
         ] = await Promise.all([
-            Attendance.countDocuments({ user: studentId, role: 'student' }),
-            Attendance.countDocuments({ user: studentId, role: 'student', status: 'present' }),
+            Attendance.countDocuments({
+                user: studentId,
+                role: 'student',
+                date: { $gte: startDate, $lte: endDate }
+            }),
+            Attendance.countDocuments({
+                user: studentId,
+                role: 'student',
+                status: 'present',
+                date: { $gte: startDate, $lte: endDate }
+            }),
+            Attendance.countDocuments({
+                user: studentId,
+                role: 'student',
+                date: { $gte: prevStartDate, $lt: prevEndDate }
+            }),
+            Attendance.countDocuments({
+                user: studentId,
+                role: 'student',
+                status: 'present',
+                date: { $gte: prevStartDate, $lt: prevEndDate }
+            }),
             FeePayment.find({ student: studentId, status: 'pending' }).lean(),
             Marks.find({ student: studentId })
                 .sort({ createdAt: -1 })
@@ -166,11 +252,17 @@ exports.getStudentStats = async (req, res) => {
                     path: 'exam',
                     populate: { path: 'subject', select: 'name' }
                 })
+                .lean(),
+            Exam.findOne({ examDate: { $gte: new Date() } })
+                .sort({ examDate: 1 })
+                .select('examDate name')
                 .lean()
         ]);
 
         // 1. Attendance %
         const attendancePercentage = totalDays > 0 ? ((presentDays / totalDays) * 100).toFixed(1) : 0;
+        const prevAttendancePercentage = prevTotalDays > 0 ? ((prevPresentDays / prevTotalDays) * 100) : 0;
+        const attendanceTrend = (attendancePercentage - prevAttendancePercentage).toFixed(1);
 
         // 2. Fee Due
         const dueAmount = pendingFees.reduce((acc, curr) => acc + curr.amount, 0);
@@ -183,11 +275,17 @@ exports.getStudentStats = async (req, res) => {
             date: m.createdAt
         })).reverse();
 
+        // 4. Next Exam Date
+        const nextExamDate = nextExam
+            ? new Date(nextExam.examDate).toISOString().split('T')[0]
+            : null;
+
         res.json({
             overview: {
-                attendancePercentage,
+                attendancePercentage: parseFloat(attendancePercentage),
+                attendanceTrend: parseFloat(attendanceTrend),
                 dueAmount,
-                nextExamDate: "2025-01-10" // logic to find next exam from Exam model
+                nextExamDate
             },
             charts: {
                 performanceTrend

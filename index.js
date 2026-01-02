@@ -47,6 +47,7 @@ app.use('/api/subjects', require('./src/routes/subjects'));
 app.use('/api/reports', require('./src/routes/reports'));
 app.use('/api/feedback', require('./src/routes/feedback'));
 app.use('/api/dashboard', require('./src/routes/dashboardRoutes'));
+app.use('/api/search', require('./src/routes/search'));
 
 app.get('/', (req, res) => {
   res.send('Hello from Express Backend!');
