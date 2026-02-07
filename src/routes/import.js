@@ -79,4 +79,46 @@ router.get('/template', requireFinanceAccess, (req, res) => {
     res.send(csvContent);
 });
 
+/**
+ * @route POST /api/import/students/local
+ * @desc Import students from local data folder (Direct Sync)
+ * @access Private (Admin)
+ */
+router.post('/students/local', requireFinanceAccess, async (req, res) => {
+    const filePath = './data/Student data.csv';
+    const wipeData = req.body.wipe === 'true';
+    const results = [];
+
+    if (!fs.existsSync(filePath)) {
+        return res.status(404).json({
+            message: 'Local import file not found',
+            path: filePath
+        });
+    }
+
+    try {
+        fs.createReadStream(filePath)
+            .pipe(csv())
+            .on('data', (data) => results.push(data))
+            .on('end', async () => {
+                try {
+                    const importResult = await processImport(results, { wipe: wipeData });
+                    res.json({
+                        message: 'Local import processed successfully',
+                        data: importResult
+                    });
+                } catch (error) {
+                    console.error('Local import processing error:', error);
+                    res.status(500).json({
+                        message: 'Error processing local data',
+                        error: error.message
+                    });
+                }
+            });
+    } catch (error) {
+        console.error('Local file read error:', error);
+        res.status(500).json({ message: 'Server error during local sync', error: error.message });
+    }
+});
+
 module.exports = router;
