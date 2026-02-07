@@ -11,8 +11,9 @@ const userSchema = new mongoose.Schema({
   },
   phone: {
     type: String,
-    required: [true, 'Phone number is required'],
+    required: [false, 'Phone number is required'], // Made optional as some might use phone2 as primary
     unique: true,
+    sparse: true, // Allow multiple nulls
     trim: true,
     match: [/^[6-9]\d{9}$/, 'Please enter a valid 10-digit Indian phone number (starting with 6-9)']
   },
@@ -55,6 +56,53 @@ const userSchema = new mongoose.Schema({
   academicYear: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'AcademicYear'
+  },
+
+  // NEW: Student Profile Fields
+  gender: {
+    type: String,
+    enum: ['Boy', 'Girl', 'Other'],
+    trim: true
+  },
+  dateOfBirth: {
+    type: Date
+  },
+  address: {
+    type: String,
+    trim: true
+  },
+  phone2: {
+    type: String,
+    trim: true,
+    match: [/^[6-9]\d{9}$/, 'Please enter a valid 10-digit Indian phone number']
+  },
+  remarks: {
+    type: String,
+    trim: true
+  },
+
+  // NEW: Student ID Fields
+  regNo: {
+    type: String,
+    trim: true
+  },
+  satsNumber: {
+    type: String,
+    trim: true
+  },
+  penNumber: {
+    type: String,
+    trim: true
+  },
+  apaarId: {
+    type: String,
+    trim: true
+  },
+
+  // NEW: Admission Status
+  isAdmitted: {
+    type: Boolean,
+    default: true
   },
 
   // Teacher specific fields

@@ -70,9 +70,27 @@ const checkRole = (roles) => {
   };
 };
 
+// Middleware for finance/fee access
+// Admins: Full access
+// Teachers: NO access
+// Students: Own data only (must be handled by controller logic using req.user.id)
+const requireFinanceAccess = (req, res, next) => {
+  if (!req.user) return res.status(401).json({ message: 'Unauthorized' });
+
+  const allowedRoles = ['admin', 'super admin', 'student'];
+  if (allowedRoles.includes(req.user.role)) {
+    return next();
+  }
+
+  return res.status(403).json({
+    message: 'Access Denied: You do not have permission to view financial records.'
+  });
+};
+
 module.exports = {
   authenticateToken,
   optionalAuthenticateToken,
   requireAdmin,
-  checkRole
+  checkRole,
+  requireFinanceAccess
 };
