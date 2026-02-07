@@ -6,8 +6,9 @@ const csv = require('csv-parser');
 const { processImport } = require('../services/importService');
 const { requireFinanceAccess } = require('../middleware/auth');
 
+const os = require('os');
 // Setup multer for file upload
-const upload = multer({ dest: 'uploads/' });
+const upload = multer({ dest: os.tmpdir() });
 
 /**
  * @route POST /api/import/students/csv
