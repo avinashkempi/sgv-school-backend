@@ -85,7 +85,7 @@ router.get('/template', authenticateToken, requireFinanceAccess, (req, res) => {
  * @access Private (Admin)
  */
 router.post('/students/local', authenticateToken, requireFinanceAccess, async (req, res) => {
-    const filePath = './data/Student data.csv';
+    const filePath = './data/student_data.csv';
     const wipeData = req.body.wipe === 'true';
     const results = [];
 
