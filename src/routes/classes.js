@@ -45,15 +45,32 @@ router.get('/my-classes', auth, async (req, res) => {
 router.get('/admin/init', [auth, checkRole(['admin', 'super admin'])], async (req, res) => {
     try {
         const [classes, academicYears, teachers, subjects, timetables] = await Promise.all([
-            Class.find().populate('classTeacher', 'name email').sort({ name: 1 }),
+            Class.find().populate('classTeacher', 'name email').sort({ name: 1 }).lean(),
             AcademicYear.find().sort({ startDate: -1 }),
             User.find({ role: { $in: ['teacher', 'staff'] } }).select('name email role'),
             Subject.find().populate('teachers', 'name email'),
             Timetable.find()
         ]);
 
+        // Aggregate student counts per class
+        const studentCounts = await User.aggregate([
+            { $match: { role: 'student', currentClass: { $exists: true, $ne: null } } },
+            { $group: { _id: '$currentClass', count: { $sum: 1 } } }
+        ]);
+
+        const countMap = {};
+        studentCounts.forEach(c => {
+            if (c._id) countMap[c._id.toString()] = c.count;
+        });
+
+        // Merge count into classes
+        const classesWithCount = classes.map(cls => ({
+            ...cls,
+            studentCount: countMap[cls._id.toString()] || 0
+        }));
+
         res.json({
-            classes,
+            classes: classesWithCount,
             academicYears,
             teachers,
             subjects,
