@@ -84,14 +84,15 @@ router.delete('/:id', [auth, checkRole(['admin', 'super admin'])], async (req, r
         // Check usage
         const usageCount = await Subject.countDocuments({ globalSubject: req.params.id });
         if (usageCount > 0) {
-            return res.status(400).json({ msg: `Cannot delete: Subject is used in ${usageCount} classes` });
+            console.warn(`Attempt to delete subject ${subject.name} which is used in ${usageCount} classes`);
+            return res.status(400).json({ msg: `Cannot delete: Subject is used in ${usageCount} classes. Remove it from classes first.` });
         }
 
         await GlobalSubject.findByIdAndDelete(req.params.id);
-        res.json({ msg: 'Subject deleted' });
+        res.json({ msg: 'Subject deleted successfully' });
     } catch (err) {
-        console.error(err.message);
-        res.status(500).send('Server Error');
+        console.error('Error deleting subject:', err);
+        res.status(500).json({ msg: 'Server Error during deletion', error: err.message });
     }
 });
 

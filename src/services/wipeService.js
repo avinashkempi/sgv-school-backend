@@ -1,7 +1,7 @@
 const mongoose = require('mongoose');
 const User = require('../models/User');
 const StudentFee = require('../models/StudentFee');
-// Add other related models here if needed in future (e.g. Marks, Attendance)
+const Class = require('../models/Class');
 
 /**
  * Wipes all non-admin users and their related data
@@ -35,11 +35,16 @@ const wipeNonAdminData = async () => {
         });
         console.log(`Deleted ${userDeleteResult.deletedCount} users.`);
 
+        // 4. Delete Classes (To be recreated from CSV)
+        const classDeleteResult = await Class.deleteMany({});
+        console.log(`Deleted ${classDeleteResult.deletedCount} classes.`);
+
         return {
             success: true,
-            message: `Successfully deleted ${userDeleteResult.deletedCount} users and ${feeDeleteResult.deletedCount} fee records.`,
+            message: `Successfully deleted ${userDeleteResult.deletedCount} users, ${feeDeleteResult.deletedCount} fee records, and ${classDeleteResult.deletedCount} classes.`,
             deletedUsers: userDeleteResult.deletedCount,
-            deletedFees: feeDeleteResult.deletedCount
+            deletedFees: feeDeleteResult.deletedCount,
+            deletedClasses: classDeleteResult.deletedCount
         };
 
     } catch (error) {

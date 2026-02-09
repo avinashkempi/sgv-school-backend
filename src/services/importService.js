@@ -3,6 +3,7 @@ const User = require('../models/User');
 const StudentFee = require('../models/StudentFee');
 const Class = require('../models/Class');
 const AcademicYear = require('../models/AcademicYear');
+const FeeStructure = require('../models/FeeStructure');
 const { wipeNonAdminData } = require('./wipeService');
 const bcrypt = require('bcryptjs');
 
@@ -45,7 +46,30 @@ const processImport = async (csvData, options = { wipe: false }) => {
             await wipeNonAdminData();
         }
 
-        // 2. Cache Classes and Academic Year
+        // 2. Extract and Create Classes from CSV
+        // Get unique class names from CSV
+        const uniqueClasses = [...new Set(csvData.map(row => row['Class'] ? row['Class'].toString().toUpperCase() : '').filter(c => c))];
+        console.log(`Found ${uniqueClasses.length} unique classes in CSV`);
+
+        // Helper to parse Branch from row (assuming all rows of a class have same branch, or take first)
+        const getBranchForClass = (className) => {
+            const row = csvData.find(r => r['Class'] && r['Class'].toString().toUpperCase() === className);
+            return row ? row['Branch'] : '';
+        };
+
+        // Create Classes if they don't exist (or if wiped)
+        for (const className of uniqueClasses) {
+            const existingClass = await Class.findOne({ name: className });
+            if (!existingClass) {
+                await Class.create({
+                    name: className,
+                    branch: getBranchForClass(className)
+                    // Section is optional/not in CSV explicitly as separate column usually, can add if needed
+                });
+            }
+        }
+
+        // 3. Cache Classes and Academic Year
         const classes = await Class.find({});
         const classMap = new Map(classes.map(c => [c.name.toUpperCase(), c._id]));
 
@@ -56,7 +80,10 @@ const processImport = async (csvData, options = { wipe: false }) => {
             academicYear = await AcademicYear.findOne({});
         }
 
-        // 3. Process Rows
+        // Track processed classes for fee structure to avoid redundant DB calls per row
+        const processedFeeStructures = new Set();
+
+        // 4. Process Rows
         for (let i = 0; i < csvData.length; i++) {
             const row = csvData[i];
             const rowNumber = i + 2; // +1 for 0-index, +1 for header
@@ -78,6 +105,18 @@ const processImport = async (csvData, options = { wipe: false }) => {
                 // Resolve Class
                 const className = row['Class'] ? row['Class'].toString().toUpperCase() : '';
                 const classId = classMap.get(className);
+
+                if (!classId && className) {
+                    // Should not happen if step 2 worked, but safety check
+                    console.warn(`Class ${className} not found in map for student ${row['Student Name']}`);
+                }
+
+                // --- NEW: Process Fee Structure for Class (First record wins) ---
+                if (classId && academicYear && !processedFeeStructures.has(classId.toString())) {
+                    await processFeeStructure(classId, academicYear, row);
+                    processedFeeStructures.add(classId.toString());
+                }
+                // -------------------------------------------------------------
 
                 // Construct Student Data
                 const studentData = {
@@ -110,14 +149,10 @@ const processImport = async (csvData, options = { wipe: false }) => {
                 if (!student) {
                     // Create new
                     student = new User(studentData);
-                    // Hash password manually if creating via new User() and saving? 
-                    // The User model pre-save hook handles hashing if password modified.
                     isNew = true;
                 } else {
                     // Update existing
                     Object.assign(student, studentData);
-                    // If we want to reset password to phone on update, uncomment:
-                    // student.password = loginPhone; 
                 }
 
                 await student.save();
@@ -143,6 +178,53 @@ const processImport = async (csvData, options = { wipe: false }) => {
     return results;
 };
 
+// Helper to create Fee Structure from CSV Row
+const processFeeStructure = async (classId, academicYear, row) => {
+    try {
+        // Check if exists for this class/year/default type
+        const existing = await FeeStructure.findOne({
+            class: classId,
+            academicYear: academicYear._id,
+            type: 'class_default'
+        });
+
+        // Use the Total Fees from the row as the Tuition Fee
+        const totalFees = parseCurrency(row['Total Fees']);
+
+        // NOTE: The CSV ("Inst 1 Date", etc.) contains ACTUAL PAYMENT dates/amounts, not a planned schedule.
+        // Therefore, we cannot infer a strict "Due Date" schedule for the whole class from one student's payment history.
+        // We will create the structure with the Total Amount and Component, leaving the schedule empty for now.
+        // Admins can manually add a schedule in the detailed settings if needed.
+
+        const structureData = {
+            class: classId,
+            academicYear: academicYear._id,
+            type: 'class_default',
+            totalAmount: totalFees,
+            components: [{
+                name: 'Tuition Fees',
+                amount: totalFees,
+                mandatory: true
+            }],
+            paymentSchedule: [], // No schedule from CSV
+            updatedAt: Date.now()
+        };
+
+        if (existing) {
+            // Update existing structure to match CSV (Source of Truth)
+            Object.assign(existing, structureData);
+            await existing.save();
+        } else {
+            // Create new
+            await FeeStructure.create(structureData);
+        }
+
+    } catch (error) {
+        console.error(`Error processing fee structure for class ${classId}:`, error);
+        // We log but don't fail the entire import, as individual student fees are processed separately
+    }
+};
+
 const processFees = async (student, row, academicYear, classId, branch) => {
     // Construct Fee Record
     const feeData = {
@@ -152,7 +234,7 @@ const processFees = async (student, row, academicYear, classId, branch) => {
         branch: branch,
 
         totalFees: parseCurrency(row['Total Fees']),
-        toPay: parseCurrency(row['To pay']), // Using 'To pay' from sheet or could calc
+        toPay: parseCurrency(row['To pay']), // Ensure this is accurate from CSV
         totalPaid: parseCurrency(row['Total Paid']),
         pendingAmount: parseCurrency(row['Pending']),
         concession: parseCurrency(row['Concession']),
@@ -169,15 +251,15 @@ const processFees = async (student, row, academicYear, classId, branch) => {
                 amount: amount,
                 date: parseDate(row[`Inst ${k} Date`]),
                 invoiceNumber: row[`Inst ${k} Invoice`],
-                paymentMode: 'Cash' // Default
+                paymentMode: row[`Inst ${k} Mode`] || 'Cash' // Use mode from CSV if available, else Cash
             });
         }
     }
 
-    // Upsert Fee Record
+    // Upsert Fee Record - Using $set to overwrite all fields with CSV data
     await StudentFee.findOneAndUpdate(
         { student: student._id, academicYear: academicYear ? academicYear._id : null },
-        feeData,
+        { $set: feeData }, // Explicitly set all fields to match CSV
         { upsert: true, new: true }
     );
 };

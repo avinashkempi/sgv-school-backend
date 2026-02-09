@@ -239,6 +239,43 @@ router.get('/student/:studentId', auth, async (req, res) => {
         const student = await User.findById(req.params.studentId);
         if (!student) return res.status(404).json({ message: 'Student not found' });
 
+        // CHECK FOR IMPORTED FEE RECORD FIRST (StudentFee)
+        // This is the source of truth for imported data
+        const StudentFee = require('../models/StudentFee');
+        const studentFee = await StudentFee.findOne({
+            student: req.params.studentId,
+            academicYear: student.academicYear
+        });
+
+        if (studentFee) {
+            // Map payments to match expected frontend structure
+            const mappedPayments = studentFee.payments.map(p => ({
+                _id: p._id,
+                amount: p.amount,
+                paymentDate: p.date,
+                receiptNumber: p.invoiceNumber, // Map Invoice to Receipt
+                paymentMethod: p.paymentMode,
+                status: 'success', // Imported payments are assumed successful
+                installmentNumber: p.installmentNumber
+            })).sort((a, b) => new Date(b.paymentDate) - new Date(a.paymentDate));
+
+            return res.json({
+                feeStructure: {
+                    totalAmount: studentFee.totalFees,
+                    components: [
+                        { name: "Tuition & Other Fees", amount: studentFee.totalFees }
+                    ]
+                },
+                totalFees: studentFee.totalFees,
+                paidAmount: studentFee.totalPaid,
+                pendingAmount: studentFee.pendingAmount,
+                concession: studentFee.concession || 0,
+                payments: mappedPayments
+            });
+        }
+
+        // --- FALLBACK TO LEGACY/CALCULATED LOGIC ---
+
         // Get Fee Structure (Default)
         const defaultFeeStructure = await FeeStructure.findOne({
             class: student.currentClass,
