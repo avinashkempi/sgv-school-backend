@@ -277,4 +277,97 @@ const processFees = async (student, row, academicYear, classId, branch) => {
     );
 };
 
-module.exports = { processImport };
+const processStaffImport = async (csvData) => {
+    const results = {
+        total: csvData.length,
+        created: 0,
+        updated: 0,
+        failed: 0,
+        errors: [],
+        designationCounts: {}
+    };
+
+    for (let i = 0; i < csvData.length; i++) {
+        const row = csvData[i];
+        const rowNumber = i + 2;
+
+        try {
+            const name = row['Name'];
+            const phone = row['Contact'] ? row['Contact'].toString().replace(/\D/g, '') : '';
+            const designation = row['Designation'] ? row['Designation'].trim() : '';
+
+            if (!name || !phone) {
+                throw new Error('Name and Contact are required');
+            }
+
+            // Determine Role
+            let role = 'support_staff'; // Default
+            const lowerDesig = designation.toLowerCase();
+
+            if (lowerDesig === 'headmaster' || lowerDesig === 'principal') {
+                role = 'admin';
+            } else if (lowerDesig.includes('assistant teacher') || lowerDesig === 'teacher') {
+                role = 'teacher';
+            } else if (lowerDesig === 'clerk' || lowerDesig === 'computer instructor') {
+                role = 'staff';
+            } else {
+                role = 'support_staff';
+            }
+
+            // Count Designations
+            results.designationCounts[designation] = (results.designationCounts[designation] || 0) + 1;
+
+            // Construct User Data
+            constuserData = {
+                name: name,
+                phone: phone,
+                password: phone, // Default password
+                role: role,
+                designation: designation, // Store exact designation
+
+                // Profile Fields
+                dateOfBirth: parseDate(row['Date of Birth']),
+                bloodGroup: row['Blood Group'],
+                address: row['Address'],
+
+                // Ensure no student-specific fields interfere
+                currentClass: null,
+                academicYear: null
+            };
+
+            // Upsert User
+            let user = await User.findOne({ phone: phone });
+            let isNew = false;
+
+            if (!user) {
+                user = new User(userData);
+                isNew = true;
+            } else {
+                // Update existing
+                // Only update if role is not super admin (safety)
+                if (user.role !== 'super admin') {
+                    Object.assign(user, userData);
+                } else {
+                    // If super admin, maybe just update profile details but NOT role
+                    const { role, ...safeUpdates } = userData;
+                    Object.assign(user, safeUpdates);
+                }
+            }
+
+            await user.save();
+            if (isNew) results.created++; else results.updated++;
+
+        } catch (error) {
+            results.failed++;
+            results.errors.push({
+                row: rowNumber,
+                name: row['Name'],
+                error: error.message
+            });
+        }
+    }
+
+    return results;
+};
+
+module.exports = { processImport, processStaffImport };

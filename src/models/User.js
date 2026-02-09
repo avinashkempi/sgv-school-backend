@@ -32,7 +32,7 @@ const userSchema = new mongoose.Schema({
   // Role field for access control
   role: {
     type: String,
-    enum: ['student', 'teacher', 'staff', 'admin', 'super admin'], // Removed 'class teacher', added 'teacher'
+    enum: ['student', 'teacher', 'staff', 'admin', 'super admin', 'support_staff'], // Added 'support_staff'
     default: 'student'
   },
 
@@ -62,6 +62,10 @@ const userSchema = new mongoose.Schema({
   gender: {
     type: String,
     enum: ['Boy', 'Girl', 'Other'],
+    trim: true
+  },
+  bloodGroup: {
+    type: String,
     trim: true
   },
   dateOfBirth: {

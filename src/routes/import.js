@@ -3,7 +3,7 @@ const router = express.Router();
 const multer = require('multer');
 const fs = require('fs');
 const csv = require('csv-parser');
-const { processImport } = require('../services/importService');
+const { processImport, processStaffImport } = require('../services/importService');
 const { requireFinanceAccess, authenticateToken } = require('../middleware/auth');
 
 const os = require('os');
@@ -111,6 +111,47 @@ router.post('/students/local', authenticateToken, requireFinanceAccess, async (r
                     console.error('Local import processing error:', error);
                     res.status(500).json({
                         message: 'Error processing local data',
+                        error: error.message
+                    });
+                }
+            });
+    } catch (error) {
+        console.error('Local file read error:', error);
+        res.status(500).json({ message: 'Server error during local sync', error: error.message });
+    }
+});
+
+/**
+ * @route POST /api/import/staff/local
+ * @desc Import staff from local data folder (Direct Sync)
+ * @access Private (Admin)
+ */
+router.post('/staff/local', authenticateToken, requireFinanceAccess, async (req, res) => {
+    const filePath = './data/staff_data.csv';
+    const results = [];
+
+    if (!fs.existsSync(filePath)) {
+        return res.status(404).json({
+            message: 'Local staff import file not found',
+            path: filePath
+        });
+    }
+
+    try {
+        fs.createReadStream(filePath)
+            .pipe(csv())
+            .on('data', (data) => results.push(data))
+            .on('end', async () => {
+                try {
+                    const importResult = await processStaffImport(results);
+                    res.json({
+                        message: 'Staff import processed successfully',
+                        data: importResult
+                    });
+                } catch (error) {
+                    console.error('Staff import processing error:', error);
+                    res.status(500).json({
+                        message: 'Error processing staff data',
                         error: error.message
                     });
                 }
