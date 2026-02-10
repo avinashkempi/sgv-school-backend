@@ -284,7 +284,9 @@ const processStaffImport = async (csvData) => {
         updated: 0,
         failed: 0,
         errors: [],
-        designationCounts: {}
+        designationCounts: {},
+        createdStaff: [],
+        updatedStaff: []
     };
 
     for (let i = 0; i < csvData.length; i++) {
@@ -355,7 +357,21 @@ const processStaffImport = async (csvData) => {
             }
 
             await user.save();
-            if (isNew) results.created++; else results.updated++;
+            if (isNew) {
+                results.created++;
+                results.createdStaff.push({
+                    name: user.name,
+                    designation: user.designation,
+                    phone: user.phone
+                });
+            } else {
+                results.updated++;
+                results.updatedStaff.push({
+                    name: user.name,
+                    designation: user.designation,
+                    phone: user.phone
+                });
+            }
 
         } catch (error) {
             results.failed++;
