@@ -3,6 +3,7 @@ const router = express.Router();
 const { authenticateToken: auth, checkRole } = require('../middleware/auth');
 const FeeStructure = require('../models/FeeStructure');
 const FeePayment = require('../models/FeePayment');
+const StudentFee = require('../models/StudentFee');
 const User = require('../models/User');
 const Class = require('../models/Class');
 const { sendTargetedNotification } = require('../services/notificationService');
@@ -355,17 +356,22 @@ router.get('/analytics', [auth, checkRole(['admin', 'super admin'])], async (req
         const firstDayOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
 
         const [todayPayments, monthPayments, allPayments] = await Promise.all([
-            FeePayment.aggregate([
-                { $match: { paymentDate: { $gte: today }, status: 'success' } },
-                { $group: { _id: null, total: { $sum: '$amount' } } }
+            // Collected Today
+            StudentFee.aggregate([
+                { $unwind: "$payments" },
+                { $match: { "payments.date": { $gte: today } } },
+                { $group: { _id: null, total: { $sum: '$payments.amount' } } }
             ]),
-            FeePayment.aggregate([
-                { $match: { paymentDate: { $gte: firstDayOfMonth }, status: 'success' } },
-                { $group: { _id: null, total: { $sum: '$amount' } } }
+            // Collected This Month
+            StudentFee.aggregate([
+                { $unwind: "$payments" },
+                { $match: { "payments.date": { $gte: firstDayOfMonth } } },
+                { $group: { _id: null, total: { $sum: '$payments.amount' } } }
             ]),
-            FeePayment.aggregate([
-                { $match: { status: 'success' } },
-                { $group: { _id: null, total: { $sum: '$amount' } } }
+            // Total Collected (All Time)
+            StudentFee.aggregate([
+                { $unwind: "$payments" },
+                { $group: { _id: null, total: { $sum: '$payments.amount' } } }
             ])
         ]);
 
