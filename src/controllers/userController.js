@@ -236,6 +236,21 @@ const updateUser = async (req, res) => {
     if (currentClass) user.currentClass = currentClass;
     if (academicYear) user.academicYear = academicYear;
 
+    // New Student Fields
+    if (req.body.gender) user.gender = req.body.gender;
+    if (req.body.bloodGroup) user.bloodGroup = req.body.bloodGroup;
+    if (req.body.dateOfBirth) user.dateOfBirth = req.body.dateOfBirth;
+    if (req.body.address) user.address = req.body.address;
+    if (req.body.phone2) user.phone2 = req.body.phone2;
+    // IDs
+    if (req.body.regNo) user.regNo = req.body.regNo;
+    if (req.body.satsNumber) user.satsNumber = req.body.satsNumber;
+    if (req.body.penNumber) user.penNumber = req.body.penNumber;
+    if (req.body.apaarId) user.apaarId = req.body.apaarId;
+    // Status
+    if (req.body.isAdmitted !== undefined) user.isAdmitted = req.body.isAdmitted;
+
+
     // Update teacher fields
     if (joiningDate) user.joiningDate = joiningDate;
     if (designation) user.designation = designation;
