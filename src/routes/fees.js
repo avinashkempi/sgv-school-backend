@@ -227,6 +227,80 @@ router.post('/payment', [auth, checkRole(['admin', 'super admin'])], async (req,
     }
 });
 
+// @route   GET /api/fees/summary
+// @desc    Get fee summary for all students (for list view)
+// @access  Admin/Super Admin
+router.get('/summary', [auth, checkRole(['admin', 'super admin'])], async (req, res) => {
+    try {
+        const { academicYearId, classId } = req.query;
+
+        // 1. Build User Query
+        const query = { role: 'student' };
+        if (academicYearId) query.academicYear = academicYearId;
+        if (classId) query.currentClass = classId;
+
+        // 2. Fetch All Students (Lite)
+        const students = await User.find(query)
+            .select('name phone currentClass admissionNo rollNo')
+            .populate('currentClass', 'name section')
+            .lean();
+
+        // 3. Fetch Fee Data (StudentFee) - This is the source of truth for imported data
+        // We fetching ALL StudentFee records for this year to map them in memory
+        // optimizing to avoid N+1 queries
+        const feeQuery = {};
+        if (academicYearId) feeQuery.academicYear = academicYearId;
+
+        const allFeeRecords = await StudentFee.find(feeQuery).lean();
+
+        // Create a map for quick lookup: studentId -> feeRecord
+        const feeMap = {};
+        allFeeRecords.forEach(record => {
+            feeMap[record.student.toString()] = record;
+        });
+
+        // 4. Merge Data
+        const summary = students.map(student => {
+            const feeRecord = feeMap[student._id.toString()];
+
+            let totalFees = 0;
+            let paidAmount = 0;
+            let pendingAmount = 0;
+
+            if (feeRecord) {
+                totalFees = feeRecord.totalFees;
+                paidAmount = feeRecord.totalPaid;
+                pendingAmount = feeRecord.pendingAmount;
+            } else {
+                // Fallback: If no StudentFee record, usually means no fee assigned or data not imported yet.
+                // We could try to calculate from FeeStructure/FeePayment but that's heavy. 
+                // For the summary list, we'll default to 0 to keep it fast.
+                // Detailed calculation happens when clicking on a student.
+            }
+
+            return {
+                _id: student._id,
+                name: student.name,
+                admissionNo: student.admissionNo,
+                rollNo: student.rollNo,
+                className: student.currentClass?.name || 'N/A',
+                section: student.currentClass?.section || '',
+                currentClassId: student.currentClass?._id,
+                totalFees,
+                paidAmount,
+                pendingAmount
+            };
+        });
+
+        // 5. Respond
+        res.json(summary);
+
+    } catch (err) {
+        console.error("Error in GET /fees/summary:", err);
+        res.status(500).send('Server Error');
+    }
+});
+
 // @route   GET /api/fees/student/:studentId
 // @desc    Get student fee status and history
 // @access  Private (Admin, or Student for own data)
