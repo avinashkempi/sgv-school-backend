@@ -1,6 +1,7 @@
 const User = require('../models/User');
 const Attendance = require('../models/Attendance');
 const FeePayment = require('../models/FeePayment');
+const StudentFee = require('../models/StudentFee');
 const Complaint = require('../models/Complaint');
 const Marks = require('../models/Marks');
 const Class = require('../models/Class');
@@ -80,13 +81,15 @@ exports.getAdminStats = async (req, res) => {
                 date: { $gte: today, $lt: tomorrow },
                 role: 'student'
             }).lean(),
-            FeePayment.aggregate([
-                { $match: { status: 'success', paymentDate: { $gte: startDate, $lte: endDate } } },
-                { $group: { _id: null, total: { $sum: "$amount" } } }
+            StudentFee.aggregate([
+                { $unwind: "$payments" },
+                { $match: { "payments.date": { $gte: startDate, $lte: endDate } } },
+                { $group: { _id: null, total: { $sum: "$payments.amount" } } }
             ]),
-            FeePayment.aggregate([
-                { $match: { status: 'success', paymentDate: { $gte: prevStartDate, $lt: prevEndDate } } },
-                { $group: { _id: null, total: { $sum: "$amount" } } }
+            StudentFee.aggregate([
+                { $unwind: "$payments" },
+                { $match: { "payments.date": { $gte: prevStartDate, $lt: prevEndDate } } },
+                { $group: { _id: null, total: { $sum: "$payments.amount" } } }
             ]),
             Attendance.find({
                 date: { $gte: prevStartDate, $lt: prevEndDate },
@@ -120,14 +123,15 @@ exports.getAdminStats = async (req, res) => {
             : 0;
 
         // Fee Trend Logic
-        const feeMatchQuery = { status: 'success', paymentDate: { $gte: startDate, $lte: endDate } };
+        // const feeMatchQuery = { status: 'success', paymentDate: { $gte: startDate, $lte: endDate } };
 
-        const feeTrend = await FeePayment.aggregate([
-            { $match: feeMatchQuery },
+        const feeTrend = await StudentFee.aggregate([
+            { $unwind: "$payments" },
+            { $match: { "payments.date": { $gte: startDate, $lte: endDate } } },
             {
                 $group: {
-                    _id: { $month: "$paymentDate" },
-                    total: { $sum: "$amount" }
+                    _id: { $month: "$payments.date" },
+                    total: { $sum: "$payments.amount" }
                 }
             },
             { $sort: { "_id": 1 } }
@@ -241,7 +245,8 @@ exports.getStudentStats = async (req, res) => {
                 status: 'present',
                 date: { $gte: prevStartDate, $lt: prevEndDate }
             }),
-            FeePayment.find({ student: studentId, status: 'pending' }).lean(),
+            // FIX: Get pending amount from StudentFee, not FeePayment
+            require('../models/StudentFee').findOne({ student: studentId }).select('pendingAmount').lean(),
             Marks.find({ student: studentId })
                 .sort({ createdAt: -1 })
                 .limit(10)
@@ -262,8 +267,8 @@ exports.getStudentStats = async (req, res) => {
         const prevAttendancePercentage = prevTotalDays > 0 ? ((prevPresentDays / prevTotalDays) * 100) : 0;
         const attendanceTrend = (attendancePercentage - prevAttendancePercentage).toFixed(1);
 
-        // 2. Fee Due
-        const dueAmount = pendingFees.reduce((acc, curr) => acc + curr.amount, 0);
+        // 2. Fee Due - Now correctly taking from StudentFee record
+        const dueAmount = pendingFees?.pendingAmount || 0;
 
         // 3. Recent Marks Trend
         const performanceTrend = recentMarks.map(m => ({

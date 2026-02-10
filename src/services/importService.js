@@ -318,7 +318,7 @@ const processStaffImport = async (csvData) => {
             results.designationCounts[designation] = (results.designationCounts[designation] || 0) + 1;
 
             // Construct User Data
-            constuserData = {
+            const userData = {
                 name: name,
                 phone: phone,
                 password: phone, // Default password
