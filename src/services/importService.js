@@ -130,7 +130,7 @@ const processImport = async (csvData, options = { wipe: false }) => {
                     name: row['Student Name'],
                     phone: loginPhone, // Unique Key
                     guardianPhone: backupPhone, // Backup contact
-                    password: loginPhone, // Default password = phone
+                    password: loginPhone + '@123', // Default password = phone@123
                     role: 'student',
                     currentClass: classId,
                     academicYear: academicYear ? academicYear._id : null,
@@ -323,7 +323,7 @@ const processStaffImport = async (csvData) => {
             const userData = {
                 name: name,
                 phone: phone,
-                password: phone, // Default password
+                password: phone + '@123', // Default password = phone@123
                 role: role,
                 designation: designation, // Store exact designation
 
