@@ -65,13 +65,17 @@ exports.getAdminStats = async (req, res) => {
         const prevStartDate = new Date(startDate.getTime() - periodDuration);
         const prevEndDate = new Date(startDate);
 
-        // Parallel Execution
+        const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+        // Parallel Execution - query both StudentFee.payments (imported) and FeePayment (app-recorded)
         const [
             totalStudents,
             totalTeachers,
             attendanceToday,
-            collectedFees,
-            prevCollectedFees,
+            importedFees,
+            appFees,
+            prevImportedFees,
+            prevAppFees,
             prevAttendance,
             recentComplaints
         ] = await Promise.all([
@@ -81,15 +85,27 @@ exports.getAdminStats = async (req, res) => {
                 date: { $gte: today, $lt: tomorrow },
                 role: 'student'
             }).lean(),
+            // Imported fees (StudentFee.payments)
             StudentFee.aggregate([
                 { $unwind: "$payments" },
                 { $match: { "payments.date": { $gte: startDate, $lte: endDate } } },
                 { $group: { _id: null, total: { $sum: "$payments.amount" } } }
             ]),
+            // App-recorded fees (FeePayment)
+            FeePayment.aggregate([
+                { $match: { status: 'success', paymentDate: { $gte: startDate, $lte: endDate } } },
+                { $group: { _id: null, total: { $sum: "$amount" } } }
+            ]),
+            // Previous period imported fees
             StudentFee.aggregate([
                 { $unwind: "$payments" },
                 { $match: { "payments.date": { $gte: prevStartDate, $lt: prevEndDate } } },
                 { $group: { _id: null, total: { $sum: "$payments.amount" } } }
+            ]),
+            // Previous period app-recorded fees
+            FeePayment.aggregate([
+                { $match: { status: 'success', paymentDate: { $gte: prevStartDate, $lt: prevEndDate } } },
+                { $group: { _id: null, total: { $sum: "$amount" } } }
             ]),
             Attendance.find({
                 date: { $gte: prevStartDate, $lt: prevEndDate },
@@ -116,26 +132,46 @@ exports.getAdminStats = async (req, res) => {
             : 0;
         const attendanceTrend = (attendancePercentage - prevAttendancePercentage).toFixed(1);
 
-        const totalCollected = collectedFees.length > 0 ? collectedFees[0].total : 0;
-        const prevTotalCollected = prevCollectedFees.length > 0 ? prevCollectedFees[0].total : 0;
+        // Combine imported + app-recorded fees
+        const totalCollected = (importedFees[0]?.total || 0) + (appFees[0]?.total || 0);
+        const prevTotalCollected = (prevImportedFees[0]?.total || 0) + (prevAppFees[0]?.total || 0);
         const feeCollectionTrend = prevTotalCollected > 0
             ? (((totalCollected - prevTotalCollected) / prevTotalCollected) * 100).toFixed(1)
             : 0;
 
-        // Fee Trend Logic
-        // const feeMatchQuery = { status: 'success', paymentDate: { $gte: startDate, $lte: endDate } };
-
-        const feeTrend = await StudentFee.aggregate([
-            { $unwind: "$payments" },
-            { $match: { "payments.date": { $gte: startDate, $lte: endDate } } },
-            {
-                $group: {
-                    _id: { $month: "$payments.date" },
-                    total: { $sum: "$payments.amount" }
-                }
-            },
-            { $sort: { "_id": 1 } }
+        // Fee Trend Logic - combine both sources by month
+        const [importedFeeTrend, appFeeTrend] = await Promise.all([
+            StudentFee.aggregate([
+                { $unwind: "$payments" },
+                { $match: { "payments.date": { $gte: startDate, $lte: endDate } } },
+                {
+                    $group: {
+                        _id: { $month: "$payments.date" },
+                        total: { $sum: "$payments.amount" }
+                    }
+                },
+                { $sort: { "_id": 1 } }
+            ]),
+            FeePayment.aggregate([
+                { $match: { status: 'success', paymentDate: { $gte: startDate, $lte: endDate } } },
+                {
+                    $group: {
+                        _id: { $month: "$paymentDate" },
+                        total: { $sum: "$amount" }
+                    }
+                },
+                { $sort: { "_id": 1 } }
+            ])
         ]);
+
+        // Merge both fee trends by month
+        const feeTrendMap = {};
+        importedFeeTrend.forEach(f => { feeTrendMap[f._id] = (feeTrendMap[f._id] || 0) + f.total; });
+        appFeeTrend.forEach(f => { feeTrendMap[f._id] = (feeTrendMap[f._id] || 0) + f.total; });
+        const feeTrend = Object.keys(feeTrendMap)
+            .map(Number)
+            .sort((a, b) => a - b)
+            .map(monthNum => ({ month: monthNames[monthNum - 1], amount: feeTrendMap[monthNum] }));
 
         res.json({
             overview: {
@@ -148,7 +184,7 @@ exports.getAdminStats = async (req, res) => {
             },
             charts: {
                 attendance: { present: presentCount, absent: absentCount },
-                feeTrend: feeTrend.map(f => ({ month: f._id, amount: f.total }))
+                feeTrend
             },
             recentComplaints
         });
