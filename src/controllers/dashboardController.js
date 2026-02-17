@@ -139,39 +139,62 @@ exports.getAdminStats = async (req, res) => {
             ? (((totalCollected - prevTotalCollected) / prevTotalCollected) * 100).toFixed(1)
             : 0;
 
-        // Fee Trend Logic - combine both sources by month
-        const [importedFeeTrend, appFeeTrend] = await Promise.all([
-            StudentFee.aggregate([
-                { $unwind: "$payments" },
-                { $match: { "payments.date": { $gte: startDate, $lte: endDate } } },
-                {
-                    $group: {
-                        _id: { $month: "$payments.date" },
-                        total: { $sum: "$payments.amount" }
-                    }
-                },
-                { $sort: { "_id": 1 } }
-            ]),
-            FeePayment.aggregate([
-                { $match: { status: 'success', paymentDate: { $gte: startDate, $lte: endDate } } },
-                {
-                    $group: {
-                        _id: { $month: "$paymentDate" },
-                        total: { $sum: "$amount" }
-                    }
-                },
-                { $sort: { "_id": 1 } }
-            ])
-        ]);
+        // Fee Trend Logic - show all months of academic year
+        const activeYear = await AcademicYear.findOne({ isActive: true }).lean();
+        let feeTrend = [];
 
-        // Merge both fee trends by month
-        const feeTrendMap = {};
-        importedFeeTrend.forEach(f => { feeTrendMap[f._id] = (feeTrendMap[f._id] || 0) + f.total; });
-        appFeeTrend.forEach(f => { feeTrendMap[f._id] = (feeTrendMap[f._id] || 0) + f.total; });
-        const feeTrend = Object.keys(feeTrendMap)
-            .map(Number)
-            .sort((a, b) => a - b)
-            .map(monthNum => ({ month: monthNames[monthNum - 1], amount: feeTrendMap[monthNum] }));
+        if (activeYear) {
+            const ayStart = new Date(activeYear.startDate);
+            const ayEnd = new Date(activeYear.endDate);
+
+            // Build list of all months in the academic year
+            const allMonths = [];
+            const cursor = new Date(ayStart.getFullYear(), ayStart.getMonth(), 1);
+            while (cursor <= ayEnd) {
+                allMonths.push({ year: cursor.getFullYear(), month: cursor.getMonth() + 1 }); // 1-indexed month
+                cursor.setMonth(cursor.getMonth() + 1);
+            }
+
+            // Query both sources for the full academic year range
+            const [importedFeeTrend, appFeeTrend] = await Promise.all([
+                StudentFee.aggregate([
+                    { $unwind: "$payments" },
+                    { $match: { "payments.date": { $gte: ayStart, $lte: ayEnd } } },
+                    {
+                        $group: {
+                            _id: { year: { $year: "$payments.date" }, month: { $month: "$payments.date" } },
+                            total: { $sum: "$payments.amount" }
+                        }
+                    }
+                ]),
+                FeePayment.aggregate([
+                    { $match: { status: 'success', paymentDate: { $gte: ayStart, $lte: ayEnd } } },
+                    {
+                        $group: {
+                            _id: { year: { $year: "$paymentDate" }, month: { $month: "$paymentDate" } },
+                            total: { $sum: "$amount" }
+                        }
+                    }
+                ])
+            ]);
+
+            // Merge both into a map keyed by "year-month"
+            const feeTrendMap = {};
+            importedFeeTrend.forEach(f => {
+                const key = `${f._id.year}-${f._id.month}`;
+                feeTrendMap[key] = (feeTrendMap[key] || 0) + f.total;
+            });
+            appFeeTrend.forEach(f => {
+                const key = `${f._id.year}-${f._id.month}`;
+                feeTrendMap[key] = (feeTrendMap[key] || 0) + f.total;
+            });
+
+            // Build final array with all months, filling 0 where no data
+            feeTrend = allMonths.map(m => ({
+                month: monthNames[m.month - 1],
+                amount: feeTrendMap[`${m.year}-${m.month}`] || 0
+            }));
+        }
 
         res.json({
             overview: {
