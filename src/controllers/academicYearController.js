@@ -360,13 +360,13 @@ exports.getReports = async (req, res) => {
                 .lean(),
             Exam.find({ academicYear: academicYearId }).lean(),
             LeaveRequest.find({
-                applicantRole: { $in: ['teacher', 'class teacher', 'staff'] },
+                applicantRole: { $in: ['teacher', 'staff'] },
                 startDate: { $gte: year.startDate, $lte: year.endDate }
             }).populate('applicant', 'name role').lean(),
             Attendance.aggregate([
                 {
                     $match: {
-                        role: { $in: ['teacher', 'class teacher', 'staff'] },
+                        role: { $in: ['teacher', 'staff'] },
                         date: { $gte: year.startDate, $lte: year.endDate }
                     }
                 },

@@ -11,7 +11,7 @@ const authenticateToken = (req, res, next) => {
     });
   }
 
-  jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key', (err, payload) => {
+  jwt.verify(token, process.env.JWT_SECRET, (err, payload) => {
     if (err) {
       return res.status(403).json({
         success: false,
@@ -34,7 +34,7 @@ const optionalAuthenticateToken = (req, res, next) => {
     return next();
   }
 
-  jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key', (err, payload) => {
+  jwt.verify(token, process.env.JWT_SECRET, (err, payload) => {
     if (err) {
       req.user = null;
     } else {

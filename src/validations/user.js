@@ -24,8 +24,8 @@ const userValidation = [
     .withMessage('Password must be at least 6 characters long'),
   body('role')
     .optional()
-    .isIn(['student', 'class teacher', 'staff', 'admin', 'super admin'])
-    .withMessage('Role must be one of: student, class teacher, staff, admin, super admin'),
+    .isIn(['student', 'teacher', 'staff', 'admin', 'super admin'])
+    .withMessage('Role must be one of: student, teacher, staff, admin, super admin'),
   body('guardianPhone')
     .optional({ checkFalsy: true })
     .matches(/^[6-9]\d{9}$/)

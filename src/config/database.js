@@ -2,8 +2,11 @@ const mongoose = require('mongoose');
 
 const connectDB = async () => {
   try {
-    const mongoUri = process.env.MONGODB_URI || 'mongodb://localhost:27017/school-app';
-    await mongoose.connect(mongoUri, { family: 4 });
+    if (!process.env.MONGODB_URI) {
+      console.error('❌ MONGODB_URI environment variable is not set');
+      process.exit(1);
+    }
+    await mongoose.connect(process.env.MONGODB_URI, { family: 4 });
     console.log('✅ Connected to MongoDB');
   } catch (err) {
     console.error('❌ MongoDB connection error:', err);

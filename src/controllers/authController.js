@@ -37,7 +37,7 @@ const login = async (req, res) => {
     // Generate JWT token (include role so middleware can enforce permissions)
     const token = jwt.sign(
       { userId: user._id, name: user.name, role: user.role },
-      process.env.JWT_SECRET || 'your-secret-key',
+      process.env.JWT_SECRET,
       { expiresIn: '365d' }
     );
 

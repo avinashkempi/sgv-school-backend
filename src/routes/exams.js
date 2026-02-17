@@ -6,7 +6,8 @@ const Marks = require('../models/Marks');
 const _GradeConfig = require('../models/GradeConfig');
 const User = require('../models/User');
 const Subject = require('../models/Subject');
-const _Class = require('../models/Class');
+const Class = require('../models/Class');
+const AcademicYear = require('../models/AcademicYear');
 const { sendTargetedNotification } = require('../services/notificationService');
 
 // @route   GET /api/exams/standardized
@@ -24,7 +25,7 @@ router.get('/standardized', auth, async (req, res) => {
         }
 
         // Get active academic year
-        const AcademicYear = require('../models/AcademicYear');
+        // AcademicYear imported at top of file
         const activeYear = await AcademicYear.findOne({ isActive: true }).lean();
 
         if (!activeYear) {
@@ -399,7 +400,7 @@ router.post('/', auth, async (req, res) => {
         }
 
         // Get active academic year
-        const AcademicYear = require('../models/AcademicYear');
+        // AcademicYear imported at top of file
         const activeYear = await AcademicYear.findOne({ isActive: true });
 
         const exam = new Exam({
@@ -443,7 +444,8 @@ router.get('/subject/:subjectId', auth, async (req, res) => {
             .populate('class', 'name section')
             .populate('subject', 'name')
             .populate('createdBy', 'name')
-            .sort({ date: -1 });
+            .sort({ date: -1 })
+            .lean();
 
         res.json(exams);
     } catch (err) {
@@ -464,7 +466,8 @@ router.get('/:id', auth, async (req, res) => {
             .populate('class', 'name section')
             .populate('subject', 'name')
             .populate('createdBy', 'name')
-            .populate('academicYear', 'name');
+            .populate('academicYear', 'name')
+            .lean();
 
         if (!exam) {
             return res.status(404).json({ message: 'Exam not found' });
@@ -573,7 +576,8 @@ router.get('/schedule/student', auth, async (req, res) => {
         })
             .populate('subject', 'name')
             .populate('class', 'name section')
-            .sort({ date: 1 });
+            .sort({ date: 1 })
+            .lean();
 
         res.json(exams);
     } catch (err) {
@@ -593,7 +597,8 @@ router.get('/schedule/class/:classId', auth, async (req, res) => {
         })
             .populate('subject', 'name')
             .populate('createdBy', 'name')
-            .sort({ date: 1 });
+            .sort({ date: 1 })
+            .lean();
 
         res.json(exams);
     } catch (err) {
@@ -617,7 +622,7 @@ router.get('/history', auth, async (req, res) => {
         };
 
         // If teacher, only show their exams
-        if (user.role === 'class teacher' || user.role === 'staff') {
+        if (user.role === 'teacher' || user.role === 'staff') {
             query.createdBy = req.user.userId;
         }
 
@@ -629,7 +634,8 @@ router.get('/history', auth, async (req, res) => {
             .populate('class', 'name section')
             .populate('subject', 'name')
             .populate('createdBy', 'name')
-            .sort({ date: -1 });
+            .sort({ date: -1 })
+            .lean();
 
         res.json(exams);
     } catch (err) {
@@ -649,7 +655,7 @@ router.get('/performance/class/:classId', auth, async (req, res) => {
         // Get active academic year if not provided
         let yearId = academicYearId;
         if (!yearId) {
-            const AcademicYear = require('../models/AcademicYear');
+            // AcademicYear imported at top of file
             const activeYear = await AcademicYear.findOne({ isActive: true });
             if (activeYear) yearId = activeYear._id;
         }
@@ -659,19 +665,19 @@ router.get('/performance/class/:classId', auth, async (req, res) => {
             class: req.params.classId,
             academicYear: yearId,
             isStandardized: true
-        }).populate('subject', 'name');
+        }).populate('subject', 'name').lean();
 
         // Get all students in the class
         const students = await User.find({
             currentClass: req.params.classId,
             role: 'student'
-        }).select('name email');
+        }).select('name email').lean();
 
         // Get all marks for these exams
         const examIds = exams.map(e => e._id);
         const allMarks = await Marks.find({
             exam: { $in: examIds }
-        }).populate('student', 'name');
+        }).populate('student', 'name').lean();
 
         // Group by exam type
         const examTypes = ['FA1', 'FA2', 'SA1', 'FA3', 'FA4', 'SA2'];
@@ -747,13 +753,13 @@ router.get('/performance/subject/:subjectId', auth, async (req, res) => {
         }
 
         // Get all standardized exams for this subject
-        const exams = await Exam.find(examQuery).populate('class', 'name section');
+        const exams = await Exam.find(examQuery).populate('class', 'name section').lean();
 
         // Get all marks for these exams
         const examIds = exams.map(e => e._id);
         const allMarks = await Marks.find({
             exam: { $in: examIds }
-        });
+        }).lean();
 
         // Group by exam type and class
         const examTypes = ['FA1', 'FA2', 'SA1', 'FA3', 'FA4', 'SA2'];
@@ -842,13 +848,14 @@ router.get('/performance/school', auth, async (req, res) => {
             academicYear: yearId,
             isStandardized: true
         }).populate('class', 'name section')
-            .populate('subject', 'name');
+            .populate('subject', 'name')
+            .lean();
 
         // Get all marks for these exams
         const examIds = exams.map(e => e._id);
         const allMarks = await Marks.find({
             exam: { $in: examIds }
-        });
+        }).lean();
 
         // Group by exam type
         const examTypes = ['FA1', 'FA2', 'SA1', 'FA3', 'FA4', 'SA2'];
@@ -879,8 +886,8 @@ router.get('/performance/school', auth, async (req, res) => {
         });
 
         // Class-wise summary
-        const Class = require('../models/Class');
-        const classes = await Class.find();
+        // Class imported at top of file
+        const classes = await Class.find().lean();
         const classwiseSummary = classes.map(cls => {
             const classExams = exams.filter(e => e.class._id.toString() === cls._id.toString());
             const classExamIds = classExams.map(e => e._id.toString());
@@ -908,8 +915,8 @@ router.get('/performance/school', auth, async (req, res) => {
         });
 
         // Subject-wise summary
-        const Subject = require('../models/Subject');
-        const subjects = await Subject.find();
+        // Subject imported at top of file
+        const subjects = await Subject.find().lean();
         const subjectwiseSummary = subjects.map(subj => {
             const subjectExams = exams.filter(e => e.subject._id.toString() === subj._id.toString());
             const subjectExamIds = subjectExams.map(e => e._id.toString());

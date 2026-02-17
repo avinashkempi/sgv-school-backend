@@ -2,7 +2,10 @@ const express = require('express');
 const cors = require('cors');
 const compression = require('compression');
 const cron = require('node-cron');
+const rateLimit = require('express-rate-limit');
 const connectDB = require('./src/config/database');
+const Event = require('./src/models/Event');
+const Notification = require('./src/models/Notification');
 const app = express();
 const PORT = process.env.PORT || 10000;
 require('dotenv').config()
@@ -14,19 +17,31 @@ connectDB();
 // Enable compression
 app.use(compression());
 
-// Enable CORS for all origins and methods
+// Enable CORS for all origins — required because this is a React Native mobile app,
+// not a browser SPA. Mobile clients don't enforce same-origin policy, and the API
+// must be accessible from any device.
 app.use(cors({
-  origin: '*', // Allow all origins
+  origin: '*',
   credentials: false,
   allowedHeaders: ['Content-Type', 'Authorization'],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
   optionsSuccessStatus: 200
 }));
 
-app.use(express.json());
+// Parse JSON with a 10MB body size limit to prevent oversized payloads
+app.use(express.json({ limit: '10mb' }));
+
+// Rate limiting on auth routes to prevent brute-force login attacks
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 15, // limit each IP to 15 login attempts per window
+  message: { success: false, message: 'Too many login attempts. Please try again after 15 minutes.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 // Routes
-app.use('/api/auth', require('./src/routes/auth'));
+app.use('/api/auth', authLimiter, require('./src/routes/auth'));
 app.use('/api/events', require('./src/routes/events'));
 
 app.use('/api/school-info', require('./src/routes/schoolInfo'));
@@ -61,17 +76,13 @@ app.get('/', (req, res) => {
 cron.schedule('0 0 * * *', async () => {
   try {
     const today = new Date();
-    today.setHours(0, 0, 0, 0); // Set to start of today
+    today.setHours(0, 0, 0, 0);
 
-    // Find events where date is before today
-    const pastEvents = await require('./src/models/Event').find({ date: { $lt: today } });
+    const pastEvents = await Event.find({ date: { $lt: today } });
 
     if (pastEvents.length > 0) {
       const eventIds = pastEvents.map(event => event._id);
-
-      // Delete notifications for these past events
-      const deleteResult = await require('./src/models/Notification').deleteMany({ eventId: { $in: eventIds } });
-
+      const deleteResult = await Notification.deleteMany({ eventId: { $in: eventIds } });
       console.log(`🗑️ Deleted ${deleteResult.deletedCount} notifications for past events`);
     }
   } catch (error) {

@@ -236,7 +236,7 @@ async function countArchivalData(yearId) {
  */
 async function countAffectedTeachers(yearId) {
     const teachers = await User.countDocuments({
-        role: { $in: ['teacher', 'class teacher'] },
+        role: 'teacher',
         academicYear: yearId
     });
     return teachers;
@@ -337,7 +337,7 @@ const generateSnapshot = async (yearId) => {
             Class.countDocuments({}),
             Exam.countDocuments({ academicYear: yearId }),
             Subject.countDocuments({}),
-            User.countDocuments({ role: { $in: ['teacher', 'class teacher'] } }),
+            User.countDocuments({ role: 'teacher' }),
             Attendance.aggregate([
                 {
                     $match: {

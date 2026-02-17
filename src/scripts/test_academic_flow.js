@@ -29,7 +29,7 @@ const runTest = async () => {
             email: 'teacher@test.com',
             password: 'password123',
             phone: '9876543210',
-            role: 'class teacher',
+            role: 'teacher',
             joiningDate: new Date(),
             designation: 'Senior Teacher'
         });

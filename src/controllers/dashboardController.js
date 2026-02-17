@@ -162,42 +162,202 @@ exports.getAdminStats = async (req, res) => {
 // Teacher Stats
 exports.getTeacherStats = async (req, res) => {
     try {
-        const teacherId = req.user.id; // Assignments logic needed if we link classes to teachers directly
+        const teacherId = req.user.id;
+        const todayPrice = new Date();
+        const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+        const currentDay = days[todayPrice.getDay()];
 
-        // Mocking class ID for now or fetching from Teacher's assigned subjects?
-        // Assuming teacher is associated with subjects in User model: subjects: [{ type: ObjectId, ref: 'Subject' }]
-        // A better approach would be finding Classes where this teacher teaches a Subject.
+        // 1. Classes Today
+        const timetables = await require('../models/Timetable').find({
+            "schedule.day": currentDay,
+            "schedule.periods.teacher": teacherId
+        }).lean();
 
-        // For now, let's get Stats for ALL students (if class teacher) or specific logic.
-        // Let's assume we want to show stats for the teacher's "Main" class or just general teaching stats.
+        let classesTodayCount = 0;
+        timetables.forEach(tt => {
+            const daySchedule = tt.schedule.find(s => s.day === currentDay);
+            if (daySchedule) {
+                classesTodayCount += daySchedule.periods.filter(p => p.teacher && p.teacher.toString() === teacherId).length;
+            }
+        });
 
-        // 1. My Classes Count (unique classes taught by this teacher)
-        // Need to find Timetable or ClassContent where teacher is assigned? 
-        // Or using Class model if it has 'classTeacher' field?
-        // Let's check Class model next, but for now assuming generic stats.
+        // 2. Low Attendance Students (< 75% attendance) & My Students Context
+        // Strategy: Check if teacher is a Class Teacher first
+        const myClass = await Class.findOne({ classTeacher: teacherId });
+        let lowAttendanceCount = 0;
+        let attendanceWaitData = [];
 
-        // 2. Low Attendance Students (Global for now, should be filtered by teacher's students)
-        // Finding students with < 75% attendance in last 30 days
-        const last30Days = new Date();
-        last30Days.setDate(last30Days.getDate() - 30);
+        if (myClass) {
+            // Get students of this class
+            const students = await User.find({ currentClass: myClass._id, role: 'student' }).select('_id').lean();
+            const studentIds = students.map(s => s._id);
 
-        // Complex aggregation, skipping for MVP stability, returning simple counts
+            // Calculate attendance for last 30 days
+            const { startDate, endDate } = getDateRange('last30Days');
+
+            const attendanceStats = await Attendance.aggregate([
+                {
+                    $match: {
+                        user: { $in: studentIds },
+                        date: { $gte: startDate, $lte: endDate },
+                        role: 'student'
+                    }
+                },
+                {
+                    $group: {
+                        _id: "$user",
+                        total: { $sum: 1 },
+                        present: { $sum: { $cond: [{ $eq: ["$status", "present"] }, 1, 0] } }
+                    }
+                }
+            ]);
+
+            // Count students with < 75% attendance
+            lowAttendanceCount = attendanceStats.filter(stat => {
+                const pct = stat.total > 0 ? (stat.present / stat.total) * 100 : 0;
+                return pct < 75;
+            }).length;
+
+            // Calculate Weekly Attendance Trend (Last 4 weeks or days?)
+            // Let's do last 4 days for the chart "attendanceWait" (Wait?? Maybe "Rate"?)
+            // Keeping key "attendanceWait" to match frontend expectation if any, but mapping it to last 4 days presence %
+            // Actually, let's just send some real trend data.
+            const last4DaysStats = await Attendance.aggregate([
+                {
+                    $match: {
+                        user: { $in: studentIds },
+                        date: { $gte: new Date(new Date().setDate(new Date().getDate() - 4)) },
+                        role: 'student'
+                    }
+                },
+                {
+                    $group: {
+                        _id: { $dateToString: { format: "%Y-%m-%d", date: "$date" } },
+                        presentCount: { $sum: { $cond: [{ $eq: ["$status", "present"] }, 1, 0] } },
+                        totalCount: { $sum: 1 }
+                    }
+                },
+                { $sort: { _id: 1 } }
+            ]);
+
+            attendanceWaitData = last4DaysStats.map(s =>
+                s.totalCount > 0 ? Math.round((s.presentCount / s.totalCount) * 100) : 0
+            );
+        }
+
+        // 3. Performance Charts (Avg Marks per Subject via Exams)
+        // Find exams for subjects this teacher teaches (or all exams if we can't filter easily)
+        // Better: Find marks for students in myClass (if exists) or generally all marks (too big).
+        // Let's filter by Teacher's Subjects if available in User model
+        const teacherUser = await User.findById(teacherId).populate('subjects');
+        let subjectPerformanceLabels = [];
+        let subjectPerformanceData = [];
+
+        if (teacherUser && teacherUser.subjects && teacherUser.subjects.length > 0) {
+            const subjectIds = teacherUser.subjects.map(s => s._id);
+            const subjectNames = teacherUser.subjects.map(s => s.name); // Using simple map, assuming populated
+
+            // Aggregation: Average marks per subject for recent exams
+            const marksStats = await Marks.aggregate([
+                {
+                    $lookup: {
+                        from: 'exams',
+                        localField: 'exam',
+                        foreignField: '_id',
+                        as: 'examDetails'
+                    }
+                },
+                { $unwind: '$examDetails' },
+                {
+                    $match: {
+                        'examDetails.subject': { $in: subjectIds }
+                    }
+                },
+                {
+                    $group: {
+                        _id: '$examDetails.subject',
+                        avgMarks: { $avg: '$marksObtained' } // Assuming max marks vary, this is raw avg. Ideally percentage.
+                        // To get percentage, we need maxMarks from Exam. 
+                        // Let's assume marksObtained is what we want for now or try to project percentage
+                    }
+                }
+            ]);
+
+            // Map results to labels
+            // We need to map back ID to Name. 
+            // marksStats: [{ _id: SubjectID, avgMarks: 75 }]
+            // We can iterate teacherUser.subjects
+
+            teacherUser.subjects.forEach(sub => {
+                const stat = marksStats.find(m => m._id.toString() === sub._id.toString());
+                if (stat) {
+                    subjectPerformanceLabels.push(sub.name.substring(0, 10));
+                    subjectPerformanceData.push(Math.round(stat.avgMarks));
+                }
+            });
+
+        } else {
+            // Fallback if no specific subjects assigned, maybe show Class performance if Class Teacher?
+            if (myClass) {
+                // Show avg performance of my class across all subjects
+                const students = await User.find({ currentClass: myClass._id, role: 'student' }).select('_id');
+                const studentIds = students.map(s => s._id);
+
+                const classStats = await Marks.aggregate([
+                    { $match: { student: { $in: studentIds } } },
+                    {
+                        $lookup: {
+                            from: 'exams',
+                            localField: 'exam',
+                            foreignField: '_id',
+                            as: 'examDetails'
+                        }
+                    },
+                    { $unwind: '$examDetails' },
+                    {
+                        $lookup: {
+                            from: 'subjects',
+                            localField: 'examDetails.subject',
+                            foreignField: '_id',
+                            as: 'subjectDetails'
+                        }
+                    },
+                    { $unwind: '$subjectDetails' },
+                    {
+                        $group: {
+                            _id: '$subjectDetails.name',
+                            avgMarks: { $avg: '$marksObtained' }
+                        }
+                    },
+                    { $limit: 5 }
+                ]);
+
+                classStats.forEach(stat => {
+                    subjectPerformanceLabels.push(stat._id);
+                    subjectPerformanceData.push(Math.round(stat.avgMarks));
+                });
+            }
+        }
+
 
         res.json({
-            message: "Teacher stats implementation pending deeper class-teacher relation check",
-            // Placeholder data structure
+            // message: "Real teacher stats",
             overview: {
-                classesToday: 4,
-                pendingHomework: 12,
-                lowAttendanceCount: 3
+                classesToday: classesTodayCount,
+                // pendingHomework: 0, // Removed
+                lowAttendanceCount: lowAttendanceCount
             },
             charts: {
-                performance: { labels: ['Math', 'Sci', 'Eng'], data: [85, 78, 92] },
-                attendanceWait: [90, 88, 92, 85]
+                performance: {
+                    labels: subjectPerformanceLabels.length > 0 ? subjectPerformanceLabels : ['No Data'],
+                    data: subjectPerformanceData.length > 0 ? subjectPerformanceData : [0]
+                },
+                attendanceWait: attendanceWaitData.length > 0 ? attendanceWaitData : [0, 0, 0, 0] // Weekly trend
             }
         });
 
     } catch (error) {
+        console.error('Teacher Stats Error:', error);
         res.status(500).json({ message: 'Server Error', error: error.message });
     }
 };

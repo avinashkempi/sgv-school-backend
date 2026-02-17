@@ -223,7 +223,8 @@ router.get('/exam/:examId', auth, async (req, res) => {
         const marks = await Marks.find({ exam: req.params.examId })
             .populate('student', 'name email')
             .populate('enteredBy', 'name')
-            .sort({ marksObtained: -1 });
+            .sort({ marksObtained: -1 })
+            .lean();
 
         res.json(marks);
     } catch (err) {
@@ -237,6 +238,11 @@ router.get('/exam/:examId', auth, async (req, res) => {
 // @access  Private (Student/Teacher/Admin)
 router.get('/student/:studentId', auth, async (req, res) => {
     try {
+        // Role-based access: students can only view their own marks
+        if (req.user.role === 'student' && req.user.userId !== req.params.studentId) {
+            return res.status(403).json({ message: 'Not authorized to view another student\'s marks' });
+        }
+
         const marks = await Marks.find({ student: req.params.studentId })
             .populate({
                 path: 'exam',
@@ -246,7 +252,8 @@ router.get('/student/:studentId', auth, async (req, res) => {
                 ]
             })
             .populate('enteredBy', 'name')
-            .sort({ 'exam.date': -1 });
+            .sort({ 'exam.date': -1 })
+            .lean();
 
         res.json(marks);
     } catch (err) {
@@ -260,6 +267,11 @@ router.get('/student/:studentId', auth, async (req, res) => {
 // @access  Private
 router.get('/student/:studentId/report-card', auth, async (req, res) => {
     try {
+        // Role-based access: students can only view their own report card
+        if (req.user.role === 'student' && req.user.userId !== req.params.studentId) {
+            return res.status(403).json({ message: 'Not authorized to view another student\'s report card' });
+        }
+
         const { academicYearId } = req.query;
 
         const student = await User.findById(req.params.studentId)

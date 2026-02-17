@@ -45,7 +45,7 @@ const processImport = async (csvData, options = { wipe: false }) => {
     try {
         // 1. Optional Wipe
         if (options.wipe) {
-            await wipeNonAdminData();
+            await wipeNonAdminData({ confirmed: true });
         }
 
         // 2. Extract and Create Classes from CSV

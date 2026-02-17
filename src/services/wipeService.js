@@ -6,10 +6,17 @@ const Class = require('../models/Class');
 /**
  * Wipes all non-admin users and their related data
  * Used before a fresh import to ensure clean state
+ * @param {Object} options
+ * @param {boolean} options.confirmed - Must be explicitly true to proceed
  */
-const wipeNonAdminData = async () => {
+const wipeNonAdminData = async ({ confirmed } = {}) => {
+    // Safety guard: require explicit confirmation
+    if (!confirmed) {
+        throw new Error('Data wipe requires explicit confirmation. Pass { confirmed: true } to proceed.');
+    }
+
     try {
-        console.log('Starting data wipe...');
+        console.log('⚠️ Starting data wipe...');
 
         // 1. Find all students and teachers (everyone except admin/super admin)
         const usersToDelete = await User.find({
