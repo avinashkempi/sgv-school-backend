@@ -442,12 +442,15 @@ exports.getStudentStats = async (req, res) => {
         const prevStartDate = new Date(startDate.getTime() - periodDuration);
         const prevEndDate = new Date(startDate);
 
+        const activeYear = await AcademicYear.findOne({ isActive: true }).lean();
+
         const [
             totalDays,
             presentDays,
             prevTotalDays,
             prevPresentDays,
             pendingFees,
+            appPayments,
             recentMarks,
             nextExam
         ] = await Promise.all([
@@ -473,8 +476,16 @@ exports.getStudentStats = async (req, res) => {
                 status: 'present',
                 date: { $gte: prevStartDate, $lt: prevEndDate }
             }),
-            // FIX: Get pending amount from StudentFee, not FeePayment
-            require('../models/StudentFee').findOne({ student: studentId }).select('pendingAmount').lean(),
+            // Get pending amount from StudentFee for the active academic year
+            require('../models/StudentFee').findOne({
+                student: studentId,
+                ...(activeYear ? { academicYear: activeYear._id } : {})
+            }).select('pendingAmount totalFees totalPaid concession').lean(),
+            // Also get app-recorded payments total
+            FeePayment.aggregate([
+                { $match: { student: new (require('mongoose').Types.ObjectId)(studentId), status: 'success' } },
+                { $group: { _id: null, total: { $sum: '$amount' } } }
+            ]),
             Marks.find({ student: studentId })
                 .sort({ createdAt: -1 })
                 .limit(10)
@@ -495,8 +506,10 @@ exports.getStudentStats = async (req, res) => {
         const prevAttendancePercentage = prevTotalDays > 0 ? ((prevPresentDays / prevTotalDays) * 100) : 0;
         const attendanceTrend = (attendancePercentage - prevAttendancePercentage).toFixed(1);
 
-        // 2. Fee Due - Now correctly taking from StudentFee record
-        const dueAmount = pendingFees?.pendingAmount || 0;
+        // 2. Fee Due - from StudentFee record, also subtract any app payments not already reflected
+        const csvPending = pendingFees?.pendingAmount || 0;
+        const appPaid = appPayments[0]?.total || 0;
+        const dueAmount = Math.max(csvPending - appPaid, 0);
 
         // 3. Recent Marks Trend
         const performanceTrend = recentMarks.map(m => ({

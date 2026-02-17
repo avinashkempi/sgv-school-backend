@@ -295,7 +295,7 @@ const processStaffImport = async (csvData) => {
 
         try {
             const name = row['Name'];
-            const phone = row['Contact'] ? row['Contact'].toString().replace(/\D/g, '') : '';
+            const phone = row['Phone'] ? row['Phone'].toString().replace(/\D/g, '') : '';
             const designation = row['Designation'] ? row['Designation'].trim() : '';
 
             if (!name || !phone) {

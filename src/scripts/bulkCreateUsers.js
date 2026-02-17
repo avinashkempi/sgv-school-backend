@@ -5,11 +5,11 @@ require('dotenv').config(); // Load .env from current directory
 
 const usersToCreate = [
     { name: 'Admin', phone: '9999999998', password: 'Admin@123', role: 'admin' },
-    { name: 'Teacher A', phone: '9999999997', password: 'Teacher@123', role: 'teacher' },
-    { name: 'Teacher B', phone: '9999999996', password: 'Teacher@123', role: 'teacher' },
-    { name: 'Teacher C', phone: '9999999995', password: 'Teacher@123', role: 'teacher' },
-    { name: 'Teacher D', phone: '9999999994', password: 'Teacher@123', role: 'teacher' },
-    { name: 'Teacher E', phone: '9999999993', password: 'Teacher@123', role: 'teacher' },
+    { name: 'Teacher A', phone: '9999999997', password: '9999999997@123', role: 'teacher' },
+    { name: 'Teacher B', phone: '9999999996', password: '9999999996@123', role: 'teacher' },
+    { name: 'Teacher C', phone: '9999999995', password: '9999999995@123', role: 'teacher' },
+    { name: 'Teacher D', phone: '9999999994', password: '9999999994@123', role: 'teacher' },
+    { name: 'Teacher E', phone: '9999999993', password: '9999999993@123', role: 'teacher' },
     { name: 'Student F', phone: '9999999987', password: 'Student@123', role: 'student' },
     { name: 'Student G', phone: '9999999986', password: 'Student@123', role: 'student' },
     { name: 'Student H', phone: '9999999985', password: 'Student@123', role: 'student' },

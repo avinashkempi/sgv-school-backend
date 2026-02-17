@@ -44,29 +44,20 @@ router.post('/', [auth, checkRole(['teacher', 'admin', 'super admin'])], async (
 
         const classId = student.currentClass._id;
 
-        // Validation for Teachers
+        // Validation for Teachers — only CLASS TEACHERS can give feedback
         if (role === 'teacher') {
-            const permission = await checkTeacherPermissions(teacherId, student._id, classId);
+            const classData = await require('../models/Class').findById(classId);
+            const isClassTeacher = classData && classData.classTeacher && classData.classTeacher.toString() === teacherId;
 
-            if (!permission.allowed) {
-                return res.status(403).json({ message: 'You are not authorized to give feedback to this student. You must be their Class Teacher or Subject Teacher.' });
+            if (!isClassTeacher) {
+                return res.status(403).json({ message: 'Only class teachers can give feedback to students. Subject teachers are not allowed to give feedback.' });
             }
 
-            // If Subject Teacher, validate subjectId or ensure they teach at least one subject if generic
+            // Class teachers can optionally specify a subject they teach
             if (subjectId) {
                 const subject = await Subject.findById(subjectId);
                 if (!subject || subject.class.toString() !== classId.toString()) {
                     return res.status(400).json({ message: 'Invalid subject for this class' });
-                }
-                if (!subject.teachers.includes(teacherId)) {
-                    return res.status(403).json({ message: 'You do not teach this subject' });
-                }
-            } else {
-                // Generic feedback: strictly allowed for Class Teachers. 
-                // For Subject Teachers, we might require selecting a subject, but plan says "Must/Should".
-                // Let's enforce: If not class teacher, MUST select subject.
-                if (permission.type !== 'class_teacher') {
-                    return res.status(400).json({ message: 'Subject teachers must select a subject for the feedback.' });
                 }
             }
         }
