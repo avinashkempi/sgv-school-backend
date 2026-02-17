@@ -144,16 +144,25 @@ exports.getAdminStats = async (req, res) => {
         let feeTrend = [];
 
         if (activeYear) {
-            const ayStart = new Date(activeYear.startDate);
-            const ayEnd = new Date(activeYear.endDate);
+            const ayStartYear = new Date(activeYear.startDate).getFullYear();
+            const ayStart = new Date(ayStartYear, 4, 1); // May 1st
+            const ayEnd = new Date(ayStartYear + 1, 3, 30); // April 30th next year
 
-            // Build list of all months in the academic year
-            const allMonths = [];
-            const cursor = new Date(ayStart.getFullYear(), ayStart.getMonth(), 1);
-            while (cursor <= ayEnd) {
-                allMonths.push({ year: cursor.getFullYear(), month: cursor.getMonth() + 1 }); // 1-indexed month
-                cursor.setMonth(cursor.getMonth() + 1);
-            }
+            // Fixed May to April months
+            const allMonths = [
+                { year: ayStartYear, month: 5 },   // May
+                { year: ayStartYear, month: 6 },   // Jun
+                { year: ayStartYear, month: 7 },   // Jul
+                { year: ayStartYear, month: 8 },   // Aug
+                { year: ayStartYear, month: 9 },   // Sep
+                { year: ayStartYear, month: 10 },  // Oct
+                { year: ayStartYear, month: 11 },  // Nov
+                { year: ayStartYear, month: 12 },  // Dec
+                { year: ayStartYear + 1, month: 1 },  // Jan
+                { year: ayStartYear + 1, month: 2 },  // Feb
+                { year: ayStartYear + 1, month: 3 },  // Mar
+                { year: ayStartYear + 1, month: 4 },  // Apr
+            ];
 
             // Query both sources for the full academic year range
             const [importedFeeTrend, appFeeTrend] = await Promise.all([
