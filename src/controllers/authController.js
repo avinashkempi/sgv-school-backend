@@ -41,6 +41,9 @@ const login = async (req, res) => {
       { expiresIn: '365d' }
     );
 
+    // Populate currentClass for login response
+    await user.populate('currentClass', 'name branch');
+
     res.json({
       success: true,
       message: 'Login successful',
@@ -57,7 +60,17 @@ const login = async (req, res) => {
         guardianPhone: user.guardianPhone,
         admissionDate: user.admissionDate,
         joiningDate: user.joiningDate,
-        designation: user.designation
+        designation: user.designation,
+        // Student profile fields
+        gender: user.gender,
+        dateOfBirth: user.dateOfBirth,
+        address: user.address,
+        phone2: user.phone2,
+        bloodGroup: user.bloodGroup,
+        regNo: user.regNo,
+        satsNumber: user.satsNumber,
+        penNumber: user.penNumber,
+        apaarId: user.apaarId
       }
     });
   } catch (error) {
@@ -71,7 +84,9 @@ const login = async (req, res) => {
 
 const getMe = async (req, res) => {
   try {
-    const user = await User.findById(req.user.userId).select('-password');
+    const user = await User.findById(req.user.userId)
+      .select('-password')
+      .populate('currentClass', 'name branch');
     if (!user) {
       return res.status(404).json({
         success: false,
@@ -93,7 +108,17 @@ const getMe = async (req, res) => {
         guardianPhone: user.guardianPhone,
         admissionDate: user.admissionDate,
         joiningDate: user.joiningDate,
-        designation: user.designation
+        designation: user.designation,
+        // Student profile fields
+        gender: user.gender,
+        dateOfBirth: user.dateOfBirth,
+        address: user.address,
+        phone2: user.phone2,
+        bloodGroup: user.bloodGroup,
+        regNo: user.regNo,
+        satsNumber: user.satsNumber,
+        penNumber: user.penNumber,
+        apaarId: user.apaarId
       }
     });
   } catch (error) {
