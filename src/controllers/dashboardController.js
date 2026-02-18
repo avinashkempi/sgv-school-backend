@@ -434,84 +434,108 @@ exports.getTeacherStats = async (req, res) => {
 exports.getStudentStats = async (req, res) => {
     try {
         const studentId = req.user.id;
-        const { range = 'thisMonth' } = req.query;
-        const { startDate, endDate } = getDateRange(range);
-
-        // Get previous period for trend
-        const periodDuration = endDate - startDate;
-        const prevStartDate = new Date(startDate.getTime() - periodDuration);
-        const prevEndDate = new Date(startDate);
 
         const activeYear = await AcademicYear.findOne({ isActive: true }).lean();
+
+        // Get student info (class)
+        const student = await User.findById(studentId).select('currentClass').lean();
+        const classId = student?.currentClass;
+
+        // Academic year date range for attendance
+        let ayStart = null, ayEnd = new Date();
+        if (activeYear?.startDate) {
+            ayStart = new Date(activeYear.startDate);
+        } else {
+            // Fallback: start of current calendar year
+            ayStart = new Date(new Date().getFullYear(), 0, 1);
+        }
 
         const [
             totalDays,
             presentDays,
             prevTotalDays,
             prevPresentDays,
-            pendingFees,
+            studentFeeRecord,
             appPayments,
             recentMarks,
             nextExam
         ] = await Promise.all([
+            // Attendance for full academic year
             Attendance.countDocuments({
                 user: studentId,
                 role: 'student',
-                date: { $gte: startDate, $lte: endDate }
+                date: { $gte: ayStart, $lte: ayEnd }
             }),
             Attendance.countDocuments({
                 user: studentId,
                 role: 'student',
                 status: 'present',
-                date: { $gte: startDate, $lte: endDate }
+                date: { $gte: ayStart, $lte: ayEnd }
             }),
+            // Previous month for trend
             Attendance.countDocuments({
                 user: studentId,
                 role: 'student',
-                date: { $gte: prevStartDate, $lt: prevEndDate }
+                date: {
+                    $gte: new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1),
+                    $lt: new Date(new Date().getFullYear(), new Date().getMonth(), 1)
+                }
             }),
             Attendance.countDocuments({
                 user: studentId,
                 role: 'student',
                 status: 'present',
-                date: { $gte: prevStartDate, $lt: prevEndDate }
+                date: {
+                    $gte: new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1),
+                    $lt: new Date(new Date().getFullYear(), new Date().getMonth(), 1)
+                }
             }),
-            // Get pending amount from StudentFee for the active academic year
+            // Fee record - total pending irrespective of date
             require('../models/StudentFee').findOne({
                 student: studentId,
                 ...(activeYear ? { academicYear: activeYear._id } : {})
-            }).select('pendingAmount totalFees totalPaid concession').lean(),
-            // Also get app-recorded payments total
+            }).select('pendingAmount totalFees totalPaid concession toPay').lean(),
+            // App-recorded payments (recorded after CSV import)
             FeePayment.aggregate([
                 { $match: { student: new (require('mongoose').Types.ObjectId)(studentId), status: 'success' } },
                 { $group: { _id: null, total: { $sum: '$amount' } } }
             ]),
+            // Recent marks for performance chart
             Marks.find({ student: studentId })
                 .sort({ createdAt: -1 })
                 .limit(10)
-                .populate('exam', 'name')
                 .populate({
                     path: 'exam',
+                    select: 'name',
                     populate: { path: 'subject', select: 'name' }
                 })
                 .lean(),
-            Exam.findOne({ examDate: { $gte: new Date() } })
-                .sort({ examDate: 1 })
-                .select('examDate name')
-                .lean()
+            // Next exam filtered to student's class
+            classId
+                ? Exam.findOne({
+                    examDate: { $gte: new Date() },
+                    class: classId
+                }).sort({ examDate: 1 }).select('examDate name').lean()
+                : Exam.findOne({
+                    examDate: { $gte: new Date() }
+                }).sort({ examDate: 1 }).select('examDate name').lean()
         ]);
 
-        // 1. Attendance %
+        // 1. Attendance % (academic year)
         const attendancePercentage = totalDays > 0 ? ((presentDays / totalDays) * 100).toFixed(1) : 0;
         const prevAttendancePercentage = prevTotalDays > 0 ? ((prevPresentDays / prevTotalDays) * 100) : 0;
         const attendanceTrend = (attendancePercentage - prevAttendancePercentage).toFixed(1);
 
-        // 2. Fee Due - from StudentFee record, also subtract any app payments not already reflected
-        const csvPending = pendingFees?.pendingAmount || 0;
+        // 2. Fee Due - use pendingAmount from StudentFee (CSV source of truth)
+        //    Subtract any additional app-recorded payments on top
+        const csvPending = studentFeeRecord?.pendingAmount || 0;
         const appPaid = appPayments[0]?.total || 0;
+        // Only subtract appPaid if it's not already reflected in pendingAmount
+        // pendingAmount from CSV = totalFees - totalPaid (at import time)
+        // appPaid = payments made via app after import
         const dueAmount = Math.max(csvPending - appPaid, 0);
 
-        // 3. Recent Marks Trend
+        // 3. Performance trend
         const performanceTrend = recentMarks.map(m => ({
             exam: m.exam?.name || 'Unknown',
             subject: m.exam?.subject?.name || 'Subject',
@@ -529,7 +553,10 @@ exports.getStudentStats = async (req, res) => {
                 attendancePercentage: parseFloat(attendancePercentage),
                 attendanceTrend: parseFloat(attendanceTrend),
                 dueAmount,
-                nextExamDate
+                totalFees: studentFeeRecord?.totalFees || 0,
+                totalPaid: studentFeeRecord?.totalPaid || 0,
+                nextExamDate,
+                nextExamName: nextExam?.name || null
             },
             charts: {
                 performanceTrend
