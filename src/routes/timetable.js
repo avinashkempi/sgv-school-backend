@@ -7,12 +7,12 @@ const _Class = require('../models/Class');
 
 // @route   POST /api/timetable
 // @desc    Create or Update timetable for a class
-// @access  Private (Admin)
+// @access  Private (Admin, Super Admin)
 router.post('/', auth, async (req, res) => {
     try {
         const { classId, schedule, breaks } = req.body;
 
-        // Check if admin
+        // Check if admin or super admin
         const user = await User.findById(req.user.userId);
         if (user.role !== 'admin' && user.role !== 'super admin') {
             return res.status(403).json({ message: 'Not authorized' });
@@ -36,6 +36,35 @@ router.post('/', auth, async (req, res) => {
 
         await timetable.save();
         res.json(timetable);
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).send('Server Error');
+    }
+});
+
+// @route   GET /api/timetable/all
+// @desc    Get all classes' timetables (read-only, for teachers/staff/support_staff/super admin)
+// @access  Private (Teacher, Staff, Support Staff, Admin, Super Admin)
+router.get('/all', auth, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.userId);
+        const allowedRoles = ['teacher', 'staff', 'support_staff', 'admin', 'super admin'];
+        if (!allowedRoles.includes(user.role)) {
+            return res.status(403).json({ message: 'Not authorized' });
+        }
+
+        const timetables = await Timetable.find({})
+            .populate('class', 'name section branch')
+            .populate({
+                path: 'schedule.periods.subject',
+                select: 'name code'
+            })
+            .populate({
+                path: 'schedule.periods.teacher',
+                select: 'name'
+            });
+
+        res.json(timetables);
     } catch (err) {
         console.error(err.message);
         res.status(500).send('Server Error');
