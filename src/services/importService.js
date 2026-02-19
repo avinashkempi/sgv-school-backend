@@ -158,8 +158,10 @@ const processImport = async (csvData, options = { wipe: false }) => {
                     student = new User(studentData);
                     isNew = true;
                 } else {
-                    // Update existing
-                    Object.assign(student, studentData);
+                    // Update existing — exclude password so pre-save hook
+                    // doesn't double-hash an already-hashed password.
+                    const { password: _pw, ...studentUpdateData } = studentData;
+                    Object.assign(student, studentUpdateData);
                     // Add to updated list
                     results.updatedStudents.push({
                         name: student.name,
@@ -345,13 +347,15 @@ const processStaffImport = async (csvData) => {
                 user = new User(userData);
                 isNew = true;
             } else {
-                // Update existing
+                // Update existing — exclude password so pre-save hook
+                // doesn't double-hash an already-hashed password.
+                const { password: _pw, ...userUpdateData } = userData;
                 // Only update if role is not super admin (safety)
                 if (user.role !== 'super admin') {
-                    Object.assign(user, userData);
+                    Object.assign(user, userUpdateData);
                 } else {
-                    // If super admin, maybe just update profile details but NOT role
-                    const { role, ...safeUpdates } = userData;
+                    // If super admin, update profile details but NOT role
+                    const { role, ...safeUpdates } = userUpdateData;
                     Object.assign(user, safeUpdates);
                 }
             }
