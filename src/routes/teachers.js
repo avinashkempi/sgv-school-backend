@@ -185,8 +185,8 @@ router.post('/subjects/:subjectId/assign', [auth, checkRole(['admin', 'super adm
             return res.status(404).json({ success: false, message: 'Teacher not found' });
         }
 
-        if (teacher.role !== 'teacher' && teacher.role !== 'staff') {
-            return res.status(400).json({ success: false, message: 'User is not a teacher' });
+        if (['student', 'super admin', 'support_staff'].includes(teacher.role)) {
+            return res.status(400).json({ success: false, message: 'User is not authorized to be assigned as a teacher' });
         }
 
         // Check if already assigned
@@ -268,7 +268,7 @@ router.put('/subjects/:subjectId/teachers', [auth, checkRole(['admin', 'super ad
         // Verify all teachers exist and are valid
         const teachers = await User.find({
             _id: { $in: teacherIds },
-            role: { $in: ['teacher', 'staff'] }
+            role: { $nin: ['student', 'super admin', 'support_staff'] }
         });
 
         if (teachers.length !== teacherIds.length) {
@@ -317,7 +317,7 @@ router.put('/subjects/:subjectId/teachers', [auth, checkRole(['admin', 'super ad
 router.get('/admin/teacher-subject-matrix', [auth, checkRole(['admin', 'super admin'])], async (req, res) => {
     try {
         const teachers = await User.find({
-            role: { $in: ['teacher', 'staff'] }
+            role: { $nin: ['student', 'super admin', 'support_staff'] }
         })
             .populate({
                 path: 'subjects',
