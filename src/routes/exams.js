@@ -494,8 +494,10 @@ router.put('/:id', auth, async (req, res) => {
             return res.status(404).json({ message: 'Exam not found' });
         }
 
-        // Check if user is the creator
-        if (exam.createdBy.toString() !== req.user.userId) {
+        // Check if user is the creator OR admin
+        const updater = await User.findById(req.user.userId);
+        const isAdminUser = updater.role === 'admin' || updater.role === 'super admin';
+        if (exam.createdBy.toString() !== req.user.userId && !isAdminUser) {
             return res.status(403).json({ message: 'Not authorized' });
         }
 

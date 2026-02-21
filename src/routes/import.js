@@ -4,7 +4,7 @@ const multer = require('multer');
 const fs = require('fs');
 const csv = require('csv-parser');
 const { processImport, processStaffImport } = require('../services/importService');
-const { requireFinanceAccess, authenticateToken } = require('../middleware/auth');
+const { authenticateToken, checkRole } = require('../middleware/auth');
 
 const os = require('os');
 // Setup multer for file upload
@@ -15,7 +15,7 @@ const upload = multer({ dest: os.tmpdir() });
  * @desc Import students from CSV file
  * @access Private (Admin/Super Admin)
  */
-router.post('/students/csv', authenticateToken, requireFinanceAccess, upload.single('file'), async (req, res) => {
+router.post('/students/csv', authenticateToken, checkRole(['admin', 'super admin']), upload.single('file'), async (req, res) => {
     if (!req.file) {
         return res.status(400).json({ message: 'No file uploaded' });
     }
@@ -84,7 +84,7 @@ router.get('/template', authenticateToken, requireFinanceAccess, (req, res) => {
  * @desc Import students from local data folder (Direct Sync)
  * @access Private (Admin)
  */
-router.post('/students/local', authenticateToken, requireFinanceAccess, async (req, res) => {
+router.post('/students/local', authenticateToken, checkRole(['admin', 'super admin']), async (req, res) => {
     const filePath = './data/student_data.csv';
     const wipeData = req.body.wipe === 'true';
     const academicYearId = req.body.academicYearId;

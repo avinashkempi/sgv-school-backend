@@ -220,6 +220,11 @@ router.post('/', auth, async (req, res) => {
 // @access  Private (Teacher)
 router.get('/exam/:examId', auth, async (req, res) => {
     try {
+        // Students should not see all marks for an exam — only their own via /student/:id
+        if (req.user.role === 'student') {
+            return res.status(403).json({ message: 'Not authorized to view all marks for an exam' });
+        }
+
         const marks = await Marks.find({ exam: req.params.examId })
             .populate('student', 'name email')
             .populate('enteredBy', 'name')

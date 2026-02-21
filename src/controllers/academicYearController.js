@@ -25,7 +25,7 @@ exports.createYear = async (req, res) => {
             name,
             startDate,
             endDate,
-            isActive,
+            isActive: false, // Always create as inactive; use activate endpoint to set active
             description,
             terms,
             settings
@@ -53,9 +53,13 @@ exports.activateYear = async (req, res) => {
             return res.status(400).json({ success: false, message: 'This year is already active' });
         }
 
+        // Find the previously active year BEFORE deactivating
+        const previousYear = await AcademicYear.findOne({ isActive: true, _id: { $ne: year._id } });
+        const previousYearId = previousYear ? previousYear._id : null;
+
         // Deactivate any currently active year
         await AcademicYear.updateMany(
-            { isActive: true },
+            { isActive: true, _id: { $ne: year._id } },
             { $set: { isActive: false, status: 'archived' } }
         );
 
@@ -70,14 +74,12 @@ exports.activateYear = async (req, res) => {
             { $set: { academicYear: year._id } }
         );
 
-        // Also re-link existing classes to this year (if they don't already belong to one)
+        // Re-link classes that have no year, or that belonged to the previous active year
+        const classFilter = previousYearId
+            ? { $or: [{ academicYear: previousYearId }, { academicYear: { $exists: false } }] }
+            : { academicYear: { $exists: false } };
         const classResult = await Class.updateMany(
-            { academicYear: { $exists: false } },
-            { $set: { academicYear: year._id } }
-        );
-        // Also update classes that were in the old year
-        await Class.updateMany(
-            { academicYear: { $ne: year._id } },
+            classFilter,
             { $set: { academicYear: year._id } }
         );
 
@@ -526,7 +528,14 @@ exports.incrementYear = async (req, res) => {
             await student.save();
         }
 
+        // Deactivate current year
+        currentYear.isActive = false;
+        currentYear.status = 'archived';
+        await currentYear.save();
+
+        // Activate next year
         nextYear.isActive = true;
+        nextYear.status = 'current';
         await nextYear.save();
 
         res.json({ msg: `Academic year incremented to ${nextYear.name}. Students promoted.` });
