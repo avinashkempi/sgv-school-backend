@@ -75,10 +75,15 @@ const processImport = async (csvData, options = { wipe: false }) => {
         const classes = await Class.find({});
         const classMap = new Map(classes.map(c => [c.name.toUpperCase(), c._id]));
 
-        // Find or create active academic year
-        let academicYear = await AcademicYear.findOne({ isActive: true });
+        // Use explicitly provided year, or fall back to active year
+        let academicYear;
+        if (options.academicYearId) {
+            academicYear = await AcademicYear.findById(options.academicYearId);
+        }
         if (!academicYear) {
-            // Fallback or create default
+            academicYear = await AcademicYear.findOne({ isActive: true });
+        }
+        if (!academicYear) {
             academicYear = await AcademicYear.findOne({});
         }
 
@@ -109,7 +114,6 @@ const processImport = async (csvData, options = { wipe: false }) => {
                 const classId = classMap.get(className);
 
                 if (!classId && className) {
-                    // Should not happen if step 2 worked, but safety check
                     console.warn(`Class ${className} not found in map for student ${row['Student Name']}`);
                 }
 
@@ -118,12 +122,29 @@ const processImport = async (csvData, options = { wipe: false }) => {
                     results.classCounts[className] = (results.classCounts[className] || 0) + 1;
                 }
 
-                // --- NEW: Process Fee Structure for Class (First record wins) ---
+                // --- FEES ONLY MODE ---
+                if (options.feesOnly) {
+                    // Just find the student and update their fees — don't touch profile
+                    const student = await User.findOne({ phone: loginPhone });
+                    if (!student) {
+                        throw new Error(`Student not found with phone ${loginPhone} (Fees-Only mode skips student creation)`);
+                    }
+                    await processFees(student, row, academicYear, classId, row['Branch']);
+                    results.updated++;
+                    results.updatedStudents.push({
+                        name: student.name,
+                        phone: student.phone,
+                        class: className
+                    });
+                    continue; // Skip to next row
+                }
+
+                // --- FULL IMPORT MODE ---
+                // Process Fee Structure for Class (First record wins)
                 if (classId && academicYear && !processedFeeStructures.has(classId.toString())) {
                     await processFeeStructure(classId, academicYear, row);
                     processedFeeStructures.add(classId.toString());
                 }
-                // -------------------------------------------------------------
 
                 // Construct Student Data
                 const studentData = {
@@ -249,6 +270,7 @@ const processFees = async (student, row, academicYear, classId, branch) => {
         branch: branch,
 
         totalFees: parseCurrency(row['Total Fees']),
+        arrears: parseCurrency(row['Arrears / Previous Dues'] || row['Previous Dues'] || row['Arrears']),
         toPay: parseCurrency(row['To pay']), // Ensure this is accurate from CSV
         totalPaid: parseCurrency(row['Total Paid']),
         pendingAmount: parseCurrency(row['Pending']),

@@ -41,6 +41,11 @@ const AttendanceSchema = new mongoose.Schema({
     remarks: {
         type: String
     },
+    academicYear: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'AcademicYear',
+        required: true
+    },
     createdAt: {
         type: Date,
         default: Date.now
@@ -48,12 +53,12 @@ const AttendanceSchema = new mongoose.Schema({
 });
 
 // Indexes for efficient queries
-AttendanceSchema.index({ user: 1, date: 1 });
-AttendanceSchema.index({ class: 1, date: 1 });
-AttendanceSchema.index({ role: 1, date: 1 });
-AttendanceSchema.index({ subject: 1, date: 1 });
+AttendanceSchema.index({ user: 1, date: 1, academicYear: 1 });
+AttendanceSchema.index({ class: 1, date: 1, academicYear: 1 });
+AttendanceSchema.index({ role: 1, date: 1, academicYear: 1 });
+AttendanceSchema.index({ subject: 1, date: 1, academicYear: 1 });
 
 // Compound index for preventing duplicate attendance records
-AttendanceSchema.index({ user: 1, date: 1, class: 1, subject: 1, period: 1 }, { unique: true, sparse: true });
+AttendanceSchema.index({ user: 1, date: 1, class: 1, subject: 1, period: 1, academicYear: 1 }, { unique: true, sparse: true });
 
 module.exports = mongoose.model('Attendance', AttendanceSchema);

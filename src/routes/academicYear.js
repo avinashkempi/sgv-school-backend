@@ -28,6 +28,11 @@ router.get('/compare', [auth, checkRole(['super admin'])], academicYearControlle
 // @access  Super Admin
 router.post('/transition/preview', [auth, checkRole(['super admin'])], academicYearController.previewTransition);
 
+// @route   GET /api/academic-year/:yearId/transition/validate
+// @desc    Generate pre-flight validation warnings
+// @access  Super Admin
+router.get('/:yearId/transition/validate', [auth, checkRole(['super admin'])], academicYearController.validateTransition);
+
 // @route   POST /api/academic-year/transition/execute
 // @desc    Execute year transition
 // @access  Super Admin

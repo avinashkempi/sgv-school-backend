@@ -341,4 +341,42 @@ router.get('/admin/teacher-subject-matrix', [auth, checkRole(['admin', 'super ad
     }
 });
 
+// @route   GET /api/teachers/my-history
+// @desc    Get the logged-in teacher's portfolio across past academic years
+// @access  Private (Teacher)
+router.get('/my-history', auth, async (req, res) => {
+    try {
+        const TeacherHistory = require('../models/TeacherHistory');
+        const history = await TeacherHistory.find({ teacher: req.user.userId })
+            .populate('academicYear', 'name startDate endDate')
+            .populate('classes.class', 'name section')
+            .populate('classes.subject', 'name')
+            .sort({ 'academicYear.startDate': -1 });
+
+        res.json({ success: true, history });
+    } catch (err) {
+        console.error('Teacher History Error:', err.message);
+        res.status(500).json({ success: false, message: 'Server Error' });
+    }
+});
+
+// @route   GET /api/teachers/:id/history
+// @desc    Get a specific teacher's portfolio history (admin view)
+// @access  Admin/Super Admin
+router.get('/:id/history', [auth, checkRole(['admin', 'super admin'])], async (req, res) => {
+    try {
+        const TeacherHistory = require('../models/TeacherHistory');
+        const history = await TeacherHistory.find({ teacher: req.params.id })
+            .populate('academicYear', 'name startDate endDate')
+            .populate('classes.class', 'name section')
+            .populate('classes.subject', 'name')
+            .sort({ 'academicYear.startDate': -1 });
+
+        res.json({ success: true, history });
+    } catch (err) {
+        console.error('Teacher History Error:', err.message);
+        res.status(500).json({ success: false, message: 'Server Error' });
+    }
+});
+
 module.exports = router;

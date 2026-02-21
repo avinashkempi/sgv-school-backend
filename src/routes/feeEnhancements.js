@@ -6,6 +6,69 @@ const FeeStructure = require('../models/FeeStructure');
 const User = require('../models/User');
 const { triggerNotification } = require('../controllers/notificationController');
 
+// @route   GET /api/fee-enhancements/export-arrears/:academicYearId
+// @desc    Export CSV of students with pending fees from a specific academic year
+// @access  Admin/Super Admin
+router.get('/export-arrears/:academicYearId', [auth, checkRole(['admin', 'super admin'])], async (req, res) => {
+    try {
+        const { academicYearId } = req.params;
+
+        const students = await User.find({ role: 'student', academicYear: academicYearId })
+            .populate('currentClass', 'name section')
+            .lean();
+
+        const defaulters = [];
+
+        for (const student of students) {
+            if (!student.currentClass) continue;
+
+            const feeStructure = await FeeStructure.findOne({
+                class: student.currentClass._id,
+                academicYear: academicYearId,
+                type: 'class_default'
+            });
+
+            if (!feeStructure) continue;
+
+            const payments = await FeePayment.find({
+                student: student._id,
+                academicYear: academicYearId,
+                status: 'success'
+            }).lean();
+
+            const totalFees = feeStructure.totalAmount;
+            const paidAmount = payments.reduce((sum, p) => sum + p.amount, 0);
+            const pendingAmount = totalFees - paidAmount;
+
+            if (pendingAmount > 0) {
+                defaulters.push({
+                    rollNumber: student.rollNumber || student._id.toString().slice(-6),
+                    name: student.name,
+                    class: `${student.currentClass.name} ${student.currentClass.section || ''}`.trim(),
+                    pendingAmount: pendingAmount
+                });
+            }
+        }
+
+        if (defaulters.length === 0) {
+            return res.status(404).json({ success: false, message: 'No pending fee arrears found for this academic year.' });
+        }
+
+        // Generate CSV string
+        const header = 'RollNumber,Name,OldClass,PendingAmount\n';
+        const rows = defaulters.map(d => `${d.rollNumber},"${d.name}","${d.class}",${d.pendingAmount}`).join('\n');
+        const csv = header + rows;
+
+        res.setHeader('Content-Type', 'text/csv');
+        res.setHeader('Content-Disposition', `attachment; filename="fee_arrears_${academicYearId}.csv"`);
+        res.status(200).send(csv);
+
+    } catch (err) {
+        console.error('Export Arrears Error:', err);
+        res.status(500).json({ success: false, message: 'Server Error generating CSV', error: err.message });
+    }
+});
+
 // @route   GET /api/fee-enhancements/defaulters
 // @desc    Get list of students with pending fees
 // @access  Admin/Super Admin

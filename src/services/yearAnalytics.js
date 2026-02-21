@@ -6,6 +6,7 @@ const Exam = require('../models/Exam');
 const Marks = require('../models/Marks');
 const Attendance = require('../models/Attendance');
 const Subject = require('../models/Subject');
+const LeaveRequest = require('../models/LeaveRequest');
 
 /**
  * Year Analytics Service
@@ -374,8 +375,79 @@ const generateSnapshot = async (yearId) => {
     }
 };
 
+/**
+ * Generate Pre-Transition Validation Report
+ * @param {String} currentYearId 
+ */
+const generateValidationReport = async (currentYearId) => {
+    try {
+        const currentYear = await AcademicYear.findById(currentYearId);
+        if (!currentYear) throw new Error('Academic year not found');
+
+        const warnings = [];
+
+        // 1. Pending Leaves Check
+        const pendingLeaves = await LeaveRequest.countDocuments({
+            status: 'pending',
+            startDate: { $gte: currentYear.startDate, $lte: currentYear.endDate }
+        });
+
+        if (pendingLeaves > 0) {
+            warnings.push({
+                type: 'pending_leaves',
+                severity: 'medium',
+                message: `${pendingLeaves} leave requests are still pending approval/rejection.`
+            });
+        }
+
+        // 2. Detained Students Check
+        const detainedCount = await User.countDocuments({
+            role: 'student',
+            academicYear: currentYearId,
+            promotionStatus: 'detained'
+        });
+
+        if (detainedCount > 0) {
+            warnings.push({
+                type: 'detained_students',
+                severity: 'low',
+                message: `${detainedCount} students are marked as 'detained' and will repeat their current class.`
+            });
+        }
+
+        // 3. Missing Final (SA2) Marks Check
+        const sa2Exams = await Exam.find({ academicYear: currentYearId, standardizedType: 'SA2' }).lean();
+        let examsMissingMarks = 0;
+
+        for (const exam of sa2Exams) {
+            const studentCount = await User.countDocuments({ currentClass: exam.class, role: 'student', academicYear: currentYearId, promotionStatus: { $ne: 'detained' } });
+            const marksCount = await Marks.countDocuments({ exam: exam._id });
+
+            // Allow a small margin of error for absent students, but if marks are drastically lower, throw warning
+            if (marksCount < studentCount && marksCount === 0) {
+                // If 0 marks are entered for the whole class's SA2 exam, it's a huge red flag
+                examsMissingMarks++;
+            }
+        }
+
+        if (examsMissingMarks > 0) {
+            warnings.push({
+                type: 'missing_final_marks',
+                severity: 'high',
+                message: `${examsMissingMarks} 'SA2' (Final) exams have absolutely zero marks entered. Proceeding may result in blank report cards.`
+            });
+        }
+
+        return warnings;
+    } catch (error) {
+        console.error('Validation Report Error:', error);
+        throw error;
+    }
+};
+
 module.exports = {
     getYearImpactAnalysis,
     getMultiYearComparison,
-    generateSnapshot
+    generateSnapshot,
+    generateValidationReport
 };

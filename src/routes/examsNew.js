@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { authenticateToken: auth } = require('../middleware/auth');
+const { yearContext, requireOpenYear } = require('../middleware/yearContext');
 const Exam = require('../models/Exam');
 const Marks = require('../models/Marks');
 const User = require('../models/User');
@@ -10,10 +11,11 @@ const { sendTargetedNotification } = require('../services/notificationService');
 // @route   POST /api/exams/quick-init
 // @desc    Quick initialize all 6 exam types for a class+subject in one call
 // @access  Private (Teacher)
-router.post('/quick-init', auth, async (req, res) => {
+router.post('/quick-init', [auth, yearContext, requireOpenYear], async (req, res) => {
     try {
         const { classId, subjectId, examsConfig } = req.body;
         // examsConfig: { totalMarks, duration, FA1: {date, ...}, FA2: {date, ...}, ... }
+        const academicYearId = req.academicYearContext;
 
         // Validate teacher authorization
         const subject = await Subject.findById(subjectId);
@@ -26,14 +28,6 @@ router.post('/quick-init', auth, async (req, res) => {
 
         if (!isAdmin && !subject.teachers.includes(req.user.userId)) {
             return res.status(403).json({ message: 'Not authorized to create exams for this subject' });
-        }
-
-        // Get active academic year
-        const AcademicYear = require('../models/AcademicYear');
-        const activeYear = await AcademicYear.findOne({ isActive: true });
-
-        if (!activeYear) {
-            return res.status(404).json({ message: 'No active academic year found' });
         }
 
         const examTypes = ['FA1', 'FA2', 'SA1', 'FA3', 'FA4', 'SA2'];
@@ -53,7 +47,7 @@ router.post('/quick-init', auth, async (req, res) => {
             let exam = await Exam.findOne({
                 class: classId,
                 subject: subjectId,
-                academicYear: activeYear._id,
+                academicYear: academicYearId,
                 standardizedType: type,
                 isStandardized: true
             });
@@ -70,7 +64,7 @@ router.post('/quick-init', auth, async (req, res) => {
                     subject: subjectId,
                     totalMarks: examConfig.totalMarks || examsConfig.totalMarks || 100,
                     date: examConfig.date || examsConfig.defaultDate || Date.now(),
-                    academicYear: activeYear._id,
+                    academicYear: academicYearId,
                     createdBy: req.user.userId,
                     instructions: examConfig.instructions || examsConfig.instructions,
                     duration: examConfig.duration || examsConfig.duration,
@@ -107,15 +101,11 @@ router.post('/quick-init', auth, async (req, res) => {
 // @route   GET /api/exams/teacher/dashboard
 // @desc    Get teacher's complete exam overview (all classes/subjects they teach)
 // @access  Private (Teacher)
-router.get('/teacher/dashboard', auth, async (req, res) => {
+router.get('/teacher/dashboard', [auth, yearContext], async (req, res) => {
     try {
-        // Get active academic year
-        const AcademicYear = require('../models/AcademicYear');
-        const activeYear = await AcademicYear.findOne({ isActive: true });
+        const academicYearId = req.academicYearContext;
 
-        if (!activeYear) {
-            return res.status(404).json({ message: 'No active academic year found' });
-        }
+        // Fetch user to get role
 
         // Find all subjects taught by this teacher
         const subjects = await Subject.find({
@@ -131,7 +121,7 @@ router.get('/teacher/dashboard', auth, async (req, res) => {
             const exams = await Exam.find({
                 class: subject.class._id,
                 subject: subject._id,
-                academicYear: activeYear._id,
+                academicYear: academicYearId,
                 isStandardized: true
             }).lean();
 
@@ -187,7 +177,7 @@ router.get('/teacher/dashboard', auth, async (req, res) => {
         }
 
         res.json({
-            academicYear: activeYear,
+            academicYear: academicYearId,
             dashboard
         });
     } catch (err) {
@@ -199,19 +189,12 @@ router.get('/teacher/dashboard', auth, async (req, res) => {
 // @route   GET /api/exams/status-summary
 // @desc    Get count of exams by status for quick overview
 // @access  Private (Teacher/Admin)
-router.get('/status-summary', auth, async (req, res) => {
+router.get('/status-summary', [auth, yearContext], async (req, res) => {
     try {
         const { classId, subjectId } = req.query;
+        const academicYearId = req.academicYearContext;
 
-        // Get active academic year
-        const AcademicYear = require('../models/AcademicYear');
-        const activeYear = await AcademicYear.findOne({ isActive: true });
-
-        if (!activeYear) {
-            return res.status(404).json({ message: 'No active academic year found' });
-        }
-
-        let query = { academicYear: activeYear._id, isStandardized: true };
+        let query = { academicYear: academicYearId, isStandardized: true };
 
         if (classId) query.class = classId;
         if (subjectId) query.subject = subjectId;
@@ -245,7 +228,7 @@ router.get('/status-summary', auth, async (req, res) => {
 // @route   PUT /api/exams/bulk-update
 // @desc    Update multiple exams at once (dates, marks, status)
 // @access  Private (Teacher/Admin)
-router.put('/bulk-update', auth, async (req, res) => {
+router.put('/bulk-update', [auth, yearContext, requireOpenYear], async (req, res) => {
     try {
         const { examIds, updates } = req.body;
         // updates: { date?, totalMarks?, status?, startTime?, endTime?, instructions?, duration? }
@@ -301,7 +284,7 @@ router.put('/bulk-update', auth, async (req, res) => {
 // @route   POST /api/exams/:id/publish-marks
 // @desc    Publish marks to make them visible to students
 // @access  Private (Teacher/Admin)
-router.post('/:id/publish-marks', auth, async (req, res) => {
+router.post('/:id/publish-marks', [auth, yearContext, requireOpenYear], async (req, res) => {
     try {
         const exam = await Exam.findById(req.params.id).populate('subject');
 

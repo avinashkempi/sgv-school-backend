@@ -19,10 +19,18 @@ const subjectSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User'
     }],
+    academicYear: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'AcademicYear',
+        required: true
+    },
     createdAt: {
         type: Date,
         default: Date.now
     }
 });
+
+// Ensure a subject name is unique per class per academic year
+subjectSchema.index({ name: 1, class: 1, academicYear: 1 }, { unique: true });
 
 module.exports = mongoose.model('Subject', subjectSchema);

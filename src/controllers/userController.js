@@ -361,11 +361,74 @@ const searchUsers = async (req, res) => {
   }
 };
 
+// Revert a wrongly promoted student back to their previous class in the current active year
+const revertStudentPromotion = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const user = await User.findById(id);
+    if (!user || user.role !== 'student') {
+      return res.status(404).json({ success: false, message: 'Student not found.' });
+    }
+
+    const StudentHistory = require('../models/StudentHistory');
+    const Class = require('../models/Class');
+
+    // Find the most recent history record for this student
+    const latestHistory = await StudentHistory.findOne({ student: id })
+      .sort({ createdAt: -1 })
+      .populate('class');
+
+    if (!latestHistory || !latestHistory.class) {
+      return res.status(400).json({ success: false, message: 'No promotion history found to revert.' });
+    }
+
+    // Now, we need to map the old class (from the archived year) to the equivalent class in the student's current year
+    const oldClassName = latestHistory.class.name;
+    const oldClassSection = latestHistory.class.section;
+    const oldClassBranch = latestHistory.class.branch;
+
+    // Find equivalent class in the current active year that the student is mapped to
+    const targetClass = await Class.findOne({
+      academicYear: user.academicYear,
+      name: oldClassName,
+      section: oldClassSection,
+      branch: oldClassBranch
+    });
+
+    if (!targetClass) {
+      return res.status(404).json({
+        success: false,
+        message: `Could not find an equivalent ${oldClassName} ${oldClassSection || ''} in the current year to revert them to.`
+      });
+    }
+
+    // Process reversion
+    user.currentClass = targetClass._id;
+    user.isActive = true; // In case they were graduated/deactivated
+
+    // If we're reverting, we must also remove the history record of them passing
+    await StudentHistory.findByIdAndDelete(latestHistory._id);
+
+    await user.save();
+
+    res.json({
+      success: true,
+      message: `${user.name} has been reverted to ${oldClassName} ${oldClassSection || ''}.`
+    });
+
+  } catch (error) {
+    console.error('Revert promotion error:', error);
+    res.status(500).json({ success: false, message: 'Server error during reversion' });
+  }
+};
+
 module.exports = {
   getAllUsers,
   getUserById,
   createUser,
   updateUser,
   deleteUser,
-  searchUsers
+  searchUsers,
+  revertStudentPromotion
 };

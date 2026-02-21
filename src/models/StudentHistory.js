@@ -25,6 +25,9 @@ const studentHistorySchema = new mongoose.Schema({
         type: String,
         trim: true
     },
+    totalAttendancePercentage: {
+        type: Number // Storing the aggregated percentage at the time of archiving
+    },
     createdAt: {
         type: Date,
         default: Date.now

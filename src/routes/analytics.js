@@ -393,4 +393,72 @@ function calculateGrade(percentage) {
     return 'F';
 }
 
+// @route   GET /api/analytics/yoy-performance
+// @desc    Year-over-Year performance analytics blending StudentHistory, Attendance, and User data
+// @access  Super Admin
+router.get('/yoy-performance', [auth, checkRole(['super admin'])], async (req, res) => {
+    try {
+        const AcademicYear = require('../models/AcademicYear');
+        const StudentHistory = require('../models/StudentHistory');
+
+        // Get all academic years, sorted chronologically
+        const years = await AcademicYear.find({}).sort({ startDate: 1 }).lean();
+
+        const yoyData = [];
+
+        for (const year of years) {
+            // Student counts
+            const totalStudents = await User.countDocuments({ academicYear: year._id, role: 'student' });
+            const totalTeachers = await User.countDocuments({ role: 'teacher' });
+            const totalClasses = await Class.countDocuments({ academicYear: year._id });
+
+            // Promotion outcomes from StudentHistory
+            const historyRecords = await StudentHistory.find({ academicYear: year._id }).lean();
+            const promoted = historyRecords.filter(h => h.result === 'Promoted').length;
+            const detained = historyRecords.filter(h => h.result === 'Detained').length;
+            const graduated = historyRecords.filter(h => h.result === 'Graduated').length;
+
+            // Average attendance
+            const attendanceRecords = await Attendance.find({
+                date: { $gte: year.startDate, $lte: year.endDate }
+            }).lean();
+
+            const totalAttRecords = attendanceRecords.length;
+            const presentRecords = attendanceRecords.filter(a => ['present', 'late', 'excused'].includes(a.status)).length;
+            const avgAttendance = totalAttRecords > 0 ? parseFloat(((presentRecords / totalAttRecords) * 100).toFixed(1)) : 0;
+
+            // Average final grade from history
+            const avgAttHistory = historyRecords.filter(h => h.totalAttendancePercentage != null);
+            const avgHistoricalAttendance = avgAttHistory.length > 0
+                ? parseFloat((avgAttHistory.reduce((s, h) => s + h.totalAttendancePercentage, 0) / avgAttHistory.length).toFixed(1))
+                : null;
+
+            yoyData.push({
+                year: {
+                    _id: year._id,
+                    name: year.name,
+                    startDate: year.startDate,
+                    endDate: year.endDate,
+                    status: year.status
+                },
+                metrics: {
+                    totalStudents,
+                    totalTeachers,
+                    totalClasses,
+                    promoted,
+                    detained,
+                    graduated,
+                    avgAttendance,
+                    avgHistoricalAttendance
+                }
+            });
+        }
+
+        res.json({ success: true, yoyData });
+    } catch (err) {
+        console.error('YoY Performance Error:', err);
+        res.status(500).json({ success: false, message: 'Server Error', error: err.message });
+    }
+});
+
 module.exports = router;

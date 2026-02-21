@@ -31,7 +31,7 @@ router.post('/students/csv', authenticateToken, requireFinanceAccess, upload.sin
             .on('end', async () => {
                 try {
                     // Process the imported data
-                    const importResult = await processImport(results, { wipe: wipeData });
+                    const importResult = await processImport(results, { wipe: wipeData, academicYearId: req.body.academicYearId });
 
                     // Clean up uploaded file
                     fs.unlinkSync(req.file.path);
@@ -67,7 +67,7 @@ router.get('/template', authenticateToken, requireFinanceAccess, (req, res) => {
     // Return a simple CSV template to help users
     const headers = [
         'Student Name', 'Class', 'Gender', 'Phone', 'Phone 2', 'Address',
-        'Date of Birth', 'Admission', 'Total Fees', 'To pay', 'Total Paid',
+        'Date of Birth', 'Admission', 'Total Fees', 'Previous Dues', 'To pay', 'Total Paid',
         'Pending', 'Concession', 'Remarks',
         'Reg No', 'SATS Number', 'PEN Number', 'APAAR ID'
     ];
@@ -87,6 +87,8 @@ router.get('/template', authenticateToken, requireFinanceAccess, (req, res) => {
 router.post('/students/local', authenticateToken, requireFinanceAccess, async (req, res) => {
     const filePath = './data/student_data.csv';
     const wipeData = req.body.wipe === 'true';
+    const academicYearId = req.body.academicYearId;
+    const feesOnly = req.body.feesOnly === true || req.body.feesOnly === 'true';
     const results = [];
 
     if (!fs.existsSync(filePath)) {
@@ -102,7 +104,7 @@ router.post('/students/local', authenticateToken, requireFinanceAccess, async (r
             .on('data', (data) => results.push(data))
             .on('end', async () => {
                 try {
-                    const importResult = await processImport(results, { wipe: wipeData });
+                    const importResult = await processImport(results, { wipe: wipeData, academicYearId, feesOnly });
                     res.json({
                         message: 'Local import processed successfully',
                         data: importResult

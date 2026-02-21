@@ -3,6 +3,7 @@
 const express = require('express');
 const router = express.Router();
 const { authenticateToken: auth } = require('../middleware/auth');
+const { yearContext, requireOpenYear } = require('../middleware/yearContext');
 const Marks = require('../models/Marks');
 const Exam = require('../models/Exam');
 const User = require('../models/User');
@@ -11,7 +12,7 @@ const Subject = require('../models/Subject');
 // @route   POST /api/marks/grid-update
 // @desc    Accept grid/spreadsheet-like data structure for rapid entry
 // @access  Private (Teacher)
-router.post('/grid-update', auth, async (req, res) => {
+router.post('/grid-update', [auth, yearContext, requireOpenYear], async (req, res) => {
     try {
         const { examId, gridData } = req.body;
         // gridData: [{ studentId, marksObtained, remarks? }, ...]
@@ -121,7 +122,7 @@ function getDefaultGrade(percentage) {
 // @route   GET /api/marks/exam/:examId/status
 // @desc    Get marks entry completion status
 // @access  Private (Teacher)
-router.get('/exam/:examId/status', auth, async (req, res) => {
+router.get('/exam/:examId/status', [auth, yearContext], async (req, res) => {
     try {
         const exam = await Exam.findById(req.params.examId).populate('class');
         if (!exam) {
@@ -191,17 +192,9 @@ router.get('/exam/:examId/status', auth, async (req, res) => {
 // @route   GET /api/marks/class/:classId/summary
 // @desc    Class-wise marks summary across all exams
 // @access  Private (Teacher/Admin)
-router.get('/class/:classId/summary', auth, async (req, res) => {
+router.get('/class/:classId/summary', [auth, yearContext], async (req, res) => {
     try {
-        const { academicYearId } = req.query;
-
-        // Get active academic year if not provided
-        let yearId = academicYearId;
-        if (!yearId) {
-            const AcademicYear = require('../models/AcademicYear');
-            const activeYear = await AcademicYear.findOne({ isActive: true });
-            if (activeYear) yearId = activeYear._id;
-        }
+        const yearId = req.academicYearContext;
 
         // Get all exams for this class
         const exams = await Exam.find({
@@ -266,7 +259,7 @@ router.get('/class/:classId/summary', auth, async (req, res) => {
 // @route   PUT /api/marks/bulk-grade
 // @desc    Bulk update grades/remarks
 // @access  Private (Teacher/Admin)
-router.put('/bulk-grade', auth, async (req, res) => {
+router.put('/bulk-grade', [auth, yearContext, requireOpenYear], async (req, res) => {
     try {
         const { marksIds, updates } = req.body;
         // updates: { grade?, remarks? }
@@ -320,17 +313,10 @@ router.put('/bulk-grade', auth, async (req, res) => {
 // @route   GET /api/marks/analytics/class/:classId
 // @desc    Detailed class analytics with student rankings
 // @access  Private (Teacher/Admin)
-router.get('/analytics/class/:classId', auth, async (req, res) => {
+router.get('/analytics/class/:classId', [auth, yearContext], async (req, res) => {
     try {
-        const { academicYearId, examType } = req.query;
-
-        // Get active academic year if not provided
-        let yearId = academicYearId;
-        if (!yearId) {
-            const AcademicYear = require('../models/AcademicYear');
-            const activeYear = await AcademicYear.findOne({ isActive: true });
-            if (activeYear) yearId = activeYear._id;
-        }
+        const { examType } = req.query;
+        const yearId = req.academicYearContext;
 
         // Build exam query
         let examQuery = {
@@ -444,17 +430,10 @@ router.get('/analytics/class/:classId', auth, async (req, res) => {
 // @route   GET /api/marks/export/class/:classId
 // @desc    Export class marks as CSV/JSON
 // @access  Private (Teacher/Admin)
-router.get('/export/class/:classId', auth, async (req, res) => {
+router.get('/export/class/:classId', [auth, yearContext], async (req, res) => {
     try {
-        const { format = 'json', academicYearId } = req.query;
-
-        // Get active academic year if not provided
-        let yearId = academicYearId;
-        if (!yearId) {
-            const AcademicYear = require('../models/AcademicYear');
-            const activeYear = await AcademicYear.findOne({ isActive: true });
-            if (activeYear) yearId = activeYear._id;
-        }
+        const { format = 'json' } = req.query;
+        const yearId = req.academicYearContext;
 
         // Get all exams
         const exams = await Exam.find({

@@ -7,7 +7,8 @@ const {
   createUser,
   updateUser,
   deleteUser,
-  searchUsers
+  searchUsers,
+  revertStudentPromotion
 } = require('../controllers/userController');
 
 const router = express.Router();
@@ -69,5 +70,8 @@ router.put('/:id', requireAdmin, userValidation, updateUser);
 
 // Delete user (admin only)
 router.delete('/:id', requireAdmin, deleteUser);
+
+// Revert a student's promotion back to their old class in the active year (super admin / admin only)
+router.put('/:id/revert-promotion', requireAdmin, revertStudentPromotion);
 
 module.exports = router;

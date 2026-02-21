@@ -32,6 +32,10 @@ const studentFeeSchema = new mongoose.Schema({
         type: Number,
         default: 0
     },
+    arrears: {
+        type: Number,
+        default: 0
+    },
     concession: {
         type: Number,
         default: 0
@@ -81,8 +85,8 @@ studentFeeSchema.pre('save', function (next) {
         this.totalPaid = this.payments.reduce((sum, payment) => sum + (payment.amount || 0), 0);
     }
 
-    // Recalculate pending: Total - Paid - Concession
-    this.pendingAmount = this.totalFees - this.totalPaid - this.concession;
+    // Recalculate pending: Total + Arrears - Paid - Concession
+    this.pendingAmount = this.totalFees + (this.arrears || 0) - this.totalPaid - this.concession;
 
     next();
 });

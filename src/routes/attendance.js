@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { authenticateToken: auth } = require('../middleware/auth');
+const { yearContext, requireOpenYear } = require('../middleware/yearContext');
 const Attendance = require('../models/Attendance');
 const User = require('../models/User');
 const Class = require('../models/Class');
@@ -9,9 +10,10 @@ const Subject = require('../models/Subject');
 // @route   POST /api/attendance/mark
 // @desc    Mark attendance for students (bulk)
 // @access  Private (Teacher)
-router.post('/mark', auth, async (req, res) => {
+router.post('/mark', [auth, yearContext, requireOpenYear], async (req, res) => {
     try {
         const { classId, subjectId, date, attendanceRecords } = req.body;
+        const academicYearId = req.academicYearContext;
 
         // Validate teacher authorization
         const _teacherUser = await User.findById(req.user.userId);
@@ -47,6 +49,7 @@ router.post('/mark', auth, async (req, res) => {
                 user: studentId,
                 class: classId,
                 date: attendanceDate,
+                academicYear: academicYearId,
                 subject: null,
                 period: null
             };
@@ -62,6 +65,7 @@ router.post('/mark', auth, async (req, res) => {
                 const attendance = new Attendance({
                     user: studentId,
                     role: 'student',
+                    academicYear: academicYearId,
                     class: classId,
                     subject: null, // Always null for class attendance
                     date: attendanceDate,
@@ -85,7 +89,7 @@ router.post('/mark', auth, async (req, res) => {
 // @route   POST /api/attendance/mark-staff
 // @desc    Mark attendance for staff (Teachers)
 // @access  Private (Admin)
-router.post('/mark-staff', auth, async (req, res) => {
+router.post('/mark-staff', [auth, yearContext, requireOpenYear], async (req, res) => {
     try {
         // Check if admin
         if (req.user.role !== 'admin' && req.user.role !== 'super admin') {
@@ -93,12 +97,14 @@ router.post('/mark-staff', auth, async (req, res) => {
         }
 
         const { date, attendanceRecords } = req.body; // Records: [{ userId, status, remarks }]
+        const academicYearId = req.academicYearContext;
 
         const attendancePromises = attendanceRecords.map(async (record) => {
             const { userId, status, remarks } = record;
 
             const filter = {
                 user: userId,
+                academicYear: academicYearId,
                 date: new Date(date).setHours(0, 0, 0, 0)
             };
 
@@ -115,6 +121,7 @@ router.post('/mark-staff', auth, async (req, res) => {
                 const attendance = new Attendance({
                     user: userId,
                     role: user.role, // 'teacher' or others
+                    academicYear: academicYearId,
                     date: new Date(date).setHours(0, 0, 0, 0),
                     status,
                     markedBy: req.user.userId,
@@ -136,13 +143,15 @@ router.post('/mark-staff', auth, async (req, res) => {
 // @route   GET /api/attendance/class/:classId/date/:date
 // @desc    Get attendance for a class on specific date
 // @access  Private (Teacher/Admin)
-router.get('/class/:classId/date/:date', auth, async (req, res) => {
+router.get('/class/:classId/date/:date', [auth, yearContext], async (req, res) => {
     try {
         const { classId, date } = req.params;
         const { subject, period } = req.query;
+        const academicYearId = req.academicYearContext;
 
         const filter = {
             class: classId,
+            academicYear: academicYearId,
             date: new Date(date).setHours(0, 0, 0, 0)
         };
 
@@ -183,10 +192,13 @@ router.get('/class/:classId/date/:date', auth, async (req, res) => {
 // @route   GET /api/attendance/my-attendance
 // @desc    Get my attendance history
 // @access  Private (All)
-router.get('/my-attendance', auth, async (req, res) => {
+router.get('/my-attendance', [auth, yearContext], async (req, res) => {
     try {
         const { startDate, endDate } = req.query;
-        const filter = { user: req.user.userId };
+        const filter = {
+            user: req.user.userId,
+            academicYear: req.academicYearContext
+        };
 
         if (startDate || endDate) {
             filter.date = {};
@@ -246,12 +258,16 @@ router.get('/my-attendance', auth, async (req, res) => {
 // @route   GET /api/attendance/student/:studentId/summary
 // @desc    Get detailed attendance summary for a student
 // @access  Private
-router.get('/student/:studentId/summary', auth, async (req, res) => {
+router.get('/student/:studentId/summary', [auth, yearContext], async (req, res) => {
     try {
         const { studentId } = req.params;
+        const academicYearId = req.academicYearContext;
 
         // 1. Overall Stats
-        const allAttendance = await Attendance.find({ user: studentId });
+        const allAttendance = await Attendance.find({
+            user: studentId,
+            academicYear: academicYearId
+        });
         const totalClasses = allAttendance.length;
         const presentClasses = allAttendance.filter(a => ['present', 'late', 'excused'].includes(a.status)).length;
         const overallPercentage = totalClasses > 0 ? ((presentClasses / totalClasses) * 100).toFixed(1) : 0;
@@ -330,12 +346,16 @@ router.get('/student/:studentId/summary', auth, async (req, res) => {
 // @route   GET /api/attendance/student/:studentId
 // @desc    Get student's attendance history (Legacy/Admin view)
 // @access  Private (Student/Teacher/Admin)
-router.get('/student/:studentId', auth, async (req, res) => {
+router.get('/student/:studentId', [auth, yearContext], async (req, res) => {
     try {
         const { studentId } = req.params;
         const { startDate, endDate, subject } = req.query;
+        const academicYearId = req.academicYearContext;
 
-        const filter = { user: studentId }; // Changed from student to user
+        const filter = {
+            user: studentId, // Changed from student to user
+            academicYear: academicYearId
+        };
 
         if (startDate || endDate) {
             filter.date = {};
@@ -375,7 +395,7 @@ router.get('/student/:studentId', auth, async (req, res) => {
 // @route   GET /api/attendance/staff-list
 // @desc    Get list of staff with their attendance for a specific date
 // @access  Private (Admin)
-router.get('/staff-list', auth, async (req, res) => {
+router.get('/staff-list', [auth, yearContext], async (req, res) => {
     try {
         if (req.user.role !== 'admin' && req.user.role !== 'super admin') {
             return res.status(403).json({ message: 'Not authorized' });
@@ -383,6 +403,7 @@ router.get('/staff-list', auth, async (req, res) => {
 
         const { date } = req.query;
         const targetDate = date ? new Date(date).setHours(0, 0, 0, 0) : new Date().setHours(0, 0, 0, 0);
+        const academicYearId = req.academicYearContext;
 
         // Get all teachers
         const teachers = await User.find({ role: 'teacher' }).select('name email phone');
@@ -390,7 +411,8 @@ router.get('/staff-list', auth, async (req, res) => {
         // Get attendance for this date
         const attendance = await Attendance.find({
             date: targetDate,
-            role: 'teacher'
+            role: 'teacher',
+            academicYear: academicYearId
         });
 
         const result = teachers.map(teacher => {
@@ -414,7 +436,7 @@ router.get('/staff-list', auth, async (req, res) => {
 // @route   GET /api/attendance/school-summary
 // @desc    Get school-wide attendance summary
 // @access  Private (Admin/Super Admin)
-router.get('/school-summary', auth, async (req, res) => {
+router.get('/school-summary', [auth, yearContext], async (req, res) => {
     try {
         if (req.user.role !== 'admin' && req.user.role !== 'super admin') {
             return res.status(403).json({ message: 'Not authorized' });
@@ -423,15 +445,17 @@ router.get('/school-summary', auth, async (req, res) => {
         const { date } = req.query;
         const targetDate = date ? new Date(date) : new Date();
         targetDate.setHours(0, 0, 0, 0);
+        const academicYearId = req.academicYearContext;
 
         // 1. Get Total Counts
-        const totalStudents = await User.countDocuments({ role: 'student' });
-        const totalTeachers = await User.countDocuments({ role: 'teacher' });
+        const totalStudents = await User.countDocuments({ role: 'student', academicYear: academicYearId });
+        const totalTeachers = await User.countDocuments({ role: 'teacher' }); // Teachers aren't year-bound typically for counts
 
         // 2. Get Attendance for Target Date
         const attendanceRecords = await Attendance.find({
             date: targetDate,
-            role: { $in: ['student', 'teacher'] }
+            role: { $in: ['student', 'teacher'] },
+            academicYear: academicYearId
         }).populate({
             path: 'user',
             select: 'name role currentClass',

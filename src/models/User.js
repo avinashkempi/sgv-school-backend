@@ -32,7 +32,7 @@ const userSchema = new mongoose.Schema({
   // Role field for access control
   role: {
     type: String,
-    enum: ['student', 'teacher', 'staff', 'admin', 'super admin', 'support_staff'], // Added 'support_staff'
+    enum: ['student', 'teacher', 'staff', 'admin', 'super admin', 'support_staff', 'alumni'],
     default: 'student'
   },
 
@@ -56,6 +56,11 @@ const userSchema = new mongoose.Schema({
   academicYear: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'AcademicYear'
+  },
+  promotionStatus: {
+    type: String,
+    enum: ['promoted', 'detained'],
+    default: 'promoted'
   },
 
   // NEW: Student Profile Fields

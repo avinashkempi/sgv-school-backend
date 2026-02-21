@@ -1,10 +1,10 @@
 const express = require('express');
 const router = express.Router();
-const { authenticateToken: auth } = require('../middleware/auth');
 const Exam = require('../models/Exam');
 const Marks = require('../models/Marks');
 const User = require('../models/User');
 const AcademicYear = require('../models/AcademicYear');
+const StudentHistory = require('../models/StudentHistory');
 
 // Helper to get grade
 const getGrade = (percentage) => {
@@ -401,6 +401,75 @@ router.get('/class-ranking/:classId', auth, async (req, res) => {
     } catch (err) {
         console.error(err.message);
         res.status(500).send('Server Error');
+    }
+});
+
+// @route   GET /api/reports/history/me
+// @desc    Get all historical academic report summaries for the logged-in student
+// @access  Private (Student)
+router.get('/history/me', auth, async (req, res) => {
+    try {
+        const studentId = req.user.userId;
+
+        if (req.user.role !== 'student') {
+            return res.status(403).json({ message: 'Only students can view their academic history directly' });
+        }
+
+        // 1. Fetch Immutable Student Histories
+        const historyRecords = await StudentHistory.find({ student: studentId })
+            .populate('academicYear', 'name startDate endDate')
+            .populate('class', 'name section branch label')
+            .sort({ 'academicYear.startDate': -1 })
+            .lean();
+
+        // 2. We want to attach actual exam data (if available) for those past years
+        // We look for SA2 (Final) or overall totals from those historic years
+        const enrichedHistory = await Promise.all(historyRecords.map(async (record) => {
+            if (!record.academicYear) return record;
+
+            const yearId = record.academicYear._id;
+            const classId = record.class?._id;
+
+            // Only trace if we have both IDs conceptually mapped
+            if (!classId) return record;
+
+            // Fetch standardized exams for that specific historical class & year combo
+            const exams = await Exam.find({
+                class: classId,
+                academicYear: yearId,
+                isStandardized: true
+            }).populate('subject', 'name').lean();
+
+            if (exams.length === 0) {
+                return {
+                    ...record,
+                    examsAvailable: false,
+                    overallPercentage: record.totalAttendancePercentage || null
+                };
+            }
+
+            const marks = await Marks.find({
+                student: studentId,
+                exam: { $in: exams.map(e => e._id) }
+            }).lean();
+
+            const overallPercentage = computeStudentOverall(exams, marks);
+
+            return {
+                ...record,
+                examsAvailable: true,
+                overallPercentage,
+                grade: getGrade(overallPercentage),
+            };
+        }));
+
+        res.json({
+            history: enrichedHistory
+        });
+
+    } catch (err) {
+        console.error("Error fetching student history:", err.message);
+        res.status(500).send('Server Error fetching historical reports');
     }
 });
 

@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { authenticateToken: auth, checkRole } = require('../middleware/auth');
+const { yearContext, requireOpenYear } = require('../middleware/yearContext');
 const FeeStructure = require('../models/FeeStructure');
 const FeePayment = require('../models/FeePayment');
 const StudentFee = require('../models/StudentFee');
@@ -32,13 +33,16 @@ const generateReceiptNumber = async () => {
 // @route   POST /api/fees/structure
 // @desc    Create or Update fee structure for a class
 // @access  Admin/Super Admin
-router.post('/structure', [auth, checkRole(['admin', 'super admin'])], async (req, res) => {
+router.post('/structure', [auth, checkRole(['admin', 'super admin']), yearContext, requireOpenYear], async (req, res) => {
     try {
 
-        const { classId, academicYearId, components, paymentSchedule, type, students } = req.body;
+        const { classId, components, paymentSchedule, type, students } = req.body;
+
+        // Securely pull the year from the context header instead of trusting the client body
+        const academicYearId = req.academicYearContext;
 
         if (!classId || !academicYearId) {
-            return res.status(400).json({ message: "Class and Academic Year are required" });
+            return res.status(400).json({ message: "Class and Academic Year Context are required" });
         }
 
         // Calculate total amount
@@ -114,27 +118,23 @@ router.post('/structure', [auth, checkRole(['admin', 'super admin'])], async (re
 });
 
 // @route   GET /api/fees/structure/class/:classId
-// @desc    Get fee structure for a class (current academic year)
+// @desc    Get fee structure for a class (current academic year context)
 // @access  Private
-router.get('/structure/class/:classId', auth, async (req, res) => {
+router.get('/structure/class/:classId', [auth, yearContext], async (req, res) => {
     try {
-        // Ideally we should get the active academic year from a config or passed in query
-        // For now, let's try to find the structure associated with the class's current academic year
-        // or just the latest one.
+        const academicYearId = req.academicYearContext;
 
         const classData = await Class.findById(req.params.classId);
         if (!classData) return res.status(404).json({ message: 'Class not found' });
 
         let feeStructure;
-        if (classData.academicYear) {
-            feeStructure = await FeeStructure.findOne({
-                class: req.params.classId,
-                academicYear: classData.academicYear,
-                type: 'class_default'
-            });
-        }
+        feeStructure = await FeeStructure.findOne({
+            class: req.params.classId,
+            academicYear: academicYearId,
+            type: 'class_default'
+        });
 
-        // If not found by specific academic year, get the latest one
+        // If not found by specific academic year, fallback for backward compatibility
         if (!feeStructure) {
             feeStructure = await FeeStructure.findOne({
                 class: req.params.classId,
@@ -161,33 +161,35 @@ router.get('/structure/class/:classId', auth, async (req, res) => {
 // @route   POST /api/fees/payment
 // @desc    Record a fee payment
 // @access  Admin/Super Admin
-router.post('/payment', [auth, checkRole(['admin', 'super admin'])], async (req, res) => {
+router.post('/payment', [auth, checkRole(['admin', 'super admin']), yearContext, requireOpenYear], async (req, res) => {
     try {
         const { studentId, amount, paymentMethod, transactionId, remarks, bookNumber, manualReceiptNumber } = req.body;
+
+        const academicYearId = req.academicYearContext;
 
         const student = await User.findById(studentId);
         if (!student) return res.status(404).json({ message: 'Student not found' });
 
-        if (!student.currentClass || !student.academicYear) {
-            return res.status(400).json({ message: 'Student not assigned to a class or academic year' });
+        if (!student.currentClass) {
+            return res.status(400).json({ message: 'Student not assigned to a class' });
         }
 
         const feeStructure = await FeeStructure.findOne({
             class: student.currentClass,
-            academicYear: student.academicYear,
+            academicYear: academicYearId,
             type: 'class_default'
         });
 
-        // Also check for specific structures to validate if the student has ANY fee structure
+        // Also check for specific structures
         const specificStructures = await FeeStructure.find({
             class: student.currentClass,
-            academicYear: student.academicYear,
+            academicYear: academicYearId,
             type: 'student_specific',
             students: studentId
         });
 
         if (!feeStructure && specificStructures.length === 0) {
-            return res.status(400).json({ message: 'Fee structure not defined for this student\'s class' });
+            return res.status(400).json({ message: 'Fee structure not defined for this student\'s class in current year context' });
         }
 
         const receiptNumber = await generateReceiptNumber();
@@ -195,11 +197,7 @@ router.post('/payment', [auth, checkRole(['admin', 'super admin'])], async (req,
         const payment = new FeePayment({
             student: studentId,
             class: student.currentClass,
-            academicYear: student.academicYear,
-            // feeStructure: feeStructure._id, // We might need to link to specific structure if applicable, but for now we just track payment against student/class
-            // For now, let's keep it optional or link to default if available. 
-            // If we want to track against specific component, we need more complex logic.
-            // For now, we'll just link to the default one if it exists, or the first specific one.
+            academicYear: academicYearId,
             feeStructure: feeStructure ? feeStructure._id : specificStructures[0]?._id,
             amount,
             paymentMethod,
@@ -230,9 +228,10 @@ router.post('/payment', [auth, checkRole(['admin', 'super admin'])], async (req,
 // @route   GET /api/fees/summary
 // @desc    Get fee summary for all students (for list view)
 // @access  Admin/Super Admin
-router.get('/summary', [auth, checkRole(['admin', 'super admin'])], async (req, res) => {
+router.get('/summary', [auth, checkRole(['admin', 'super admin']), yearContext], async (req, res) => {
     try {
-        const { academicYearId, classId } = req.query;
+        const { classId } = req.query;
+        const academicYearId = req.academicYearContext;
 
         // 1. Build User Query
         const query = { role: 'student' };
@@ -304,12 +303,14 @@ router.get('/summary', [auth, checkRole(['admin', 'super admin'])], async (req, 
 // @route   GET /api/fees/student/:studentId
 // @desc    Get student fee status and history
 // @access  Private (Admin, or Student for own data)
-router.get('/student/:studentId', auth, async (req, res) => {
+router.get('/student/:studentId', [auth, yearContext], async (req, res) => {
     try {
         // Authorization check
         if (req.user.role === 'student' && req.user.userId !== req.params.studentId) {
             return res.status(403).json({ message: 'Not authorized' });
         }
+
+        const academicYearId = req.academicYearContext;
 
         const student = await User.findById(req.params.studentId);
         if (!student) return res.status(404).json({ message: 'Student not found' });
@@ -319,7 +320,7 @@ router.get('/student/:studentId', auth, async (req, res) => {
         const StudentFee = require('../models/StudentFee');
         const studentFee = await StudentFee.findOne({
             student: req.params.studentId,
-            academicYear: student.academicYear
+            academicYear: academicYearId
         });
 
         if (studentFee) {
@@ -354,14 +355,14 @@ router.get('/student/:studentId', auth, async (req, res) => {
         // Get Fee Structure (Default)
         const defaultFeeStructure = await FeeStructure.findOne({
             class: student.currentClass,
-            academicYear: student.academicYear,
+            academicYear: academicYearId,
             type: 'class_default'
         });
 
         // Get Specific Fee Structures
         const specificFeeStructures = await FeeStructure.find({
             class: student.currentClass,
-            academicYear: student.academicYear,
+            academicYear: academicYearId,
             type: 'student_specific',
             students: req.params.studentId
         });
@@ -393,7 +394,7 @@ router.get('/student/:studentId', auth, async (req, res) => {
         // Get Payments
         const payments = await FeePayment.find({
             student: req.params.studentId,
-            academicYear: student.academicYear,
+            academicYear: academicYearId,
             status: 'success'
         }).sort({ paymentDate: -1 });
 
@@ -418,11 +419,11 @@ router.get('/student/:studentId', auth, async (req, res) => {
 });
 
 // @route   GET /api/fees/analytics
-// @desc    Get fee collection analytics
+// @desc    Get fee collection analytics (Scroped to Academic Year Context)
 // @access  Admin/Super Admin
-router.get('/analytics', [auth, checkRole(['admin', 'super admin'])], async (req, res) => {
+router.get('/analytics', [auth, checkRole(['admin', 'super admin']), yearContext], async (req, res) => {
     try {
-        // Simple analytics for now: Total Collected Today, This Month, Total Pending (Approx)
+        const academicYearId = req.academicYearContext;
 
         const today = new Date();
         today.setHours(0, 0, 0, 0);
@@ -430,20 +431,23 @@ router.get('/analytics', [auth, checkRole(['admin', 'super admin'])], async (req
         const firstDayOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
 
         const [todayPayments, monthPayments, allPayments] = await Promise.all([
-            // Collected Today
+            // Collected Today (Scroped to Year)
             StudentFee.aggregate([
+                { $match: { academicYear: req.academicYearContext } },
                 { $unwind: "$payments" },
                 { $match: { "payments.date": { $gte: today } } },
                 { $group: { _id: null, total: { $sum: '$payments.amount' } } }
             ]),
-            // Collected This Month
+            // Collected This Month (Scroped to Year)
             StudentFee.aggregate([
+                { $match: { academicYear: req.academicYearContext } },
                 { $unwind: "$payments" },
                 { $match: { "payments.date": { $gte: firstDayOfMonth } } },
                 { $group: { _id: null, total: { $sum: '$payments.amount' } } }
             ]),
-            // Total Collected (All Time)
+            // Total Collected (For the Entire Academic Year)
             StudentFee.aggregate([
+                { $match: { academicYear: req.academicYearContext } },
                 { $unwind: "$payments" },
                 { $group: { _id: null, total: { $sum: '$payments.amount' } } }
             ])
