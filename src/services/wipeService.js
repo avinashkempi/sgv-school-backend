@@ -18,16 +18,16 @@ const wipeNonAdminData = async ({ confirmed } = {}) => {
     try {
         console.log('⚠️ Starting data wipe...');
 
-        // 1. Find all students and teachers (everyone except admin/super admin)
+        // 1. Find only students (preserve teachers, support staff, alumni, etc.)
         const usersToDelete = await User.find({
-            role: { $nin: ['admin', 'super admin'] }
+            role: 'student'
         }).select('_id');
 
         const userIds = usersToDelete.map(u => u._id);
-        console.log(`Found ${userIds.length} users to delete.`);
+        console.log(`Found ${userIds.length} students to delete.`);
 
         if (userIds.length === 0) {
-            return { success: true, message: 'No non-admin users found to delete.' };
+            return { success: true, message: 'No students found to delete.' };
         }
 
         // 2. Delete related Fee records
@@ -36,22 +36,20 @@ const wipeNonAdminData = async ({ confirmed } = {}) => {
         });
         console.log(`Deleted ${feeDeleteResult.deletedCount} fee records.`);
 
-        // 3. Delete the Users
+        // 3. Delete the Student Users
         const userDeleteResult = await User.deleteMany({
             _id: { $in: userIds }
         });
-        console.log(`Deleted ${userDeleteResult.deletedCount} users.`);
+        console.log(`Deleted ${userDeleteResult.deletedCount} students.`);
 
-        // 4. Delete Classes (To be recreated from CSV)
-        const classDeleteResult = await Class.deleteMany({});
-        console.log(`Deleted ${classDeleteResult.deletedCount} classes.`);
+        // NOTE: Classes are NOT deleted to preserve subject & teacher assignments.
+        // The CSV importer will reuse existing classes by name.
 
         return {
             success: true,
-            message: `Successfully deleted ${userDeleteResult.deletedCount} users, ${feeDeleteResult.deletedCount} fee records, and ${classDeleteResult.deletedCount} classes.`,
+            message: `Successfully deleted ${userDeleteResult.deletedCount} students and ${feeDeleteResult.deletedCount} fee records. Classes, subjects, and teacher assignments preserved.`,
             deletedUsers: userDeleteResult.deletedCount,
-            deletedFees: feeDeleteResult.deletedCount,
-            deletedClasses: classDeleteResult.deletedCount
+            deletedFees: feeDeleteResult.deletedCount
         };
 
     } catch (error) {
