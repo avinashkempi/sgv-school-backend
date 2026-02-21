@@ -488,7 +488,14 @@ exports.incrementYear = async (req, res) => {
         })).filter(record => record.class !== null);
 
         if (historyRecords.length > 0) {
-            await StudentHistory.insertMany(historyRecords);
+            const bulkOps = historyRecords.map(record => ({
+                updateOne: {
+                    filter: { student: record.student, academicYear: record.academicYear },
+                    update: { $set: record },
+                    upsert: true
+                }
+            }));
+            await StudentHistory.bulkWrite(bulkOps);
         }
 
         for (const student of students) {
