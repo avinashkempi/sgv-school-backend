@@ -430,33 +430,32 @@ router.get('/analytics', [auth, checkRole(['admin', 'super admin']), yearContext
 
         const firstDayOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
 
-        const [todayPayments, monthPayments, allPayments] = await Promise.all([
-            // Collected Today (Scroped to Year)
+        const [todayPayments, monthPayments, allCollected] = await Promise.all([
+            // Collected Today (from payments array — needs date filter)
             StudentFee.aggregate([
                 { $match: { academicYear: req.academicYearContext } },
                 { $unwind: "$payments" },
                 { $match: { "payments.date": { $gte: today } } },
                 { $group: { _id: null, total: { $sum: '$payments.amount' } } }
             ]),
-            // Collected This Month (Scroped to Year)
+            // Collected This Month (from payments array — needs date filter)
             StudentFee.aggregate([
                 { $match: { academicYear: req.academicYearContext } },
                 { $unwind: "$payments" },
                 { $match: { "payments.date": { $gte: firstDayOfMonth } } },
                 { $group: { _id: null, total: { $sum: '$payments.amount' } } }
             ]),
-            // Total Collected (For the Entire Academic Year)
+            // Total Collected — use totalPaid field (works for both CSV-imported and app payments)
             StudentFee.aggregate([
                 { $match: { academicYear: req.academicYearContext } },
-                { $unwind: "$payments" },
-                { $group: { _id: null, total: { $sum: '$payments.amount' } } }
+                { $group: { _id: null, total: { $sum: '$totalPaid' } } }
             ])
         ]);
 
         res.json({
             collectedToday: todayPayments[0]?.total || 0,
             collectedThisMonth: monthPayments[0]?.total || 0,
-            totalCollected: allPayments[0]?.total || 0
+            totalCollected: allCollected[0]?.total || 0
         });
 
     } catch (err) {
