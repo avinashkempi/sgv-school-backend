@@ -44,16 +44,14 @@ router.post('/', [auth, checkRole(['teacher', 'admin', 'super admin'])], async (
 
         const classId = student.currentClass._id;
 
-        // Validation for Teachers — only CLASS TEACHERS can give feedback
+        // Validation for Teachers — must be class teacher OR subject teacher for this class
         if (role === 'teacher') {
-            const classData = await require('../models/Class').findById(classId);
-            const isClassTeacher = classData && classData.classTeacher && classData.classTeacher.toString() === teacherId;
-
-            if (!isClassTeacher) {
-                return res.status(403).json({ message: 'Only class teachers can give feedback to students. Subject teachers are not allowed to give feedback.' });
+            const permission = await checkTeacherPermissions(teacherId, studentId, classId);
+            if (!permission.allowed) {
+                return res.status(403).json({ message: 'You do not teach any subject in this class and are not the class teacher.' });
             }
 
-            // Class teachers can optionally specify a subject they teach
+            // Optionally specify a subject
             if (subjectId) {
                 const subject = await Subject.findById(subjectId);
                 if (!subject || subject.class.toString() !== classId.toString()) {
@@ -101,12 +99,19 @@ router.get('/my', [auth, checkRole(['student'])], async (req, res) => {
 });
 
 // @route   GET /api/feedback/sent
-// @desc    Get feedback sent by logged-in teacher
-// @access  Teacher
-router.get('/sent', [auth, checkRole(['teacher'])], async (req, res) => {
+// @desc    Get feedback sent by logged-in user (teacher sees own, admin/super admin sees all)
+// @access  Teacher, Admin, Super Admin
+router.get('/sent', [auth, checkRole(['teacher', 'admin', 'super admin'])], async (req, res) => {
     try {
-        const feedback = await Feedback.find({ teacher: req.user.userId })
+        const role = req.user.role;
+        // Admin/Super Admin see all sent feedback; teachers see only their own
+        const filter = (role === 'admin' || role === 'super admin')
+            ? {}
+            : { teacher: req.user.userId };
+
+        const feedback = await Feedback.find(filter)
             .populate('student', 'name')
+            .populate('teacher', 'name role')
             .populate('subject', 'name')
             .populate('class', 'name section')
             .sort({ createdAt: -1 });
