@@ -31,7 +31,12 @@ router.get('/me', async (req, res) => {
 });
 
 // Search users by name or phone
-router.get('/search', searchUsers);
+router.get('/search', (req, res, next) => {
+  if (['admin', 'super admin', 'teacher'].includes(req.user.role)) {
+    return next();
+  }
+  return res.status(403).json({ success: false, message: 'Forbidden: Insufficient privileges to search users' });
+}, searchUsers);
 
 // Get all users (admin only, except teachers can get students)
 router.get('/', (req, res, next) => {
@@ -44,7 +49,17 @@ router.get('/', (req, res, next) => {
 }, getAllUsers);
 
 // Get user by ID
-router.get('/:id', getUserById);
+router.get('/:id', (req, res, next) => {
+  // Allow access to own profile
+  if (req.user.userId === req.params.id) {
+    return next();
+  }
+  // Allow admins and teachers to view other profiles
+  if (['admin', 'super admin', 'teacher'].includes(req.user.role)) {
+    return next();
+  }
+  return res.status(403).json({ success: false, message: 'Forbidden: Cannot access other user profiles' });
+}, getUserById);
 
 // Create new user (admin only)
 router.post('/', requireAdmin, userValidation, createUser);
