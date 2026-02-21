@@ -38,6 +38,11 @@ router.get('/:yearId/transition/validate', [auth, checkRole(['super admin'])], a
 // @access  Super Admin
 router.post('/transition/execute', [auth, checkRole(['super admin'])], academicYearController.executeTransition);
 
+// @route   PUT /api/academic-year/:yearId/activate
+// @desc    Activate a year as the current year (no transition)
+// @access  Super Admin
+router.put('/:yearId/activate', [auth, checkRole(['super admin'])], academicYearController.activateYear);
+
 // @route   POST /api/academic-year/transition/rollback
 // @desc    Rollback year transition
 // @access  Super Admin

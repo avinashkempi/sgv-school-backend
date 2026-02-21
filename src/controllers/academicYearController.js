@@ -39,6 +39,62 @@ exports.createYear = async (req, res) => {
     }
 };
 
+// Activate a year as the current year (no transition, just set as active)
+exports.activateYear = async (req, res) => {
+    try {
+        const { yearId } = req.params;
+
+        const year = await AcademicYear.findById(yearId);
+        if (!year) {
+            return res.status(404).json({ success: false, message: 'Academic year not found' });
+        }
+
+        if (year.isActive && year.status === 'current') {
+            return res.status(400).json({ success: false, message: 'This year is already active' });
+        }
+
+        // Deactivate any currently active year
+        await AcademicYear.updateMany(
+            { isActive: true },
+            { $set: { isActive: false, status: 'archived' } }
+        );
+
+        // Activate the target year
+        year.isActive = true;
+        year.status = 'current';
+        await year.save();
+
+        // Move all active students into the new academic year
+        const studentResult = await User.updateMany(
+            { role: 'student', isActive: { $ne: false } },
+            { $set: { academicYear: year._id } }
+        );
+
+        // Also re-link existing classes to this year (if they don't already belong to one)
+        const classResult = await Class.updateMany(
+            { academicYear: { $exists: false } },
+            { $set: { academicYear: year._id } }
+        );
+        // Also update classes that were in the old year
+        await Class.updateMany(
+            { academicYear: { $ne: year._id } },
+            { $set: { academicYear: year._id } }
+        );
+
+        console.log(`[ACTIVATE] Year: ${year.name} | Students moved: ${studentResult.modifiedCount} | Classes linked: ${classResult.modifiedCount}`);
+
+        res.json({
+            success: true,
+            message: `${year.name} is now active. ${studentResult.modifiedCount} students updated.`,
+            year,
+            studentsUpdated: studentResult.modifiedCount
+        });
+    } catch (err) {
+        console.error('Activate Year Error:', err.message);
+        res.status(500).json({ success: false, message: 'Server Error' });
+    }
+};
+
 exports.getAllYears = async (req, res) => {
     try {
         const years = await AcademicYear.find().sort({ startDate: -1 }).lean();
