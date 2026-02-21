@@ -5,6 +5,7 @@ const Marks = require('../models/Marks');
 const User = require('../models/User');
 const AcademicYear = require('../models/AcademicYear');
 const StudentHistory = require('../models/StudentHistory');
+const { authenticateToken: auth, checkRole } = require('../middleware/auth');
 
 // Helper to get grade
 const getGrade = (percentage) => {
