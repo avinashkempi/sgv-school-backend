@@ -63,7 +63,7 @@ router.post('/students/csv', authenticateToken, checkRole(['admin', 'super admin
  * @desc Get CSV template for student import
  * @access Private (Admin)
  */
-router.get('/template', authenticateToken, requireFinanceAccess, (req, res) => {
+router.get('/template', authenticateToken, checkRole(['admin', 'super admin']), (req, res) => {
     // Return a simple CSV template to help users
     const headers = [
         'Student Name', 'Class', 'Gender', 'Phone', 'Phone 2', 'Address',
