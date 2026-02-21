@@ -128,7 +128,7 @@ router.post('/students/local', authenticateToken, checkRole(['admin', 'super adm
  * @desc Import staff from local data folder (Direct Sync)
  * @access Private (Admin)
  */
-router.post('/staff/local', authenticateToken, requireFinanceAccess, async (req, res) => {
+router.post('/staff/local', authenticateToken, checkRole(['admin', 'super admin']), async (req, res) => {
     const filePath = './data/staff_data.csv';
     const results = [];
 
