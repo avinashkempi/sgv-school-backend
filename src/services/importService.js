@@ -48,7 +48,19 @@ const processImport = async (csvData, options = { wipe: false }) => {
             await wipeNonAdminData({ confirmed: true });
         }
 
-        // 2. Extract and Create Classes from CSV
+        // 2. Resolve Academic Year FIRST (needed for class creation)
+        let academicYear;
+        if (options.academicYearId) {
+            academicYear = await AcademicYear.findById(options.academicYearId);
+        }
+        if (!academicYear) {
+            academicYear = await AcademicYear.findOne({ isActive: true });
+        }
+        if (!academicYear) {
+            academicYear = await AcademicYear.findOne({});
+        }
+
+        // 3. Extract and Create Classes from CSV
         // Get unique class names from CSV
         const uniqueClasses = [...new Set(csvData.map(row => row['Class'] ? row['Class'].toString().toUpperCase() : '').filter(c => c))];
         console.log(`Found ${uniqueClasses.length} unique classes in CSV`);
@@ -61,31 +73,24 @@ const processImport = async (csvData, options = { wipe: false }) => {
 
         // Create Classes if they don't exist (or if wiped)
         for (const className of uniqueClasses) {
-            const existingClass = await Class.findOne({ name: className });
+            const branch = getBranchForClass(className) || 'Main';
+            const existingClass = await Class.findOne({ name: className, branch });
             if (!existingClass) {
+                const classValue = className.toLowerCase().replace(/\s+/g, '_');
                 await Class.create({
                     name: className,
-                    branch: getBranchForClass(className)
-                    // Section is optional/not in CSV explicitly as separate column usually, can add if needed
+                    value: classValue,
+                    label: className,
+                    branch,
+                    academicYear: academicYear ? academicYear._id : undefined
                 });
             }
         }
 
-        // 3. Cache Classes and Academic Year
+        // 4. Cache Classes
         const classes = await Class.find({});
         const classMap = new Map(classes.map(c => [c.name.toUpperCase(), c._id]));
 
-        // Use explicitly provided year, or fall back to active year
-        let academicYear;
-        if (options.academicYearId) {
-            academicYear = await AcademicYear.findById(options.academicYearId);
-        }
-        if (!academicYear) {
-            academicYear = await AcademicYear.findOne({ isActive: true });
-        }
-        if (!academicYear) {
-            academicYear = await AcademicYear.findOne({});
-        }
 
         // Track processed classes for fee structure to avoid redundant DB calls per row
         const processedFeeStructures = new Set();
