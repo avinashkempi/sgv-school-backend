@@ -423,7 +423,7 @@ router.get('/student/:studentId', [auth, yearContext], async (req, res) => {
 // @access  Admin/Super Admin
 router.get('/analytics', [auth, checkRole(['admin', 'super admin']), yearContext], async (req, res) => {
     try {
-        const academicYearId = req.academicYearContext;
+        const academicYearId = new mongoose.Types.ObjectId(req.academicYearContext);
 
         const today = new Date();
         today.setHours(0, 0, 0, 0);
@@ -433,21 +433,21 @@ router.get('/analytics', [auth, checkRole(['admin', 'super admin']), yearContext
         const [todayPayments, monthPayments, allCollected] = await Promise.all([
             // Collected Today (from payments array — needs date filter)
             StudentFee.aggregate([
-                { $match: { academicYear: req.academicYearContext } },
+                { $match: { academicYear: academicYearId } },
                 { $unwind: "$payments" },
                 { $match: { "payments.date": { $gte: today } } },
                 { $group: { _id: null, total: { $sum: '$payments.amount' } } }
             ]),
             // Collected This Month (from payments array — needs date filter)
             StudentFee.aggregate([
-                { $match: { academicYear: req.academicYearContext } },
+                { $match: { academicYear: academicYearId } },
                 { $unwind: "$payments" },
                 { $match: { "payments.date": { $gte: firstDayOfMonth } } },
                 { $group: { _id: null, total: { $sum: '$payments.amount' } } }
             ]),
             // Total Collected — use totalPaid field (works for both CSV-imported and app payments)
             StudentFee.aggregate([
-                { $match: { academicYear: req.academicYearContext } },
+                { $match: { academicYear: academicYearId } },
                 { $group: { _id: null, total: { $sum: '$totalPaid' } } }
             ])
         ]);
