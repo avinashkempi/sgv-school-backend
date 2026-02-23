@@ -10,6 +10,10 @@ const app = express();
 const PORT = process.env.PORT || 10000;
 require('dotenv').config()
 
+// Trust the first proxy hop (Render's load balancer) so that
+// express-rate-limit can correctly identify client IPs from X-Forwarded-For.
+app.set('trust proxy', 1);
+
 // Connect to MongoDB
 connectDB();
 
