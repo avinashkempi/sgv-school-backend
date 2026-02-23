@@ -468,11 +468,17 @@ router.post('/:id/subjects', auth, async (req, res) => {
             return res.status(400).json({ success: false, message: 'Subject already exists in this class' });
         }
 
+        // Fetch the active academic year (required by Subject schema)
+        const activeYear = await AcademicYear.findOne({ isActive: true });
+        if (!activeYear) {
+            return res.status(400).json({ success: false, message: 'No active academic year found. Please set one first.' });
+        }
+
         const newSubject = new Subject({
             name: subjectName,
             class: classId,
             globalSubject: globalSubjectRef,
-
+            academicYear: activeYear._id,
             teachers: [] // Start with no teachers assigned
         });
 
