@@ -145,6 +145,13 @@ const processImport = async (csvData, options = { wipe: false }) => {
                 }
 
                 // --- FULL IMPORT MODE ---
+                // Helper to get value from row with normalized keys (trim + case insensitive)
+                const getRowValue = (key) => {
+                    const normalizedKey = key.toLowerCase().trim();
+                    const actualKey = Object.keys(row).find(k => k.toLowerCase().trim() === normalizedKey);
+                    return actualKey ? row[actualKey] : null;
+                };
+
                 // Process Fee Structure for Class (First record wins)
                 if (classId && academicYear && !processedFeeStructures.has(classId.toString())) {
                     await processFeeStructure(classId, academicYear, row);
@@ -153,7 +160,7 @@ const processImport = async (csvData, options = { wipe: false }) => {
 
                 // Construct Student Data
                 const studentData = {
-                    name: row['Student Name'],
+                    name: getRowValue('Student Name'),
                     phone: loginPhone, // Unique Key
                     guardianPhone: backupPhone, // Backup contact
                     password: loginPhone + '@123', // Default password = phone@123
@@ -162,17 +169,17 @@ const processImport = async (csvData, options = { wipe: false }) => {
                     academicYear: academicYear ? academicYear._id : null,
 
                     // Profile Fields
-                    gender: row['Gender'],
-                    dateOfBirth: parseDate(row['Date of Birth']),
-                    address: row['Address'],
-                    isAdmitted: row['Admission'] === 'TRUE' || row['Admission'] === true,
-                    remarks: row['Remarks'],
+                    gender: getRowValue('Gender'),
+                    dateOfBirth: parseDate(getRowValue('Date of Birth')),
+                    address: getRowValue('Address'),
+                    isAdmitted: getRowValue('Admission') === 'TRUE' || getRowValue('Admission') === true || getRowValue('Admission') === 'True',
+                    remarks: getRowValue('Remarks'),
 
                     // IDs
-                    regNo: row['Reg No'],
-                    satsNumber: row['SATS Number'],
-                    penNumber: row['PEN Number'],
-                    apaarId: row['APAAR ID']
+                    regNo: getRowValue('Reg No'),
+                    satsNumber: getRowValue('SATS Number'),
+                    penNumber: getRowValue('PEN Number'),
+                    apaarId: getRowValue('APAAR ID')
                 };
 
                 // Upsert Student

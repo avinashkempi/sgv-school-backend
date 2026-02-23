@@ -86,19 +86,28 @@ exports.getNotifications = async (req, res) => {
  */
 exports.getUnreadCount = async (req, res) => {
     try {
-        let query = {
-            isRead: false,
-            isArchived: false,
-            $or: [
-                { recipient: req.user.userId },
-                {
-                    recipient: null,
-                    targetClass: null,
-                    targetRole: { $in: ['all', req.user.role] }
-                }
-            ]
-        };
+        const orClauses = [
+            { recipient: req.user.userId },
+            {
+                recipient: null,
+                targetClass: null,
+                targetRole: { $in: ['all', req.user.role] }
+            }
+        ];
 
+        // Students also receive class-broadcast notifications
+        if (req.user.role === 'student') {
+            const user = await User.findById(req.user.userId).select('currentClass').lean();
+            if (user?.currentClass) {
+                orClauses.push({
+                    recipient: null,
+                    targetClass: user.currentClass,
+                    isArchived: false
+                });
+            }
+        }
+
+        const query = { isRead: false, isArchived: false, $or: orClauses };
         const count = await Notification.countDocuments(query);
 
         res.json({ success: true, unreadCount: count });
@@ -120,6 +129,14 @@ exports.markAsRead = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Notification not found' });
         }
 
+        // Only allow marking if this notification is addressed to the requesting user
+        const isPersonal = notification.recipient?.toString() === req.user.userId;
+        const isBroadcast = !notification.recipient;
+        const isAdminOverride = req.user.role === 'admin' || req.user.role === 'super admin';
+        if (!isPersonal && !isBroadcast && !isAdminOverride) {
+            return res.status(403).json({ success: false, message: 'Not authorised to modify this notification' });
+        }
+
         notification.isRead = isRead;
         notification.readAt = isRead ? new Date() : null;
         await notification.save();
@@ -136,18 +153,22 @@ exports.markAsRead = async (req, res) => {
  */
 exports.markAllAsRead = async (req, res) => {
     try {
+        // Only mark notifications that are actually visible to this user:
+        // - personally addressed ones, OR broadcast ones targeting their role
         const result = await Notification.updateMany(
             {
                 isRead: false,
                 isArchived: false,
                 $or: [
                     { recipient: req.user.userId },
-                    { targetRole: { $in: ['all', req.user.role] } }
+                    {
+                        recipient: null,
+                        targetClass: null,
+                        targetRole: { $in: ['all', req.user.role] }
+                    }
                 ]
             },
-            {
-                $set: { isRead: true, readAt: new Date() }
-            }
+            { $set: { isRead: true, readAt: new Date() } }
         );
 
         res.json({
@@ -171,6 +192,14 @@ exports.archiveNotification = async (req, res) => {
 
         if (!notification) {
             return res.status(404).json({ success: false, message: 'Notification not found' });
+        }
+
+        // Only allow archiving if this notification is addressed to the requesting user
+        const isPersonal = notification.recipient?.toString() === req.user.userId;
+        const isBroadcast = !notification.recipient;
+        const isAdminOverride = req.user.role === 'admin' || req.user.role === 'super admin';
+        if (!isPersonal && !isBroadcast && !isAdminOverride) {
+            return res.status(403).json({ success: false, message: 'Not authorised to modify this notification' });
         }
 
         notification.isArchived = isArchived;

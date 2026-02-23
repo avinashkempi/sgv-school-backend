@@ -1,6 +1,6 @@
 const express = require('express');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
-const { userValidation } = require('../validations/user');
+const { userCreateValidation, userUpdateValidation } = require('../validations/user');
 const {
   getAllUsers,
   getUserById,
@@ -63,10 +63,10 @@ router.get('/:id', (req, res, next) => {
 }, getUserById);
 
 // Create new user (admin only)
-router.post('/', requireAdmin, userValidation, createUser);
+router.post('/', requireAdmin, userCreateValidation, createUser);
 
 // Update user (admin only)
-router.put('/:id', requireAdmin, userValidation, updateUser);
+router.put('/:id', requireAdmin, userUpdateValidation, updateUser);
 
 // Delete user (admin only)
 router.delete('/:id', requireAdmin, deleteUser);

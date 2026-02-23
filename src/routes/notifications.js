@@ -1,7 +1,9 @@
 const express = require('express');
 const router = express.Router();
-const { authenticateToken: auth } = require('../middleware/auth');
+const { authenticateToken: auth, checkRole } = require('../middleware/auth');
 const notificationController = require('../controllers/notificationController');
+
+const adminOnly = checkRole(['admin', 'super admin']);
 
 // @route   GET /api/notifications
 // @desc    Get current user's notifications (with filtering)
@@ -31,7 +33,7 @@ router.put('/:id/archive', auth, notificationController.archiveNotification);
 // @route   DELETE /api/notifications/:id
 // @desc    Delete notification (admin only)
 // @access  Private (Admin)
-router.delete('/:id', auth, notificationController.deleteNotification);
+router.delete('/:id', auth, adminOnly, notificationController.deleteNotification);
 
 // @route   PUT /api/notifications/mark-all-read
 // @desc    Mark all notifications as read
@@ -41,7 +43,7 @@ router.put('/mark-all-read', auth, notificationController.markAllAsRead);
 // @route   POST /api/notifications/send
 // @desc    Send a notification (Admin only)
 // @access  Private (Admin)
-router.post('/send', auth, notificationController.sendNotification);
+router.post('/send', auth, adminOnly, notificationController.sendNotification);
 
 // @route   PUT /api/notifications/preferences
 // @desc    Update notification preferences
