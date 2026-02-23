@@ -13,8 +13,9 @@ const { sendTargetedNotification } = require('../services/notificationService');
 // @access  Private (Teacher)
 router.post('/quick-init', [auth, yearContext, requireOpenYear], async (req, res) => {
     try {
-        const { classId, subjectId, examsConfig } = req.body;
+        const { classId, subjectId, examsConfig, types: requestedTypes } = req.body;
         // examsConfig: { totalMarks, duration, FA1: {date, ...}, FA2: {date, ...}, ... }
+        // requestedTypes (optional): subset of ['FA1','FA2','SA1','FA3','FA4','SA2'] to create
         const academicYearId = req.academicYearContext;
 
         // Validate teacher authorization
@@ -30,7 +31,12 @@ router.post('/quick-init', [auth, yearContext, requireOpenYear], async (req, res
             return res.status(403).json({ message: 'Not authorized to create exams for this subject' });
         }
 
-        const examTypes = ['FA1', 'FA2', 'SA1', 'FA3', 'FA4', 'SA2'];
+        const allTypes = ['FA1', 'FA2', 'SA1', 'FA3', 'FA4', 'SA2'];
+        // If caller specifies a subset, only create those (validate each item is a known type)
+        const examTypes = (Array.isArray(requestedTypes) && requestedTypes.length > 0)
+            ? requestedTypes.filter(t => allTypes.includes(t))
+            : allTypes;
+
         const examNames = {
             'FA1': 'Formative Assessment 1',
             'FA2': 'Formative Assessment 2',

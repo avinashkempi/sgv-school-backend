@@ -258,7 +258,9 @@ router.post('/standardized/bulk', auth, async (req, res) => {
 // @access  Private (Admin/Super Admin)
 router.post('/school-wide/init', auth, async (req, res) => {
     try {
-        const { type, totalMarks, date, instructions, duration, classIds } = req.body;
+        // subjectMarks: optional { [subjectId]: marks } to override per-subject total marks
+        // excludedSubjectIds: optional string[] of subject IDs to skip entirely for this exam type
+        const { type, totalMarks, date, instructions, duration, classIds, subjectMarks, excludedSubjectIds } = req.body;
 
         // Validate Admin/Super Admin
         const userRole = req.user.role;
@@ -302,7 +304,7 @@ router.post('/school-wide/init', auth, async (req, res) => {
             return res.status(404).json({ message: 'No classes found to initialize exams for.' });
         }
 
-        // 2. Fetch all existing exams of this type for this year (optimization: limit strictly to relevant classes if possible, but fetching all for year is safe)
+        // 2. Fetch all existing exams of this type for this year
         const existingExams = await Exam.find({
             academicYear: activeYear._id,
             standardizedType: type,
@@ -317,15 +319,28 @@ router.post('/school-wide/init', auth, async (req, res) => {
         const newExams = [];
         let skippedCount = 0;
 
-        // 3. Iterate in memory
+        // 3. Iterate in memory — use per-subject marks if provided
+        const globalDefault = totalMarks || 100;
+        const excludedSet = new Set((Array.isArray(excludedSubjectIds) ? excludedSubjectIds : []).map(String));
+
         for (const cls of classes) {
-            // Filter subjects for this class
             const classSubjects = allSubjects.filter(s => s.class.toString() === cls._id.toString());
 
             for (const subject of classSubjects) {
+                // Skip subjects explicitly excluded by the admin
+                if (excludedSet.has(subject._id.toString())) {
+                    skippedCount++;
+                    continue;
+                }
+
                 const key = `${cls._id.toString()}-${subject._id.toString()}`;
 
                 if (!existingExamSet.has(key)) {
+                    // Use per-subject mark if provided, else fall back to global default
+                    const subjectSpecificMarks = subjectMarks && subjectMarks[subject._id.toString()]
+                        ? Number(subjectMarks[subject._id.toString()])
+                        : globalDefault;
+
                     newExams.push({
                         name: examNames[type],
                         type: type === 'SA2' ? 'final' : (type.startsWith('SA') ? 'mid-term' : 'unit-test'),
@@ -333,7 +348,7 @@ router.post('/school-wide/init', auth, async (req, res) => {
                         standardizedType: type,
                         class: cls._id,
                         subject: subject._id,
-                        totalMarks: totalMarks || 100,
+                        totalMarks: subjectSpecificMarks,
                         date: date || Date.now(),
                         academicYear: activeYear._id,
                         createdBy: req.user.userId,
@@ -350,11 +365,7 @@ router.post('/school-wide/init', auth, async (req, res) => {
         if (newExams.length > 0) {
             await Exam.insertMany(newExams);
 
-            // Notify all affected classes
-            // Get unique class IDs from newExams
             const affectedClassIds = [...new Set(newExams.map(e => e.class.toString()))];
-
-            // Loop and notify (or optimize to bulk notify if service supported it, but loop is fine for now)
             for (const cId of affectedClassIds) {
                 await sendTargetedNotification('class', cId, {
                     title: `Exam Scheduled: ${type}`,
@@ -377,6 +388,7 @@ router.post('/school-wide/init', auth, async (req, res) => {
         res.status(500).send('Server Error');
     }
 });
+
 
 // @route   POST /api/exams
 // @desc    Create new exam (DEPRECATED - Use /api/exams/standardized instead)
