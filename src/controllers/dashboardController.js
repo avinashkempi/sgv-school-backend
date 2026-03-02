@@ -77,7 +77,10 @@ exports.getAdminStats = async (req, res) => {
             prevImportedFees,
             prevAppFees,
             prevAttendance,
-            recentComplaints
+            recentComplaints,
+            totalClasses,
+            attendanceTodayTeacher,
+            classesMarkedToday
         ] = await Promise.all([
             User.countDocuments({ role: 'student' }),
             User.countDocuments({ role: 'teacher' }),
@@ -116,19 +119,32 @@ exports.getAdminStats = async (req, res) => {
                 .limit(5)
                 .populate('student', 'name')
                 .select('title status student createdAt')
-                .lean()
+                .lean(),
+            Class.countDocuments(),
+            Attendance.find({
+                date: { $gte: today, $lt: tomorrow },
+                role: 'teacher'
+            }).lean(),
+            Attendance.distinct('class', {
+                date: { $gte: today, $lt: tomorrow },
+                role: 'student',
+                class: { $ne: null }
+            })
         ]);
 
-        const presentCount = attendanceToday.filter(a => a.status === 'present').length;
+        const presentCount = attendanceToday.filter(a => ['present', 'late', 'excused'].includes(a.status)).length;
         const absentCount = attendanceToday.filter(a => a.status === 'absent').length;
-        const attendancePercentage = attendanceToday.length > 0
-            ? ((presentCount / attendanceToday.length) * 100).toFixed(1)
+        const attendancePercentage = totalStudents > 0
+            ? ((presentCount / totalStudents) * 100).toFixed(1)
             : 0;
 
+        const teacherPresentCount = attendanceTodayTeacher.filter(a => ['present', 'late', 'excused'].includes(a.status)).length;
+        const teacherAbsentCount = attendanceTodayTeacher.filter(a => a.status === 'absent').length;
+
         // Calculate attendance trend
-        const prevPresentCount = prevAttendance.filter(a => a.status === 'present').length;
-        const prevAttendancePercentage = prevAttendance.length > 0
-            ? ((prevPresentCount / prevAttendance.length) * 100)
+        const prevPresentCount = prevAttendance.filter(a => ['present', 'late', 'excused'].includes(a.status)).length;
+        const prevAttendancePercentage = totalStudents > 0
+            ? ((prevPresentCount / totalStudents) * 100)
             : 0;
         const attendanceTrend = (attendancePercentage - prevAttendancePercentage).toFixed(1);
 
@@ -215,7 +231,22 @@ exports.getAdminStats = async (req, res) => {
                 feeCollectionTrend: parseFloat(feeCollectionTrend)
             },
             charts: {
-                attendance: { present: presentCount, absent: absentCount },
+                attendance: {
+                    student: {
+                        present: presentCount,
+                        absent: absentCount,
+                        total: totalStudents
+                    },
+                    teacher: {
+                        present: teacherPresentCount,
+                        absent: teacherAbsentCount,
+                        total: totalTeachers
+                    },
+                    classesMarked: {
+                        count: classesMarkedToday.length,
+                        total: totalClasses
+                    }
+                },
                 feeTrend
             },
             recentComplaints

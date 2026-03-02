@@ -531,4 +531,141 @@ router.get('/school-summary', [auth, yearContext], async (req, res) => {
     }
 });
 
+// @route   GET /api/attendance/classes-marked
+// @desc    Get list of class IDs that have attendance marked for a specific date
+// @access  Private
+router.get('/classes-marked', [auth, yearContext], async (req, res) => {
+    try {
+        const { date } = req.query;
+        if (!date) return res.status(400).json({ message: 'Date is required' });
+
+        const targetDate = new Date(date);
+        targetDate.setHours(0, 0, 0, 0);
+
+        const nextDay = new Date(targetDate);
+        nextDay.setDate(targetDate.getDate() + 1);
+
+        const markedClasses = await Attendance.distinct('class', {
+            date: { $gte: targetDate, $lt: nextDay },
+            role: 'student',
+            class: { $ne: null },
+            academicYear: req.academicYearContext
+        });
+
+        res.json({ success: true, markedClasses });
+    } catch (err) {
+        console.error('Classes Marked Error:', err);
+        res.status(500).json({ message: 'Server Error' });
+    }
+});
+
+// @route   GET /api/attendance/missing-tracker
+// @desc    Get missing attendance tracking data
+// @access  Private (Admin/Teacher)
+router.get('/missing-tracker', [auth, yearContext], async (req, res) => {
+    try {
+        const { startDate, endDate } = req.query;
+        if (!startDate || !endDate) return res.status(400).json({ message: 'Start and end dates are required' });
+
+        const start = new Date(startDate);
+        start.setHours(0, 0, 0, 0);
+        const end = new Date(endDate);
+        end.setHours(23, 59, 59, 999);
+
+        // Filter valid working days (assuming Monday-Saturday)
+        const daysInRange = [];
+        for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+            // Skip Sundays for standard school
+            if (d.getDay() !== 0) {
+                daysInRange.push(new Date(d));
+            }
+        }
+
+        if (req.user.role === 'teacher') {
+            // Find class where teacher is classTeacher
+            const assignedClass = await Class.findOne({ classTeacher: req.user.userId }).lean();
+            if (!assignedClass) {
+                return res.json({ success: true, missingDays: [] });
+            }
+
+            // Find days marked for this class
+            const markedDaysRaw = await Attendance.distinct('date', {
+                class: assignedClass._id,
+                role: 'student',
+                date: { $gte: start, $lte: end },
+                academicYear: req.academicYearContext
+            });
+            const markedDays = markedDaysRaw.map(d => d.toISOString().split('T')[0]);
+
+            const missingDays = daysInRange
+                .map(d => d.toISOString().split('T')[0])
+                .filter(d => !markedDays.includes(d));
+
+            // Sort missing days newest first
+            missingDays.sort((a, b) => new Date(b) - new Date(a));
+
+            return res.json({
+                success: true,
+                className: `${assignedClass.name} ${assignedClass.section}`,
+                missingDays
+            });
+        } else if (req.user.role === 'admin' || req.user.role === 'super admin') {
+            // For admin, we want to know for each day, which classes are MISSING
+            const allClasses = await Class.find({}).select('name section').lean();
+
+            const attendanceAgg = await Attendance.aggregate([
+                {
+                    $match: {
+                        role: 'student',
+                        class: { $ne: null },
+                        date: { $gte: start, $lte: end },
+                        academicYear: req.academicYearContext
+                    }
+                },
+                {
+                    $group: {
+                        _id: {
+                            date: { $dateToString: { format: "%Y-%m-%d", date: "$date" } },
+                            class: "$class"
+                        }
+                    }
+                }
+            ]);
+
+            const dateClassMap = {}; // { '2023-10-01': [classId1, classId2] }
+            attendanceAgg.forEach(item => {
+                const d = item._id.date;
+                const c = item._id.class.toString();
+                if (!dateClassMap[d]) dateClassMap[d] = [];
+                dateClassMap[d].push(c);
+            });
+
+            const missingData = [];
+            daysInRange.forEach(dObj => {
+                const dateStr = dObj.toISOString().split('T')[0];
+                const markedForDay = dateClassMap[dateStr] || [];
+                const missingClasses = allClasses.filter(c => !markedForDay.includes(c._id.toString()));
+
+                missingData.push({
+                    date: dateStr,
+                    missingCount: missingClasses.length,
+                    totalCount: allClasses.length,
+                    missingClasses: missingClasses
+                });
+            });
+
+            // Sort newest first
+            missingData.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+            return res.json({ success: true, missingData });
+        } else {
+            return res.status(403).json({ message: 'Not authorized' });
+        }
+
+    } catch (err) {
+        console.error('Missing Tracker Error:', err);
+        res.status(500).json({ message: 'Server Error' });
+    }
+});
+
 module.exports = router;
