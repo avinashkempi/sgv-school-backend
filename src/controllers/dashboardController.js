@@ -261,13 +261,16 @@ exports.getAdminStats = async (req, res) => {
 // Teacher Stats
 exports.getTeacherStats = async (req, res) => {
     try {
-        const teacherId = req.user.id;
-        const todayPrice = new Date();
+        const teacherId = req.user.userId;
+        const range = req.query.range || 'thisWeek';
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
         const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-        const currentDay = days[todayPrice.getDay()];
+        const currentDay = days[today.getDay()];
 
-        // 1. Classes Today
-        const timetables = await require('../models/Timetable').find({
+        // 1. Classes Today (from Timetable)
+        const Timetable = require('../models/Timetable');
+        const timetables = await Timetable.find({
             "schedule.day": currentDay,
             "schedule.periods.teacher": teacherId
         }).lean();
@@ -280,25 +283,57 @@ exports.getTeacherStats = async (req, res) => {
             }
         });
 
-        // 2. Low Attendance Students (< 75% attendance) & My Students Context
-        // Strategy: Check if teacher is a Class Teacher first
-        const myClass = await Class.findOne({ classTeacher: teacherId });
+        // 2. My Class (as class teacher)
+        const myClass = await Class.findOne({ classTeacher: teacherId }).lean();
+        const activeYear = await AcademicYear.findOne({ isActive: true }).lean();
+        let myStudentCount = 0;
         let lowAttendanceCount = 0;
-        let attendanceWaitData = [];
+        let className = null;
+        let classAttendance = null;
+        let attendanceTrendLabels = [];
+        let attendanceTrendData = [];
 
         if (myClass) {
+            className = `${myClass.name} ${myClass.section || ''}`.trim();
+
             // Get students of this class
             const students = await User.find({ currentClass: myClass._id, role: 'student' }).select('_id').lean();
             const studentIds = students.map(s => s._id);
+            myStudentCount = studentIds.length;
 
-            // Calculate attendance for last 30 days
-            const { startDate, endDate } = getDateRange('last30Days');
+            // 3. Today's class attendance summary
+            const todayFilter = {
+                class: myClass._id,
+                date: today,
+                role: 'student'
+            };
+            if (activeYear) todayFilter.academicYear = activeYear._id;
+
+            const todayAttendance = await Attendance.find(todayFilter).lean();
+
+            const presentCount = todayAttendance.filter(a => ['present', 'late', 'excused'].includes(a.status)).length;
+            const absentCount = todayAttendance.filter(a => a.status === 'absent').length;
+            const lateCount = todayAttendance.filter(a => a.status === 'late').length;
+            const excusedCount = todayAttendance.filter(a => a.status === 'excused').length;
+
+            classAttendance = {
+                present: presentCount,
+                absent: absentCount,
+                late: lateCount,
+                excused: excusedCount,
+                total: myStudentCount,
+                marked: todayAttendance.length,
+                date: today.toISOString().split('T')[0]
+            };
+
+            // 4. Low Attendance Students (< 75%) — last 30 days
+            const { startDate: low30Start, endDate: low30End } = getDateRange('last30Days');
 
             const attendanceStats = await Attendance.aggregate([
                 {
                     $match: {
                         user: { $in: studentIds },
-                        date: { $gte: startDate, $lte: endDate },
+                        date: { $gte: low30Start, $lte: low30End },
                         role: 'student'
                     }
                 },
@@ -306,57 +341,78 @@ exports.getTeacherStats = async (req, res) => {
                     $group: {
                         _id: "$user",
                         total: { $sum: 1 },
-                        present: { $sum: { $cond: [{ $eq: ["$status", "present"] }, 1, 0] } }
+                        present: {
+                            $sum: {
+                                $cond: [{ $in: ["$status", ["present", "late", "excused"]] }, 1, 0]
+                            }
+                        }
                     }
                 }
             ]);
 
-            // Count students with < 75% attendance
             lowAttendanceCount = attendanceStats.filter(stat => {
                 const pct = stat.total > 0 ? (stat.present / stat.total) * 100 : 0;
                 return pct < 75;
             }).length;
 
-            // Calculate Weekly Attendance Trend (Last 4 weeks or days?)
-            // Let's do last 4 days for the chart "attendanceWait" (Wait?? Maybe "Rate"?)
-            // Keeping key "attendanceWait" to match frontend expectation if any, but mapping it to last 4 days presence %
-            // Actually, let's just send some real trend data.
-            const last4DaysStats = await Attendance.aggregate([
+            // 5. Attendance Trend — Last 7 working days
+            const trendDays = [];
+            let d = new Date(today);
+            while (trendDays.length < 7) {
+                d.setDate(d.getDate() - 1);
+                if (d.getDay() !== 0) { // Skip Sunday
+                    trendDays.push(new Date(d));
+                }
+            }
+            trendDays.reverse(); // oldest first
+
+            const trendStart = trendDays[0];
+            const trendEnd = new Date(today);
+            trendEnd.setHours(23, 59, 59, 999);
+
+            const trendStats = await Attendance.aggregate([
                 {
                     $match: {
                         user: { $in: studentIds },
-                        date: { $gte: new Date(new Date().setDate(new Date().getDate() - 4)) },
+                        date: { $gte: trendStart, $lte: trendEnd },
                         role: 'student'
                     }
                 },
                 {
                     $group: {
                         _id: { $dateToString: { format: "%Y-%m-%d", date: "$date" } },
-                        presentCount: { $sum: { $cond: [{ $eq: ["$status", "present"] }, 1, 0] } },
+                        presentCount: {
+                            $sum: {
+                                $cond: [{ $in: ["$status", ["present", "late", "excused"]] }, 1, 0]
+                            }
+                        },
                         totalCount: { $sum: 1 }
                     }
                 },
                 { $sort: { _id: 1 } }
             ]);
 
-            attendanceWaitData = last4DaysStats.map(s =>
-                s.totalCount > 0 ? Math.round((s.presentCount / s.totalCount) * 100) : 0
-            );
+            const trendMap = {};
+            trendStats.forEach(s => {
+                trendMap[s._id] = s.totalCount > 0 ? Math.round((s.presentCount / s.totalCount) * 100) : 0;
+            });
+
+            trendDays.forEach(day => {
+                const key = day.toISOString().split('T')[0];
+                const label = day.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
+                attendanceTrendLabels.push(label);
+                attendanceTrendData.push(trendMap[key] || 0);
+            });
         }
 
-        // 3. Performance Charts (Avg Marks per Subject via Exams)
-        // Find exams for subjects this teacher teaches (or all exams if we can't filter easily)
-        // Better: Find marks for students in myClass (if exists) or generally all marks (too big).
-        // Let's filter by Teacher's Subjects if available in User model
+        // 6. Performance Charts (Avg Marks per Subject)
         const teacherUser = await User.findById(teacherId).populate('subjects');
         let subjectPerformanceLabels = [];
         let subjectPerformanceData = [];
 
         if (teacherUser && teacherUser.subjects && teacherUser.subjects.length > 0) {
             const subjectIds = teacherUser.subjects.map(s => s._id);
-            const subjectNames = teacherUser.subjects.map(s => s.name); // Using simple map, assuming populated
 
-            // Aggregation: Average marks per subject for recent exams
             const marksStats = await Marks.aggregate([
                 {
                     $lookup: {
@@ -375,17 +431,10 @@ exports.getTeacherStats = async (req, res) => {
                 {
                     $group: {
                         _id: '$examDetails.subject',
-                        avgMarks: { $avg: '$marksObtained' } // Assuming max marks vary, this is raw avg. Ideally percentage.
-                        // To get percentage, we need maxMarks from Exam. 
-                        // Let's assume marksObtained is what we want for now or try to project percentage
+                        avgMarks: { $avg: '$marksObtained' }
                     }
                 }
             ]);
-
-            // Map results to labels
-            // We need to map back ID to Name. 
-            // marksStats: [{ _id: SubjectID, avgMarks: 75 }]
-            // We can iterate teacherUser.subjects
 
             teacherUser.subjects.forEach(sub => {
                 const stat = marksStats.find(m => m._id.toString() === sub._id.toString());
@@ -395,63 +444,63 @@ exports.getTeacherStats = async (req, res) => {
                 }
             });
 
-        } else {
-            // Fallback if no specific subjects assigned, maybe show Class performance if Class Teacher?
-            if (myClass) {
-                // Show avg performance of my class across all subjects
-                const students = await User.find({ currentClass: myClass._id, role: 'student' }).select('_id');
-                const studentIds = students.map(s => s._id);
+        } else if (myClass) {
+            // Fallback: Show class performance across subjects
+            const students = await User.find({ currentClass: myClass._id, role: 'student' }).select('_id');
+            const studentIds = students.map(s => s._id);
 
-                const classStats = await Marks.aggregate([
-                    { $match: { student: { $in: studentIds } } },
-                    {
-                        $lookup: {
-                            from: 'exams',
-                            localField: 'exam',
-                            foreignField: '_id',
-                            as: 'examDetails'
-                        }
-                    },
-                    { $unwind: '$examDetails' },
-                    {
-                        $lookup: {
-                            from: 'subjects',
-                            localField: 'examDetails.subject',
-                            foreignField: '_id',
-                            as: 'subjectDetails'
-                        }
-                    },
-                    { $unwind: '$subjectDetails' },
-                    {
-                        $group: {
-                            _id: '$subjectDetails.name',
-                            avgMarks: { $avg: '$marksObtained' }
-                        }
-                    },
-                    { $limit: 5 }
-                ]);
+            const classStats = await Marks.aggregate([
+                { $match: { student: { $in: studentIds } } },
+                {
+                    $lookup: {
+                        from: 'exams',
+                        localField: 'exam',
+                        foreignField: '_id',
+                        as: 'examDetails'
+                    }
+                },
+                { $unwind: '$examDetails' },
+                {
+                    $lookup: {
+                        from: 'subjects',
+                        localField: 'examDetails.subject',
+                        foreignField: '_id',
+                        as: 'subjectDetails'
+                    }
+                },
+                { $unwind: '$subjectDetails' },
+                {
+                    $group: {
+                        _id: '$subjectDetails.name',
+                        avgMarks: { $avg: '$marksObtained' }
+                    }
+                },
+                { $limit: 5 }
+            ]);
 
-                classStats.forEach(stat => {
-                    subjectPerformanceLabels.push(stat._id);
-                    subjectPerformanceData.push(Math.round(stat.avgMarks));
-                });
-            }
+            classStats.forEach(stat => {
+                subjectPerformanceLabels.push(stat._id);
+                subjectPerformanceData.push(Math.round(stat.avgMarks));
+            });
         }
 
-
         res.json({
-            // message: "Real teacher stats",
             overview: {
                 classesToday: classesTodayCount,
-                // pendingHomework: 0, // Removed
-                lowAttendanceCount: lowAttendanceCount
+                myStudents: myStudentCount,
+                lowAttendanceCount: lowAttendanceCount,
+                className: className
             },
+            classAttendance: classAttendance,
             charts: {
                 performance: {
-                    labels: subjectPerformanceLabels.length > 0 ? subjectPerformanceLabels : ['No Data'],
-                    data: subjectPerformanceData.length > 0 ? subjectPerformanceData : [0]
+                    labels: subjectPerformanceLabels.length > 0 ? subjectPerformanceLabels : [],
+                    data: subjectPerformanceData.length > 0 ? subjectPerformanceData : []
                 },
-                attendanceWait: attendanceWaitData.length > 0 ? attendanceWaitData : [0, 0, 0, 0] // Weekly trend
+                attendanceTrend: {
+                    labels: attendanceTrendLabels,
+                    data: attendanceTrendData
+                }
             }
         });
 
@@ -464,7 +513,7 @@ exports.getTeacherStats = async (req, res) => {
 // Student Stats
 exports.getStudentStats = async (req, res) => {
     try {
-        const studentId = req.user.id;
+        const studentId = req.user.userId;
 
         const activeYear = await AcademicYear.findOne({ isActive: true }).lean();
 

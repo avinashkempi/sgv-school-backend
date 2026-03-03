@@ -4,6 +4,7 @@ const LeaveRequest = require('../models/LeaveRequest');
 const User = require('../models/User');
 const Class = require('../models/Class');
 const Attendance = require('../models/Attendance');
+const AcademicYear = require('../models/AcademicYear');
 const { authenticateToken, checkRole } = require('../middleware/auth');
 const notificationController = require('../controllers/notificationController');
 
@@ -217,33 +218,49 @@ router.put('/:id/action', authenticateToken, checkRole(['teacher', 'admin', 'sup
 
         // Auto-mark attendance as absent if approved
         if (status === 'approved' && previousStatus !== 'approved') {
-            // Loop through dates
-            for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
-                const dateToMark = new Date(d);
-                dateToMark.setHours(0, 0, 0, 0);
+            // Get active academic year for attendance records
+            const activeYear = await AcademicYear.findOne({ isActive: true });
+            if (!activeYear) {
+                console.error('No active academic year found for leave attendance marking');
+            } else {
+                // Loop through dates
+                for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
+                    const dateToMark = new Date(d);
+                    dateToMark.setHours(0, 0, 0, 0);
 
-                const filter = {
-                    user: leaveRequest.applicant,
-                    date: dateToMark
-                };
+                    // Skip Sundays
+                    if (dateToMark.getDay() === 0) continue;
 
-                const existingAttendance = await Attendance.findOne(filter);
-
-                if (existingAttendance) {
-                    existingAttendance.status = 'absent';
-                    existingAttendance.remarks = 'Leave Approved';
-                    existingAttendance.markedBy = req.user.userId;
-                    await existingAttendance.save();
-                } else {
-                    await Attendance.create({
-                        user: leaveRequest.applicant,
-                        role: leaveRequest.applicantRole,
-                        class: leaveRequest.class, // Can be null for teachers/admins
+                    const filter = {
+                        user: leaveRequest.applicant._id,
                         date: dateToMark,
-                        status: 'absent',
-                        markedBy: req.user.userId,
-                        remarks: 'Leave Approved'
-                    });
+                        academicYear: activeYear._id
+                    };
+
+                    // For students, also filter by class
+                    if (leaveRequest.class) {
+                        filter.class = leaveRequest.class;
+                    }
+
+                    const existingAttendance = await Attendance.findOne(filter);
+
+                    if (existingAttendance) {
+                        existingAttendance.status = 'absent';
+                        existingAttendance.remarks = 'On Leave (Approved)';
+                        existingAttendance.markedBy = req.user.userId;
+                        await existingAttendance.save();
+                    } else {
+                        await Attendance.create({
+                            user: leaveRequest.applicant._id,
+                            role: leaveRequest.applicantRole,
+                            class: leaveRequest.class || undefined,
+                            date: dateToMark,
+                            status: 'absent',
+                            markedBy: req.user.userId,
+                            remarks: 'On Leave (Approved)',
+                            academicYear: activeYear._id
+                        });
+                    }
                 }
             }
         } else if (status === 'rejected' && previousStatus === 'approved') {
@@ -254,11 +271,14 @@ router.put('/:id/action', authenticateToken, checkRole(['teacher', 'admin', 'sup
                 const dateToMark = new Date(d);
                 dateToMark.setHours(0, 0, 0, 0);
 
-                await Attendance.deleteOne({
+                const deleteFilter = {
                     user: leaveRequest.applicant._id,
                     date: dateToMark,
-                    remarks: 'Leave Approved'
-                });
+                    remarks: 'On Leave (Approved)'
+                };
+                if (activeYear) deleteFilter.academicYear = activeYear._id;
+
+                await Attendance.deleteOne(deleteFilter);
             }
         }
 

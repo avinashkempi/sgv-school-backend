@@ -6,6 +6,7 @@ const Attendance = require('../models/Attendance');
 const User = require('../models/User');
 const Class = require('../models/Class');
 const Subject = require('../models/Subject');
+const LeaveRequest = require('../models/LeaveRequest');
 
 // @route   POST /api/attendance/mark
 // @desc    Mark attendance for students (bulk)
@@ -78,7 +79,6 @@ router.post('/mark', [auth, yearContext, requireOpenYear], async (req, res) => {
             }
         }
 
-        res.json({ message: 'Attendance marked successfully' });
         res.json({ message: 'Attendance marked successfully' });
     } catch (err) {
         console.error('Attendance Mark Error:', err);
@@ -168,17 +168,33 @@ router.get('/class/:classId/date/:date', [auth, yearContext], async (req, res) =
             .select('name email')
             .sort({ name: 1 });
 
+        // Check for approved leaves overlapping this date
+        const targetDate = new Date(date);
+        targetDate.setHours(0, 0, 0, 0);
+        const approvedLeaves = await LeaveRequest.find({
+            class: classId,
+            applicantRole: 'student',
+            status: 'approved',
+            startDate: { $lte: targetDate },
+            endDate: { $gte: targetDate }
+        }).select('applicant reason leaveType');
+
+        const onLeaveStudentIds = new Set(approvedLeaves.map(l => l.applicant.toString()));
+
         const result = students.map(student => {
             const attendanceRecord = attendance.find(a => a.user._id.toString() === student._id.toString());
+            const leaveRecord = approvedLeaves.find(l => l.applicant.toString() === student._id.toString());
             return {
-                student: { // Keep key as 'student' for frontend compatibility
+                student: {
                     _id: student._id,
                     name: student.name,
                     email: student.email
                 },
                 status: attendanceRecord ? attendanceRecord.status : null,
                 remarks: attendanceRecord ? attendanceRecord.remarks : '',
-                attendanceId: attendanceRecord ? attendanceRecord._id : null
+                attendanceId: attendanceRecord ? attendanceRecord._id : null,
+                onLeave: onLeaveStudentIds.has(student._id.toString()),
+                leaveReason: leaveRecord ? leaveRecord.reason : null
             };
         });
 
