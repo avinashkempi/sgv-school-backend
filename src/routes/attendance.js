@@ -1,4 +1,5 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const router = express.Router();
 const { authenticateToken: auth } = require('../middleware/auth');
 const { yearContext, requireOpenYear } = require('../middleware/yearContext');
@@ -589,8 +590,14 @@ router.get('/missing-tracker', [auth, yearContext], async (req, res) => {
         end.setHours(23, 59, 59, 999);
 
         // Filter valid working days (assuming Monday-Saturday)
+        // Exclude today since attendance may not be taken yet
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const effectiveEnd = end >= today ? new Date(today.getTime() - 86400000) : end;
+        effectiveEnd.setHours(23, 59, 59, 999);
+
         const daysInRange = [];
-        for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+        for (let d = new Date(start); d <= effectiveEnd; d.setDate(d.getDate() + 1)) {
             // Skip Sundays for standard school
             if (d.getDay() !== 0) {
                 daysInRange.push(new Date(d));
@@ -635,8 +642,8 @@ router.get('/missing-tracker', [auth, yearContext], async (req, res) => {
                     $match: {
                         role: 'student',
                         class: { $ne: null },
-                        date: { $gte: start, $lte: end },
-                        academicYear: req.academicYearContext
+                        date: { $gte: start, $lte: effectiveEnd },
+                        academicYear: new mongoose.Types.ObjectId(req.academicYearContext)
                     }
                 },
                 {
