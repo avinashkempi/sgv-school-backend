@@ -12,7 +12,7 @@ const AcademicYear = require('../models/AcademicYear');
 // Helper to calculate date range
 const getDateRange = (range) => {
     const now = new Date();
-    let startDate, endDate = now;
+    let startDate, endDate = new Date(now);
 
     switch (range) {
         case 'today':
@@ -21,14 +21,16 @@ const getDateRange = (range) => {
             endDate = new Date(now);
             endDate.setHours(23, 59, 59, 999);
             break;
-        case 'thisWeek':
-            const startOfWeek = now.getDate() - now.getDay();
-            startDate = new Date(now.setDate(startOfWeek));
-            startDate.setHours(0, 0, 0, 0);
+        case 'thisWeek': {
+            const startOfWeek = new Date(now);
+            startOfWeek.setDate(now.getDate() - now.getDay());
+            startOfWeek.setHours(0, 0, 0, 0);
+            startDate = startOfWeek;
             break;
+        }
         case 'last30Days':
             startDate = new Date(now);
-            startDate.setDate(startDate.getDate() - 30);
+            startDate.setDate(now.getDate() - 30);
             break;
         case 'thisYear':
             startDate = new Date(now.getFullYear(), 0, 1);
@@ -38,7 +40,7 @@ const getDateRange = (range) => {
             endDate = new Date(now.getFullYear() - 1, 11, 31);
             break;
         case 'allTime':
-            startDate = new Date(2020, 0, 1); // Or your school's founding date
+            startDate = new Date(2020, 0, 1);
             break;
         case 'thisMonth':
         default:
@@ -286,6 +288,17 @@ exports.getTeacherStats = async (req, res) => {
         // 2. My Class (as class teacher)
         const myClass = await Class.findOne({ classTeacher: teacherId }).lean();
         const activeYear = await AcademicYear.findOne({ isActive: true }).lean();
+
+        // Count total distinct classes teacher teaches (from timetable)
+        const allTeacherTimetables = await Timetable.find({
+            "schedule.periods.teacher": teacherId
+        }).populate('class', 'name section').lean();
+        const teacherClassIds = new Set();
+        allTeacherTimetables.forEach(tt => {
+            if (tt.class) teacherClassIds.add(tt.class._id.toString());
+        });
+        const totalClassesTaught = teacherClassIds.size;
+
         let myStudentCount = 0;
         let lowAttendanceCount = 0;
         let className = null;
@@ -329,13 +342,16 @@ exports.getTeacherStats = async (req, res) => {
             // 4. Low Attendance Students (< 75%) — last 30 days
             const { startDate: low30Start, endDate: low30End } = getDateRange('last30Days');
 
+            const lowAttFilter = {
+                user: { $in: studentIds },
+                date: { $gte: low30Start, $lte: low30End },
+                role: 'student'
+            };
+            if (activeYear) lowAttFilter.academicYear = activeYear._id;
+
             const attendanceStats = await Attendance.aggregate([
                 {
-                    $match: {
-                        user: { $in: studentIds },
-                        date: { $gte: low30Start, $lte: low30End },
-                        role: 'student'
-                    }
+                    $match: lowAttFilter
                 },
                 {
                     $group: {
@@ -370,13 +386,16 @@ exports.getTeacherStats = async (req, res) => {
             const trendEnd = new Date(today);
             trendEnd.setHours(23, 59, 59, 999);
 
+            const trendFilter = {
+                user: { $in: studentIds },
+                date: { $gte: trendStart, $lte: trendEnd },
+                role: 'student'
+            };
+            if (activeYear) trendFilter.academicYear = activeYear._id;
+
             const trendStats = await Attendance.aggregate([
                 {
-                    $match: {
-                        user: { $in: studentIds },
-                        date: { $gte: trendStart, $lte: trendEnd },
-                        role: 'student'
-                    }
+                    $match: trendFilter
                 },
                 {
                     $group: {
@@ -487,6 +506,7 @@ exports.getTeacherStats = async (req, res) => {
         res.json({
             overview: {
                 classesToday: classesTodayCount,
+                totalClassesTaught: totalClassesTaught,
                 myStudents: myStudentCount,
                 lowAttendanceCount: lowAttendanceCount,
                 className: className

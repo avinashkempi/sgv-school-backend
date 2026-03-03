@@ -164,6 +164,5 @@ userSchema.index({ currentClass: 1 });
 userSchema.index({ academicYear: 1 });
 userSchema.index({ name: 1 });
 userSchema.index({ email: 1 });
-userSchema.index({ phone: 1 });
 
 module.exports = mongoose.model('User', userSchema);

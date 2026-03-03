@@ -622,6 +622,7 @@ router.get('/missing-tracker', [auth, yearContext], async (req, res) => {
 
             return res.json({
                 success: true,
+                classId: assignedClass._id,
                 className: `${assignedClass.name} ${assignedClass.section}`,
                 missingDays
             });
