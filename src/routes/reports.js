@@ -196,7 +196,8 @@ router.get('/student/:studentId', auth, async (req, res) => {
 
         // Sort descending and find rank
         classmatePercentages.sort((a, b) => b.percentage - a.percentage);
-        const classRank = classmatePercentages.findIndex(c => c.studentId === studentId) + 1;
+        const myPct = classmatePercentages.find(c => c.studentId === studentId)?.percentage;
+        const classRank = myPct !== undefined ? classmatePercentages.findIndex(c => c.percentage === myPct) + 1 : 0;
         const totalInClass = classmatePercentages.length;
 
         res.json({
@@ -384,14 +385,12 @@ router.get('/class-ranking/:classId', auth, async (req, res) => {
         rankings.sort((a, b) => b.percentage - a.percentage);
 
         // Assign ranks (handle ties)
-        let currentRank = 1;
         rankings.forEach((r, i) => {
             if (i > 0 && r.percentage === rankings[i - 1].percentage) {
                 r.rank = rankings[i - 1].rank; // Same rank for ties
             } else {
-                r.rank = currentRank;
+                r.rank = i + 1;
             }
-            currentRank = i + 1 + 1; // Next potential rank
         });
 
         res.json({

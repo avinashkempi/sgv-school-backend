@@ -137,6 +137,88 @@ router.post('/bulk', auth, async (req, res) => {
     }
 });
 
+// @route   POST /api/marks/grid-update
+// @desc    Update marks from grid view
+// @access  Private (Teacher)
+router.post('/grid-update', auth, async (req, res) => {
+    try {
+        const { examId, gridData } = req.body;
+        // gridData = [{ studentId, marksObtained, remarks? }, ...]
+
+        const exam = await Exam.findById(examId);
+        if (!exam) {
+            return res.status(404).json({ message: 'Exam not found' });
+        }
+
+        // Validate teacher authorization
+        const Subject = require('../models/Subject');
+        const subject = await Subject.findById(exam.subject);
+
+        const userRole = req.user.role;
+        const isAdmin = userRole === 'admin' || userRole === 'super admin';
+
+        if (!isAdmin && subject && !subject.teachers.includes(req.user.userId)) {
+            return res.status(403).json({ message: 'Not authorized to enter marks for this exam' });
+        }
+
+        let updated = 0;
+        let created = 0;
+        let errors = [];
+
+        for (const data of gridData) {
+            const { studentId, marksObtained, remarks } = data;
+
+            // Validate marks
+            if (marksObtained < 0 || marksObtained > exam.totalMarks) {
+                errors.push({
+                    studentId,
+                    error: `Marks must be between 0 and ${exam.totalMarks}`
+                });
+                continue;
+            }
+
+            const percentage = ((marksObtained / exam.totalMarks) * 100).toFixed(2);
+            const grade = await calculateGrade(parseFloat(percentage), examId);
+
+            try {
+                // Check if marks already exist
+                let marks = await Marks.findOne({ student: studentId, exam: examId });
+
+                if (marks) {
+                    // Update existing marks
+                    marks.marksObtained = marksObtained;
+                    marks.percentage = parseFloat(percentage);
+                    marks.grade = grade;
+                    marks.remarks = remarks || '';
+                    marks.enteredBy = req.user.userId;
+                    await marks.save();
+                    updated++;
+                } else {
+                    // Create new marks entry
+                    marks = new Marks({
+                        student: studentId,
+                        exam: examId,
+                        marksObtained,
+                        percentage: parseFloat(percentage),
+                        grade,
+                        remarks: remarks || '',
+                        enteredBy: req.user.userId
+                    });
+                    await marks.save();
+                    created++;
+                }
+            } catch (error) {
+                errors.push({ studentId, error: error.message });
+            }
+        }
+
+        res.json({ message: 'Grid marks update completed', updated, created, errors });
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).send('Server Error');
+    }
+});
+
 // @route   POST /api/marks
 // @desc    Enter/Update marks for a single student
 // @access  Private (Teacher)
@@ -208,6 +290,38 @@ router.post('/', auth, async (req, res) => {
             target: 'user',
             targetId: studentId,
             metadata: { examId: exam._id, marksId: marks._id }
+        });
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).send('Server Error');
+    }
+});
+
+// @route   GET /api/marks/exam/:examId/status
+// @desc    Get marks entry status for an exam
+// @access  Private (Teacher)
+router.get('/exam/:examId/status', auth, async (req, res) => {
+    try {
+        const examId = req.params.examId;
+        const exam = await Exam.findById(examId);
+
+        if (!exam) {
+            return res.status(404).json({ message: 'Exam not found' });
+        }
+
+        // Get total students in the class
+        const studentsCount = await User.countDocuments({
+            role: 'student',
+            currentClass: exam.class
+        });
+
+        // Get entered marks count
+        const marksEntered = await Marks.countDocuments({ exam: examId });
+
+        res.json({
+            totalStudents: studentsCount,
+            marksEntered: marksEntered,
+            pending: studentsCount - marksEntered
         });
     } catch (err) {
         console.error(err.message);

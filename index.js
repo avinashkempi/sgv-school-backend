@@ -55,6 +55,7 @@ app.use('/api/academic-year', require('./src/routes/academicYear'));
 app.use('/api/classes', require('./src/routes/classes'));
 app.use('/api/teachers', require('./src/routes/teachers'));
 app.use('/api/attendance', require('./src/routes/attendance'));
+app.use('/api/exams', require('./src/routes/examsNew')); // Mount examsNew before exams to prevent /:id shadowing
 app.use('/api/exams', require('./src/routes/exams'));
 app.use('/api/marks', require('./src/routes/marks'));
 app.use('/api/timetable', require('./src/routes/timetable'));
