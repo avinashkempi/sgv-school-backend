@@ -6,6 +6,7 @@ const Exam = require('../models/Exam');
 const Marks = require('../models/Marks');
 const User = require('../models/User');
 const Subject = require('../models/Subject');
+const Class = require('../models/Class');
 const { sendTargetedNotification } = require('../services/notificationService');
 
 // @route   POST /api/exams/quick-init
