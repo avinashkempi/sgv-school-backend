@@ -563,4 +563,183 @@ router.delete('/:id', auth, async (req, res) => {
     }
 });
 
+// @route   GET /api/marks/class/:classId/summary
+// @desc    Class-wise marks summary across all exams
+// @access  Private (Teacher/Admin)
+router.get('/class/:classId/summary', auth, async (req, res) => {
+    try {
+        // Get all exams for this class
+        const exams = await Exam.find({
+            class: req.params.classId,
+            isStandardized: true
+        }).populate('subject', 'name').lean();
+
+        // Get all students in class
+        const students = await User.find({
+            currentClass: req.params.classId,
+            role: 'student'
+        }).select('name email').lean();
+
+        // Get all marks for these exams
+        const examIds = exams.map(e => e._id);
+        const allMarks = await Marks.find({
+            exam: { $in: examIds }
+        }).populate('student', 'name').lean();
+
+        // Group by exam type
+        const examTypes = ['FA1', 'FA2', 'SA1', 'FA3', 'FA4', 'SA2'];
+        const summary = examTypes.map(type => {
+            const typeExams = exams.filter(e => e.standardizedType === type);
+            const typeExamIds = typeExams.map(e => e._id.toString());
+            const typeMarks = allMarks.filter(m => typeExamIds.includes(m.exam.toString()));
+
+            let totalObtained = 0;
+            let totalMax = 0;
+
+            typeMarks.forEach(mark => {
+                const exam = typeExams.find(e => e._id.toString() === mark.exam.toString());
+                if (exam) {
+                    totalObtained += mark.marksObtained;
+                    totalMax += exam.totalMarks;
+                }
+            });
+
+            const avgPercentage = totalMax > 0 ? ((totalObtained / totalMax) * 100).toFixed(2) : 0;
+
+            return {
+                examType: type,
+                examsCount: typeExams.length,
+                marksEntered: typeMarks.length,
+                expectedMarks: typeExams.length * students.length,
+                avgPercentage: parseFloat(avgPercentage)
+            };
+        });
+
+        res.json({
+            classId: req.params.classId,
+            totalStudents: students.length,
+            totalExams: exams.length,
+            summary
+        });
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).send('Server Error');
+    }
+});
+
+// @route   GET /api/marks/analytics/class/:classId
+// @desc    Detailed class analytics with student rankings
+// @access  Private (Teacher/Admin)
+router.get('/analytics/class/:classId', auth, async (req, res) => {
+    try {
+        const { examType } = req.query;
+
+        // Build exam query
+        let examQuery = {
+            class: req.params.classId,
+            isStandardized: true
+        };
+
+        if (examType) {
+            examQuery.standardizedType = examType;
+        }
+
+        // Get exams
+        const exams = await Exam.find(examQuery).populate('subject', 'name').lean();
+
+        // Get all students
+        const students = await User.find({
+            currentClass: req.params.classId,
+            role: 'student'
+        }).select('name email').lean();
+
+        // Get all marks
+        const examIds = exams.map(e => e._id);
+        const allMarks = await Marks.find({
+            exam: { $in: examIds }
+        }).populate('student', 'name').lean();
+
+        // Calculate student rankings
+        const studentPerformance = students.map(student => {
+            const studentMarks = allMarks.filter(
+                m => m.student._id.toString() === student._id.toString()
+            );
+
+            let totalObtained = 0;
+            let totalMax = 0;
+
+            studentMarks.forEach(mark => {
+                const exam = exams.find(e => e._id.toString() === mark.exam.toString());
+                if (exam) {
+                    totalObtained += mark.marksObtained;
+                    totalMax += exam.totalMarks;
+                }
+            });
+
+            const percentage = totalMax > 0 ? ((totalObtained / totalMax) * 100).toFixed(2) : 0;
+
+            return {
+                studentId: student._id,
+                studentName: student.name,
+                email: student.email,
+                totalObtained,
+                totalMax,
+                percentage: parseFloat(percentage),
+                grade: getDefaultGrade(parseFloat(percentage)),
+                examsAttempted: studentMarks.length
+            };
+        });
+
+        // Sort by percentage descending
+        studentPerformance.sort((a, b) => b.percentage - a.percentage);
+
+        // Add ranks
+        studentPerformance.forEach((student, index) => {
+            student.rank = index + 1;
+        });
+
+        // Grade distribution
+        const gradeDistribution = {
+            'A+': 0,
+            'A': 0,
+            'B+': 0,
+            'B': 0,
+            'C': 0,
+            'D': 0,
+            'F': 0
+        };
+
+        studentPerformance.forEach(student => {
+            if (gradeDistribution[student.grade] !== undefined) {
+                gradeDistribution[student.grade]++;
+            }
+        });
+
+        // Calculate class statistics
+        const totalPercentage = studentPerformance.reduce((sum, s) => sum + s.percentage, 0);
+        const avgPercentage = students.length > 0 ? (totalPercentage / students.length).toFixed(2) : 0;
+        const highest = studentPerformance.length > 0 ? studentPerformance[0].percentage : 0;
+        const lowest = studentPerformance.length > 0 ? studentPerformance[studentPerformance.length - 1].percentage : 0;
+
+        res.json({
+            classId: req.params.classId,
+            totalStudents: students.length,
+            totalExams: exams.length,
+            statistics: {
+                average: parseFloat(avgPercentage),
+                highest,
+                lowest,
+                median: studentPerformance.length > 0
+                    ? studentPerformance[Math.floor(studentPerformance.length / 2)].percentage
+                    : 0
+            },
+            gradeDistribution,
+            studentRankings: studentPerformance
+        });
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).send('Server Error');
+    }
+});
+
 module.exports = router;
