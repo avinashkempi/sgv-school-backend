@@ -46,7 +46,7 @@ router.post('/bulk', auth, async (req, res) => {
         const { examId, marksData } = req.body;
         // marksData = [{ studentId, marksObtained, remarks? }, ...]
 
-        const exam = await Exam.findById(examId);
+        const exam = await Exam.findById(examId).populate('class', 'classTeacher');
         if (!exam) {
             return res.status(404).json({ message: 'Exam not found' });
         }
@@ -57,8 +57,10 @@ router.post('/bulk', auth, async (req, res) => {
 
         const userRole = req.user.role;
         const isAdmin = userRole === 'admin' || userRole === 'super admin';
+        const isSubjectTeacher = subject && subject.teachers.includes(req.user.userId);
+        const isClassTeacher = exam.class && exam.class.classTeacher && exam.class.classTeacher.toString() === req.user.userId.toString();
 
-        if (!isAdmin && !subject.teachers.includes(req.user.userId)) {
+        if (!isAdmin && !isSubjectTeacher && !isClassTeacher) {
             return res.status(403).json({ message: 'Not authorized to enter marks for this exam' });
         }
 
@@ -145,7 +147,7 @@ router.post('/grid-update', auth, async (req, res) => {
         const { examId, gridData } = req.body;
         // gridData = [{ studentId, marksObtained, remarks? }, ...]
 
-        const exam = await Exam.findById(examId);
+        const exam = await Exam.findById(examId).populate('class', 'classTeacher');
         if (!exam) {
             return res.status(404).json({ message: 'Exam not found' });
         }
@@ -156,8 +158,10 @@ router.post('/grid-update', auth, async (req, res) => {
 
         const userRole = req.user.role;
         const isAdmin = userRole === 'admin' || userRole === 'super admin';
+        const isSubjectTeacher = subject && subject.teachers.includes(req.user.userId);
+        const isClassTeacher = exam.class && exam.class.classTeacher && exam.class.classTeacher.toString() === req.user.userId.toString();
 
-        if (!isAdmin && subject && !subject.teachers.includes(req.user.userId)) {
+        if (!isAdmin && !isSubjectTeacher && !isClassTeacher) {
             return res.status(403).json({ message: 'Not authorized to enter marks for this exam' });
         }
 
@@ -226,7 +230,7 @@ router.post('/', auth, async (req, res) => {
     try {
         const { examId, studentId, marksObtained, remarks } = req.body;
 
-        const exam = await Exam.findById(examId);
+        const exam = await Exam.findById(examId).populate('class', 'classTeacher');
         if (!exam) {
             return res.status(404).json({ message: 'Exam not found' });
         }
@@ -242,8 +246,10 @@ router.post('/', auth, async (req, res) => {
 
         const userRole = req.user.role;
         const isAdmin = userRole === 'admin' || userRole === 'super admin';
+        const isSubjectTeacher = subject && subject.teachers.includes(req.user.userId);
+        const isClassTeacher = exam.class && exam.class.classTeacher && exam.class.classTeacher.toString() === req.user.userId.toString();
 
-        if (!isAdmin && !subject.teachers.includes(req.user.userId)) {
+        if (!isAdmin && !isSubjectTeacher && !isClassTeacher) {
             return res.status(403).json({ message: 'Not authorized' });
         }
 
