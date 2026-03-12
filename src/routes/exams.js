@@ -296,7 +296,7 @@ router.post('/school-wide/init', auth, async (req, res) => {
         }
 
         const [classes, allSubjects] = await Promise.all([
-            _Class.find(classQuery).lean(),
+            Class.find(classQuery).lean(),
             Subject.find().lean()
         ]);
 
