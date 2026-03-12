@@ -111,14 +111,46 @@ router.get('/teacher/dashboard', [auth, yearContext], async (req, res) => {
     try {
         const academicYearId = req.academicYearContext;
 
-        // Fetch user to get role
-
-        // Find all subjects taught by this teacher
-        const subjects = await Subject.find({
+        // Find all subjects taught by this teacher (as subject teacher)
+        const subjectTeacherSubjects = await Subject.find({
             teachers: req.user.userId
         })
             .populate('class', 'name section')
             .lean();
+
+        // Find all classes where this teacher is the class teacher
+        const classTeacherClasses = await Class.find({
+            classTeacher: req.user.userId,
+            academicYear: academicYearId
+        })
+            .lean();
+
+        // Get all subjects for the classes where teacher is the class teacher
+        const classIds = classTeacherClasses.map(c => c._id);
+        const classTeacherSubjects = await Subject.find({
+            class: { $in: classIds }
+        })
+            .populate('class', 'name section')
+            .lean();
+
+        // Combine both lists and remove duplicates
+        const subjectMap = new Map();
+        
+        // Add subject teacher subjects
+        subjectTeacherSubjects.forEach(subject => {
+            const key = `${subject._id.toString()}`;
+            subjectMap.set(key, subject);
+        });
+
+        // Add class teacher subjects (won't duplicate if already subject teacher)
+        classTeacherSubjects.forEach(subject => {
+            const key = `${subject._id.toString()}`;
+            if (!subjectMap.has(key)) {
+                subjectMap.set(key, subject);
+            }
+        });
+
+        const subjects = Array.from(subjectMap.values());
 
         const dashboard = [];
 
