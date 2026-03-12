@@ -20,6 +20,16 @@ router.get('/unread-count', auth, notificationController.getUnreadCount);
 // @access  Private
 router.get('/preferences', auth, notificationController.getPreferences);
 
+// @route   PUT /api/notifications/mark-all-read
+// @desc    Mark all notifications as read
+// @access  Private
+router.put('/mark-all-read', auth, notificationController.markAllAsRead);
+
+// @route   PUT /api/notifications/preferences
+// @desc    Update notification preferences
+// @access  Private
+router.put('/preferences', auth, notificationController.updatePreferences);
+
 // @route   PUT /api/notifications/:id/read
 // @desc    Mark notification as read/unread
 // @access  Private
@@ -35,19 +45,9 @@ router.put('/:id/archive', auth, notificationController.archiveNotification);
 // @access  Private (Admin)
 router.delete('/:id', auth, adminOnly, notificationController.deleteNotification);
 
-// @route   PUT /api/notifications/mark-all-read
-// @desc    Mark all notifications as read
-// @access  Private
-router.put('/mark-all-read', auth, notificationController.markAllAsRead);
-
 // @route   POST /api/notifications/send
 // @desc    Send a notification (Admin only)
 // @access  Private (Admin)
 router.post('/send', auth, adminOnly, notificationController.sendNotification);
-
-// @route   PUT /api/notifications/preferences
-// @desc    Update notification preferences
-// @access  Private
-router.put('/preferences', auth, notificationController.updatePreferences);
 
 module.exports = router;

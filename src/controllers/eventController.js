@@ -29,7 +29,11 @@ const createEvent = async (req, res) => {
 
     // Immediately create a notification for the new event
     const notification = new Notification({
+      title: 'New Event: ' + title,
       message: `New event added: ${title} on ${new Date(date).toDateString()}`,
+      type: 'Event',
+      category: 'event',
+      targetRole: 'all',
       eventId: event._id
     });
     await notification.save();
