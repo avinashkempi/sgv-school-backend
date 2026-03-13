@@ -14,30 +14,20 @@ const registerFCMToken = async (req, res) => {
             });
         }
 
-        // Check if token already exists
-        let fcmToken = await FCMToken.findOne({ token });
-
-        if (fcmToken) {
-            // Update existing token
-            fcmToken.userId = userId;
-            fcmToken.platform = platform;
-            fcmToken.isAuthenticated = isAuthenticated || false;
-            fcmToken.updatedAt = new Date();
-            await fcmToken.save();
-
-
-        } else {
-            // Create new token
-            fcmToken = new FCMToken({
-                userId,
-                token,
-                platform,
-                isAuthenticated: isAuthenticated || false,
-            });
-            await fcmToken.save();
-
-
-        }
+        // Atomic upsert — avoids duplicate key errors from race conditions
+        const fcmToken = await FCMToken.findOneAndUpdate(
+            { token },
+            {
+                $set: {
+                    userId,
+                    platform,
+                    isAuthenticated: isAuthenticated || false,
+                    updatedAt: new Date(),
+                },
+                $setOnInsert: { createdAt: new Date() },
+            },
+            { upsert: true, new: true }
+        );
 
         res.status(200).json({
             success: true,

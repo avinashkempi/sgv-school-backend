@@ -122,7 +122,7 @@ exports.getUnreadCount = async (req, res) => {
  */
 exports.markAsRead = async (req, res) => {
     try {
-        const { isRead = true } = req.body;
+        const { isRead = true } = req.body || {};
         const notification = await Notification.findById(req.params.id);
 
         if (!notification) {
