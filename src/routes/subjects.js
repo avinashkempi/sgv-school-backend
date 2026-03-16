@@ -99,6 +99,7 @@ router.delete('/:id', [auth, checkRole(['admin', 'super admin'])], async (req, r
 // @route   GET /api/subjects/:id/usage
 // @desc    Get usage details for a global subject
 // @access  Admin/Super Admin
+// NOTE: This MUST come before GET /:id to ensure proper route matching
 router.get('/:id/usage', [auth, checkRole(['admin', 'super admin'])], async (req, res) => {
     try {
         const usage = await Subject.find({ globalSubject: req.params.id })
@@ -109,6 +110,9 @@ router.get('/:id/usage', [auth, checkRole(['admin', 'super admin'])], async (req
         res.json(usage);
     } catch (err) {
         console.error(err.message);
+        if (err.kind === 'ObjectId') {
+            return res.status(404).json({ msg: 'GlobalSubject not found' });
+        }
         res.status(500).send('Server Error');
     }
 });
@@ -116,8 +120,14 @@ router.get('/:id/usage', [auth, checkRole(['admin', 'super admin'])], async (req
 // @route   GET /api/subjects/:id
 // @desc    Get subject by ID
 // @access  Private
+// NOTE: This catch-all route must come LAST to avoid shadowing more specific routes
 router.get('/:id', auth, async (req, res) => {
     try {
+        // Validate that :id is a valid MongoDB ObjectId format to prevent casting errors
+        if (!req.params.id.match(/^[0-9a-fA-F]{24}$/)) {
+            return res.status(404).json({ msg: 'Invalid subject ID format' });
+        }
+
         const subject = await Subject.findById(req.params.id).populate('class', 'name section');
         if (!subject) {
             return res.status(404).json({ msg: 'Subject not found' });

@@ -87,6 +87,10 @@ router.get('/admin/init', [auth, checkRole(['admin', 'super admin'])], async (re
 // @access  Private
 router.get('/:id', auth, async (req, res) => {
     try {
+        // Validate ObjectId format to prevent casting errors
+        if (!req.params.id.match(/^[0-9a-fA-F]{24}$/)) {
+            return res.status(404).json({ msg: 'Invalid class ID format' });
+        }
         const classData = await Class.findById(req.params.id).populate('classTeacher', 'name email');
         if (!classData) {
             return res.status(404).json({ msg: 'Class not found' });

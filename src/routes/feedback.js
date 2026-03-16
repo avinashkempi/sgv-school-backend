@@ -151,6 +151,10 @@ router.put('/:id', auth, async (req, res) => {
     const role = req.user.role;
 
     try {
+        // Validate ObjectId format
+        if (!req.params.id.match(/^[0-9a-fA-F]{24}$/)) {
+            return res.status(404).json({ message: 'Invalid feedback ID format' });
+        }
         let feedback = await Feedback.findById(req.params.id);
 
         if (!feedback) {
@@ -189,6 +193,10 @@ router.delete('/:id', auth, async (req, res) => {
     const role = req.user.role;
 
     try {
+        // Validate ObjectId format
+        if (!req.params.id.match(/^[0-9a-fA-F]{24}$/)) {
+            return res.status(404).json({ message: 'Invalid feedback ID format' });
+        }
         let feedback = await Feedback.findById(req.params.id);
 
         if (!feedback) {

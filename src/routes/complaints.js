@@ -109,6 +109,11 @@ router.put('/:id/status', [auth, checkRole(['admin', 'super admin'])], async (re
         const { status, adminResponse } = req.body;
         const { role, userId } = req.user;
 
+        // Validate ObjectId format
+        if (!req.params.id.match(/^[0-9a-fA-F]{24}$/)) {
+            return res.status(404).json({ message: 'Invalid complaint ID format' });
+        }
+
         let complaint = await Complaint.findById(req.params.id);
         if (!complaint) {
             return res.status(404).json({ message: 'Complaint not found' });

@@ -157,6 +157,11 @@ router.put('/:id/action', authenticateToken, checkRole(['teacher', 'admin', 'sup
             return res.status(400).json({ success: false, message: 'Rejection reason and comments are required' });
         }
 
+        // Validate ObjectId format
+        if (!req.params.id.match(/^[0-9a-fA-F]{24}$/)) {
+            return res.status(404).json({ success: false, message: 'Invalid leave request ID format' });
+        }
+
         let leaveRequest = await LeaveRequest.findById(req.params.id).populate('applicant');
 
         if (!leaveRequest) {

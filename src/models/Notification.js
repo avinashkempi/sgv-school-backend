@@ -41,6 +41,11 @@ const notificationSchema = new mongoose.Schema({
     enum: ['all', 'student', 'teacher', 'staff', 'admin', 'super admin'],
     default: 'all'
   },
+  sendToPublic: {
+    type: Boolean,
+    default: false,
+    description: 'If true, send to both authenticated and public (non-logged-in) users. If false, only send to logged-in users.'
+  },
   isRead: {
     type: Boolean,
     default: false

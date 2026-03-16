@@ -1,6 +1,23 @@
 const FCMToken = require('../models/FCMToken');
 
 /**
+ * Validate FCM token format
+ * Firebase tokens should NOT be Expo tokens (ExponentPushToken)
+ */
+function isValidFCMToken(token) {
+    if (!token || typeof token !== 'string') return false;
+    if (token.trim().length === 0) return false;
+    // Reject Expo tokens - they don't work with Firebase
+    if (token.startsWith('ExponentPushToken')) {
+        console.warn(`[FCM] Rejecting invalid Expo token: ${token}`);
+        return false;
+    }
+    // Basic length validation
+    if (token.length < 20) return false;
+    return true;
+}
+
+/**
  * Register a device's FCM token
  */
 const registerFCMToken = async (req, res) => {
@@ -11,6 +28,14 @@ const registerFCMToken = async (req, res) => {
             return res.status(400).json({
                 success: false,
                 message: 'Missing required fields: token, userId, platform',
+            });
+        }
+
+        // Validate token format
+        if (!isValidFCMToken(token)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid FCM token. Ensure you are using a Development Build and not Expo Go.',
             });
         }
 
@@ -101,8 +126,37 @@ const getRegisteredTokens = async (req, res) => {
     }
 };
 
+/**
+ * Clean up invalid Expo tokens (emergency cleanup)
+ * This removes all tokens starting with "ExponentPushToken" which don't work with Firebase
+ */
+const cleanupInvalidTokens = async (req, res) => {
+    try {
+        // Find all Expo tokens
+        const result = await FCMToken.deleteMany({
+            token: { $regex: '^ExponentPushToken' }
+        });
+
+        console.log(`[FCM] Cleaned up ${result.deletedCount} invalid Expo tokens`);
+
+        res.status(200).json({
+            success: true,
+            message: `Removed ${result.deletedCount} invalid Expo tokens`,
+            deletedCount: result.deletedCount
+        });
+    } catch (error) {
+        console.error('[FCM] Cleanup error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to cleanup invalid tokens',
+            error: error.message
+        });
+    }
+};
+
 module.exports = {
     registerFCMToken,
     unregisterFCMToken,
-    getRegisteredTokens
+    getRegisteredTokens,
+    cleanupInvalidTokens
 };

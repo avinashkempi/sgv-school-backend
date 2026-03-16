@@ -1,4 +1,5 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const router = express.Router();
 const { authenticateToken: auth, checkRole } = require('../middleware/auth');
 const { yearContext, requireOpenYear } = require('../middleware/yearContext');

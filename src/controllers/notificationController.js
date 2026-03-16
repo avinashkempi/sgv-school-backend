@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Notification = require('../models/Notification');
 const NotificationPreference = require('../models/NotificationPreference');
 const User = require('../models/User');
@@ -123,6 +124,12 @@ exports.getUnreadCount = async (req, res) => {
 exports.markAsRead = async (req, res) => {
     try {
         const { isRead = true } = req.body || {};
+        
+        // Validate ObjectId
+        if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+            return res.status(400).json({ success: false, message: 'Invalid notification ID' });
+        }
+        
         const notification = await Notification.findById(req.params.id);
 
         if (!notification) {
@@ -188,6 +195,12 @@ exports.markAllAsRead = async (req, res) => {
 exports.archiveNotification = async (req, res) => {
     try {
         const { isArchived = true } = req.body;
+        
+        // Validate ObjectId
+        if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+            return res.status(400).json({ success: false, message: 'Invalid notification ID' });
+        }
+        
         const notification = await Notification.findById(req.params.id);
 
         if (!notification) {
@@ -218,6 +231,11 @@ exports.archiveNotification = async (req, res) => {
  */
 exports.deleteNotification = async (req, res) => {
     try {
+        // Validate ObjectId
+        if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+            return res.status(400).json({ success: false, message: 'Invalid notification ID' });
+        }
+        
         const notification = await Notification.findByIdAndDelete(req.params.id);
 
         if (!notification) {
@@ -236,7 +254,7 @@ exports.deleteNotification = async (req, res) => {
  */
 exports.sendNotification = async (req, res) => {
     try {
-        const { title, message, type, category, priority, target, targetId, actionType, actionData, metadata } = req.body;
+        const { title, message, type, category, priority, target, targetId, actionType, actionData, metadata, sendToPublic } = req.body;
 
         let recipient = null;
         let targetClass = null;
@@ -264,6 +282,7 @@ exports.sendNotification = async (req, res) => {
             recipient,
             targetClass,
             targetRole,
+            sendToPublic: sendToPublic || false,
             actionType: actionType || 'none',
             actionData,
             metadata
@@ -278,7 +297,7 @@ exports.sendNotification = async (req, res) => {
             type,
             category,
             priority
-        });
+        }, sendToPublic || false);
 
         res.status(201).json({ success: true, notification });
     } catch (err) {

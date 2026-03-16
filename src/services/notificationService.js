@@ -236,7 +236,7 @@ async function sendClassContentNotification(classId, content) {
  * @param {string} targetId - The ID of the target (if applicable)
  * @param {Object} notificationData - The notification data { title, message, type }
  */
-async function sendTargetedNotification(target, targetId, notificationData) {
+async function sendTargetedNotification(target, targetId, notificationData, sendToPublic = false) {
     try {
         if (!admin) {
             console.warn('[Notifications] Firebase not initialized, skipping targeted notification');
@@ -276,6 +276,11 @@ async function sendTargetedNotification(target, targetId, notificationData) {
         } else {
             // Send to all
             tokenQuery = {};
+        }
+        
+        // By default, only send to authenticated users. If sendToPublic is true, include all users.
+        if (!sendToPublic) {
+            tokenQuery.isAuthenticated = true;
         }
 
         const fcmTokenDocs = await FCMToken.find(tokenQuery);

@@ -474,6 +474,10 @@ router.get('/subject/:subjectId', auth, async (req, res) => {
 // @access  Private
 router.get('/:id', auth, async (req, res) => {
     try {
+        // Validate ObjectId format to prevent casting errors
+        if (!req.params.id.match(/^[0-9a-fA-F]{24}$/)) {
+            return res.status(404).json({ msg: 'Invalid exam ID format' });
+        }
         const exam = await Exam.findById(req.params.id)
             .populate('class', 'name section')
             .populate('subject', 'name')
@@ -961,6 +965,55 @@ router.get('/performance/school', auth, async (req, res) => {
             examwisePerformance: schoolPerformance,
             classwiseSummary,
             subjectwiseSummary
+        });
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).send('Server Error');
+    }
+});
+
+// @route   DELETE /api/exams/:id/subject/:subjectId
+// @desc    Remove a subject from an exam (delete marks for that subject in this exam)
+// @access  Private (Admin or exam creator)
+router.delete('/:id/subject/:subjectId', auth, async (req, res) => {
+    try {
+        const { id: examId, subjectId } = req.params;
+
+        // Validate exam exists
+        if (!examId.match(/^[0-9a-fA-F]{24}$/)) {
+            return res.status(400).json({ msg: 'Invalid exam ID format' });
+        }
+
+        if (!subjectId.match(/^[0-9a-fA-F]{24}$/)) {
+            return res.status(400).json({ msg: 'Invalid subject ID format' });
+        }
+
+        const exam = await Exam.findById(examId);
+        if (!exam) {
+            return res.status(404).json({ message: 'Exam not found' });
+        }
+
+        // Authorization check - only creator or admin
+        const user = await User.findById(req.user.userId);
+        if (exam.createdBy.toString() !== req.user.userId && user.role !== 'admin' && user.role !== 'super admin') {
+            return res.status(403).json({ message: 'Not authorized to delete subject from this exam' });
+        }
+
+        // Verify subject belongs to this exam
+        const subject = await Subject.findById(subjectId);
+        if (!subject || subject._id.toString() !== exam.subject.toString()) {
+            return res.status(400).json({ message: 'This subject is not part of this exam' });
+        }
+
+        // Delete all marks for this subject in this exam
+        const deletedMarks = await Marks.deleteMany({
+            exam: examId,
+            subject: subjectId
+        });
+
+        res.json({
+            message: 'Subject removed from exam. Associated marks deleted.',
+            deletedMarksCount: deletedMarks.deletedCount
         });
     } catch (err) {
         console.error(err.message);

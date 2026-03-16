@@ -129,6 +129,12 @@ router.get('/my-classes-and-subjects', auth, async (req, res) => {
 router.get('/subjects/:subjectId/classes', auth, async (req, res) => {
     try {
         const userId = req.user.userId;
+        
+        // Validate subjectId is a valid MongoDB ObjectId
+        if (!req.params.subjectId.match(/^[0-9a-fA-F]{24}$/)) {
+            return res.status(404).json({ msg: 'Subject not found' });
+        }
+        
         const subject = await Subject.findById(req.params.subjectId);
 
         if (!subject) {

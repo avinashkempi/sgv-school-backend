@@ -1,5 +1,5 @@
 const express = require('express');
-const { registerFCMToken, unregisterFCMToken, getRegisteredTokens } = require('../controllers/fcmController');
+const { registerFCMToken, unregisterFCMToken, getRegisteredTokens, cleanupInvalidTokens } = require('../controllers/fcmController');
 
 const router = express.Router();
 
@@ -11,5 +11,8 @@ router.post('/unregister', unregisterFCMToken);
 
 // GET /api/fcm/debug-tokens - List registered tokens (Debug only)
 router.get('/debug-tokens', getRegisteredTokens);
+
+// POST /api/fcm/cleanup-invalid - Remove all invalid Expo tokens
+router.post('/cleanup-invalid', cleanupInvalidTokens);
 
 module.exports = router;
