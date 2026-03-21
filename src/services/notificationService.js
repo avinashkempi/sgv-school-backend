@@ -87,7 +87,17 @@ async function sendBatchNotifications(tokens, notification, data = {}) {
                 response.responses.forEach((resp, idx) => {
                     if (!resp.success) {
                         failedTokens.push(batch[idx]);
-                        console.error(`[Notifications] Failed to send to token:`, resp.error?.message || 'Unknown error');
+                        const errorCode = resp.error?.code;
+                        const errorMsg = resp.error?.message || 'Unknown error';
+                        
+                        // Categorize errors for better debugging
+                        if (errorCode === 'messaging/invalid-registration-token' || errorMsg.includes('Requested entity was not found')) {
+                            console.warn(`[Notifications] Invalid/Expired token removed (will delete from DB)`);
+                        } else if (errorCode === 'messaging/mismatched-credential' || errorMsg.includes('SenderId mismatch')) {
+                            console.error(`[Notifications] SenderId Mismatch Error - Firebase config mismatch between app build and backend`);
+                        } else {
+                            console.error(`[Notifications] Failed to send - Error: ${errorMsg}`);
+                        }
                     }
                 });
             }
@@ -95,8 +105,12 @@ async function sendBatchNotifications(tokens, notification, data = {}) {
 
         // Clean up invalid tokens
         if (failedTokens.length > 0) {
-            await FCMToken.deleteMany({ token: { $in: failedTokens } });
-
+            try {
+                const result = await FCMToken.deleteMany({ token: { $in: failedTokens } });
+                console.log(`[Notifications] Cleaned up ${result.deletedCount} invalid FCM tokens`);
+            } catch (cleanupErr) {
+                console.error(`[Notifications] Error cleaning up invalid tokens:`, cleanupErr.message);
+            }
         }
 
 
@@ -146,10 +160,8 @@ async function sendNewsNotification(newsData) {
         const fcmTokenDocs = await FCMToken.find(tokenQuery);
         const tokens = fcmTokenDocs.map(doc => doc.token);
 
-
-
         if (tokens.length === 0) {
-
+            console.debug('[Notifications] No tokens found for news notification');
             return { success: true, message: 'No tokens to send to' };
         }
 
@@ -196,7 +208,7 @@ async function sendClassContentNotification(classId, content) {
         const studentIds = students.map(s => s._id);
 
         if (studentIds.length === 0) {
-
+            console.debug(`[Notifications] No students found in class: ${classId}`);
             return { success: true, message: 'No students in class' };
         }
 
@@ -204,9 +216,8 @@ async function sendClassContentNotification(classId, content) {
         const fcmTokenDocs = await FCMToken.find({ userId: { $in: studentIds } });
         const tokens = fcmTokenDocs.map(doc => doc.token);
 
-
-
         if (tokens.length === 0) {
+            console.debug(`[Notifications] No FCM tokens registered for ${studentIds.length} students in class`);
             return { success: true, message: 'No tokens found for students' };
         }
 
@@ -286,11 +297,12 @@ async function sendTargetedNotification(target, targetId, notificationData, send
         const fcmTokenDocs = await FCMToken.find(tokenQuery);
         const tokens = fcmTokenDocs.map(doc => doc.token);
 
-        console.log(`[Notifications] Sending notification to ${tokens.length} devices (Target: ${target})`);
-
         if (tokens.length === 0) {
-            return { success: true, message: 'No tokens found' };
+            console.debug(`[Notifications] No devices to notify (Target: ${target}, UserCount: ${userIds ? userIds.length : 'all'})`);
+            return { success: true, message: 'No tokens found', successCount: 0, failureCount: 0 };
         }
+        
+        console.log(`[Notifications] Sending notification to ${tokens.length} devices (Target: ${target})`);
 
         const notification = {
             title: notificationData.title,

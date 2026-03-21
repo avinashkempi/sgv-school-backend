@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { authenticateToken: auth } = require('../middleware/auth');
+const { yearContext, requireOpenYear } = require('../middleware/yearContext');
 const Exam = require('../models/Exam');
 const Marks = require('../models/Marks');
 const _GradeConfig = require('../models/GradeConfig');
@@ -935,7 +936,9 @@ router.get('/performance/school', auth, async (req, res) => {
         // Subject-wise summary
         // Subject imported at top of file
         const subjects = await Subject.find().lean();
-        const subjectwiseSummary = subjects.map(subj => {
+        const subjectNameMap = new Map();
+
+        subjects.forEach(subj => {
             const subjectExams = exams.filter(e => e.subject._id.toString() === subj._id.toString());
             const subjectExamIds = subjectExams.map(e => e._id.toString());
             const subjectMarks = allMarks.filter(m => subjectExamIds.includes(m.exam.toString()));
@@ -951,12 +954,30 @@ router.get('/performance/school', auth, async (req, res) => {
                 }
             });
 
-            const avgPercentage = totalMarks > 0 ? ((obtainedMarks / totalMarks) * 100).toFixed(2) : 0;
+            const name = subj.name.trim();
 
+            if (!subjectNameMap.has(name)) {
+                subjectNameMap.set(name, {
+                    subjectId: subj._id,
+                    subjectName: name,
+                    examsCount: 0,
+                    totalMarks: 0,
+                    obtainedMarks: 0
+                });
+            }
+
+            const existing = subjectNameMap.get(name);
+            existing.examsCount += subjectExams.length;
+            existing.totalMarks += totalMarks;
+            existing.obtainedMarks += obtainedMarks;
+        });
+
+        const subjectwiseSummary = Array.from(subjectNameMap.values()).map(subj => {
+            const avgPercentage = subj.totalMarks > 0 ? ((subj.obtainedMarks / subj.totalMarks) * 100).toFixed(2) : 0;
             return {
-                subjectId: subj._id,
-                subjectName: subj.name,
-                examsCount: subjectExams.length,
+                subjectId: subj.subjectName,
+                subjectName: subj.subjectName,
+                examsCount: subj.examsCount,
                 avgPercentage: parseFloat(avgPercentage)
             };
         });
@@ -1020,5 +1041,359 @@ router.delete('/:id/subject/:subjectId', auth, async (req, res) => {
         res.status(500).send('Server Error');
     }
 });
+
+// @route   POST /api/exams/quick-init
+// @desc    Quick initialize all 6 exam types for a class+subject in one call
+// @access  Private (Teacher)
+router.post('/quick-init', [auth, yearContext, requireOpenYear], async (req, res) => {
+    try {
+        const { classId, subjectId, examsConfig, types: requestedTypes } = req.body;
+        // examsConfig: { totalMarks, duration, FA1: {date, ...}, FA2: {date, ...}, ... }
+        // requestedTypes (optional): subset of ['FA1','FA2','SA1','FA3','FA4','SA2'] to create
+        const academicYearId = req.academicYearContext;
+
+        // Validate teacher authorization
+        const subject = await Subject.findById(subjectId);
+        if (!subject) {
+            return res.status(404).json({ message: 'Subject not found' });
+        }
+
+        const userRole = req.user.role;
+        const isAdmin = userRole === 'admin' || userRole === 'super admin';
+
+        if (!isAdmin && !subject.teachers.includes(req.user.userId)) {
+            return res.status(403).json({ message: 'Not authorized to create exams for this subject' });
+        }
+
+        const allTypes = ['FA1', 'FA2', 'SA1', 'FA3', 'FA4', 'SA2'];
+        // If caller specifies a subset, only create those (validate each item is a known type)
+        const examTypes = (Array.isArray(requestedTypes) && requestedTypes.length > 0)
+            ? requestedTypes.filter(t => allTypes.includes(t))
+            : allTypes;
+
+        const examNames = {
+            'FA1': 'Formative Assessment 1',
+            'FA2': 'Formative Assessment 2',
+            'SA1': 'Summative Assessment 1',
+            'FA3': 'Formative Assessment 3',
+            'FA4': 'Formative Assessment 4',
+            'SA2': 'Summative Assessment 2'
+        };
+
+        const results = [];
+
+        for (const type of examTypes) {
+            // Check if exists
+            let exam = await Exam.findOne({
+                class: classId,
+                subject: subjectId,
+                academicYear: academicYearId,
+                standardizedType: type,
+                isStandardized: true
+            });
+
+            if (!exam) {
+                const examConfig = examsConfig[type] || {};
+
+                exam = new Exam({
+                    name: examNames[type],
+                    type: type === 'SA2' ? 'final' : (type.startsWith('SA') ? 'mid-term' : 'unit-test'),
+                    isStandardized: true,
+                    standardizedType: type,
+                    class: classId,
+                    subject: subjectId,
+                    totalMarks: examConfig.totalMarks || examsConfig.totalMarks || 100,
+                    date: examConfig.date || examsConfig.defaultDate || Date.now(),
+                    academicYear: academicYearId,
+                    createdBy: req.user.userId,
+                    instructions: examConfig.instructions || examsConfig.instructions,
+                    duration: examConfig.duration || examsConfig.duration,
+                    startTime: examConfig.startTime,
+                    endTime: examConfig.endTime,
+                    status: 'scheduled'
+                });
+                await exam.save();
+                results.push({ type, status: 'created', exam });
+            } else {
+                results.push({ type, status: 'exists', exam });
+            }
+        }
+
+        // Notify class about new exams
+        if (results.some(r => r.status === 'created')) {
+            await sendTargetedNotification('class', classId, {
+                title: 'New Exams Scheduled',
+                message: `All exams have been scheduled for ${subject.name}. Check your schedule.`,
+                type: 'Exam'
+            });
+        }
+
+        res.json({
+            message: 'Quick initialization complete',
+            results
+        });
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).send('Server Error');
+    }
+});
+
+// @route   GET /api/exams/teacher/dashboard
+// @desc    Get teacher's complete exam overview (all classes/subjects they teach)
+// @access  Private (Teacher)
+router.get('/teacher/dashboard', [auth, yearContext], async (req, res) => {
+    try {
+        const academicYearId = req.academicYearContext;
+
+        // Find all subjects taught by this teacher (as subject teacher)
+        const subjectTeacherSubjects = await Subject.find({
+            teachers: req.user.userId
+        })
+            .populate('class', 'name section')
+            .lean();
+
+        // Find all classes where this teacher is the class teacher
+        const classTeacherClasses = await Class.find({
+            classTeacher: req.user.userId,
+            academicYear: academicYearId
+        })
+            .lean();
+
+        // Get all subjects for the classes where teacher is the class teacher
+        const classIds = classTeacherClasses.map(c => c._id);
+        const classTeacherSubjects = await Subject.find({
+            class: { $in: classIds }
+        })
+            .populate('class', 'name section')
+            .lean();
+
+        // Combine both lists and remove duplicates
+        const subjectMap = new Map();
+        
+        // Add subject teacher subjects
+        subjectTeacherSubjects.forEach(subject => {
+            const key = `${subject._id.toString()}`;
+            subjectMap.set(key, subject);
+        });
+
+        // Add class teacher subjects (won't duplicate if already subject teacher)
+        classTeacherSubjects.forEach(subject => {
+            const key = `${subject._id.toString()}`;
+            if (!subjectMap.has(key)) {
+                subjectMap.set(key, subject);
+            }
+        });
+
+        const subjects = Array.from(subjectMap.values());
+
+        const dashboard = [];
+
+        for (const subject of subjects) {
+            // Get all exams for this subject
+            const exams = await Exam.find({
+                class: subject.class._id,
+                subject: subject._id,
+                academicYear: academicYearId,
+                isStandardized: true
+            }).lean();
+
+            // Get marks counts
+            const examIds = exams.map(e => e._id);
+            const marksCounts = await Marks.aggregate([
+                { $match: { exam: { $in: examIds } } },
+                { $group: { _id: '$exam', count: { $sum: 1 } } }
+            ]);
+
+            const marksCountMap = {};
+            marksCounts.forEach(item => {
+                marksCountMap[item._id.toString()] = item.count;
+            });
+
+            // Get student count for this class
+            const studentCount = await User.countDocuments({
+                currentClass: subject.class._id,
+                role: 'student'
+            });
+
+            const examTypes = ['FA1', 'FA2', 'SA1', 'FA3', 'FA4', 'SA2'];
+            const examStatus = examTypes.map(type => {
+                const exam = exams.find(e => e.standardizedType === type);
+                const marksCount = exam ? (marksCountMap[exam._id.toString()] || 0) : 0;
+
+                return {
+                    type,
+                    exists: !!exam,
+                    examId: exam?._id,
+                    marksEntered: marksCount,
+                    totalStudents: studentCount,
+                    marksComplete: marksCount >= studentCount,
+                    marksPublished: exam?.marksPublished || false,
+                    status: exam?.status || null
+                };
+            });
+
+            dashboard.push({
+                classId: subject.class._id,
+                className: `${subject.class.name} ${subject.class.section || ''}`,
+                subjectId: subject._id,
+                subjectName: subject.name,
+                studentCount,
+                examStatus,
+                summary: {
+                    examsCreated: examStatus.filter(e => e.exists).length,
+                    marksEntered: examStatus.filter(e => e.marksEntered > 0).length,
+                    marksPublished: examStatus.filter(e => e.marksPublished).length,
+                    pending: examStatus.filter(e => !e.exists || !e.marksComplete).length
+                }
+            });
+        }
+
+        res.json({
+            academicYear: academicYearId,
+            dashboard
+        });
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).send('Server Error');
+    }
+});
+
+// @route   GET /api/exams/status-summary
+// @desc    Get count of exams by status for quick overview
+// @access  Private (Teacher/Admin)
+router.get('/status-summary', [auth, yearContext], async (req, res) => {
+    try {
+        const { classId, subjectId } = req.query;
+        const academicYearId = req.academicYearContext;
+
+        let query = { academicYear: academicYearId, isStandardized: true };
+
+        if (classId) query.class = classId;
+        if (subjectId) query.subject = subjectId;
+
+        const [statusCounts, totalExams, marksPublishedCount] = await Promise.all([
+            Exam.aggregate([
+                { $match: query },
+                { $group: { _id: '$status', count: { $sum: 1 } } }
+            ]),
+            Exam.countDocuments(query),
+            Exam.countDocuments({ ...query, marksPublished: true })
+        ]);
+
+        const summary = {
+            total: totalExams,
+            marksPublished: marksPublishedCount,
+            byStatus: {}
+        };
+
+        statusCounts.forEach(item => {
+            summary.byStatus[item._id] = item.count;
+        });
+
+        res.json(summary);
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).send('Server Error');
+    }
+});
+
+// @route   PUT /api/exams/bulk-update
+// @desc    Update multiple exams at once (dates, marks, status)
+// @access  Private (Teacher/Admin)
+router.put('/bulk-update', [auth, yearContext, requireOpenYear], async (req, res) => {
+    try {
+        const { examIds, updates } = req.body;
+        // updates: { date?, totalMarks?, status?, startTime?, endTime?, instructions?, duration? }
+
+        if (!examIds || !Array.isArray(examIds) || examIds.length === 0) {
+            return res.status(400).json({ message: 'Exam IDs array is required' });
+        }
+
+        // Verify authorization for each exam
+        const exams = await Exam.find({ _id: { $in: examIds } }).populate('subject');
+
+        const userRole = req.user.role;
+        const isAdmin = userRole === 'admin' || userRole === 'super admin';
+
+        for (const exam of exams) {
+            if (!isAdmin && exam.createdBy.toString() !== req.user.userId) {
+                // Check if user teaches this subject
+                const subject = exam.subject;
+                if (!subject || !subject.teachers.includes(req.user.userId)) {
+                    return res.status(403).json({
+                        message: `Not authorized to update exam: ${exam.name}`
+                    });
+                }
+            }
+        }
+
+        // Perform bulk update
+        const allowedFields = ['date', 'totalMarks', 'status', 'startTime', 'endTime', 'instructions', 'duration'];
+        const updateData = {};
+
+        allowedFields.forEach(field => {
+            if (updates[field] !== undefined) {
+                updateData[field] = updates[field];
+            }
+        });
+
+        const result = await Exam.updateMany(
+            { _id: { $in: examIds } },
+            { $set: updateData }
+        );
+
+        res.json({
+            message: 'Bulk update completed',
+            modifiedCount: result.modifiedCount,
+            matched: result.matchedCount
+        });
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).send('Server Error');
+    }
+});
+
+// @route   POST /api/exams/:id/publish-marks
+// @desc    Publish marks to make them visible to students
+// @access  Private (Teacher/Admin)
+router.post('/:id/publish-marks', [auth, yearContext, requireOpenYear], async (req, res) => {
+    try {
+        const exam = await Exam.findById(req.params.id).populate('subject');
+
+        if (!exam) {
+            return res.status(404).json({ message: 'Exam not found' });
+        }
+
+        // Check authorization
+        const userRole = req.user.role;
+        const isAdmin = userRole === 'admin' || userRole === 'super admin';
+
+        if (!isAdmin && exam.createdBy.toString() !== req.user.userId) {
+            const subject = exam.subject;
+            if (!subject || !subject.teachers.includes(req.user.userId)) {
+                return res.status(403).json({ message: 'Not authorized' });
+            }
+        }
+
+        exam.marksPublished = true;
+        await exam.save();
+
+        // Notify students
+        await sendTargetedNotification('class', exam.class, {
+            title: 'Marks Published',
+            message: `Marks for ${exam.name} have been published. Check your report card.`,
+            type: 'Exam'
+        });
+
+        res.json({
+            message: 'Marks published successfully',
+            exam
+        });
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).send('Server Error');
+    }
+});
+
 
 module.exports = router;

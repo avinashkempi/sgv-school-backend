@@ -74,5 +74,6 @@ leaveRequestSchema.index({ applicant: 1, status: 1 });
 leaveRequestSchema.index({ class: 1, status: 1 });
 leaveRequestSchema.index({ startDate: 1, endDate: 1 });
 leaveRequestSchema.index({ applicantRole: 1, status: 1 });
+leaveRequestSchema.index({ class: 1, applicantRole: 1, status: 1, startDate: 1, endDate: 1 });
 
 module.exports = mongoose.model('LeaveRequest', leaveRequestSchema);

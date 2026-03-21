@@ -1,4 +1,5 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const router = express.Router();
 const { authenticateToken: auth } = require('../middleware/auth');
 const Marks = require('../models/Marks');
@@ -46,10 +47,20 @@ router.post('/bulk', auth, async (req, res) => {
         const { examId, marksData } = req.body;
         // marksData = [{ studentId, marksObtained, remarks? }, ...]
 
-        const exam = await Exam.findById(examId).populate('class', 'classTeacher');
+        const exam = await Exam.findById(examId).populate('class', 'classTeacher').populate('academicYear');
         if (!exam) {
             return res.status(404).json({ message: 'Exam not found' });
         }
+
+        let gradeConfig = null;
+        if (exam.academicYear) {
+            gradeConfig = await GradeConfig.findOne({ academicYear: exam.academicYear._id });
+        }
+
+        const getGradeOffline = (percentage) => {
+            if (gradeConfig) return gradeConfig.getGrade(percentage).grade;
+            return getDefaultGrade(percentage);
+        };
 
         // Validate teacher authorization
         const Subject = require('../models/Subject');
@@ -66,6 +77,9 @@ router.post('/bulk', auth, async (req, res) => {
 
         const results = [];
 
+        const bulkOps = [];
+        const validStudentIds = [];
+
         for (const data of marksData) {
             const { studentId, marksObtained, remarks } = data;
 
@@ -80,36 +94,36 @@ router.post('/bulk', auth, async (req, res) => {
             }
 
             const percentage = ((marksObtained / exam.totalMarks) * 100).toFixed(2);
-            const grade = await calculateGrade(parseFloat(percentage), examId);
+            const grade = getGradeOffline(parseFloat(percentage));
 
-            try {
-                // Check if marks already exist
-                let marks = await Marks.findOne({ student: studentId, exam: examId });
-
-                if (marks) {
-                    // Update existing marks
-                    marks.marksObtained = marksObtained;
-                    marks.percentage = parseFloat(percentage);
-                    marks.grade = grade;
-                    marks.remarks = remarks || '';
-                    marks.enteredBy = req.user.userId;
-                    await marks.save();
-                } else {
-                    // Create new marks entry
-                    marks = new Marks({
-                        student: studentId,
-                        exam: examId,
-                        marksObtained,
-                        percentage: parseFloat(percentage),
-                        grade,
-                        remarks: remarks || '',
-                        enteredBy: req.user.userId
-                    });
-                    await marks.save();
+            bulkOps.push({
+                updateOne: {
+                    filter: { student: studentId, exam: examId },
+                    update: {
+                        $set: {
+                            marksObtained,
+                            percentage: parseFloat(percentage),
+                            grade,
+                            remarks: remarks || '',
+                            enteredBy: req.user.userId,
+                            updatedAt: Date.now()
+                        }
+                    },
+                    upsert: true
                 }
+            });
+            validStudentIds.push(studentId);
+        }
 
+        if (bulkOps.length > 0) {
+            await Marks.bulkWrite(bulkOps, { ordered: false });
+
+            // Fetch the updated/inserted marks to return and for notifications
+            const savedMarks = await Marks.find({ exam: examId, student: { $in: validStudentIds } });
+
+            for (const marks of savedMarks) {
                 results.push({
-                    studentId,
+                    studentId: marks.student,
                     success: true,
                     marks: marks
                 });
@@ -120,14 +134,8 @@ router.post('/bulk', auth, async (req, res) => {
                     message: `Marks for ${exam.name} have been updated.`,
                     type: 'Exam',
                     target: 'user',
-                    targetId: studentId,
+                    targetId: marks.student,
                     metadata: { examId: exam._id, marksId: marks._id }
-                });
-            } catch (error) {
-                results.push({
-                    studentId,
-                    success: false,
-                    error: error.message
                 });
             }
         }
@@ -147,10 +155,20 @@ router.post('/grid-update', auth, async (req, res) => {
         const { examId, gridData } = req.body;
         // gridData = [{ studentId, marksObtained, remarks? }, ...]
 
-        const exam = await Exam.findById(examId).populate('class', 'classTeacher');
+        const exam = await Exam.findById(examId).populate('class', 'classTeacher').populate('academicYear');
         if (!exam) {
             return res.status(404).json({ message: 'Exam not found' });
         }
+
+        let gradeConfig = null;
+        if (exam.academicYear) {
+            gradeConfig = await GradeConfig.findOne({ academicYear: exam.academicYear._id });
+        }
+
+        const getGradeOffline = (percentage) => {
+            if (gradeConfig) return gradeConfig.getGrade(percentage).grade;
+            return getDefaultGrade(percentage);
+        };
 
         // Validate teacher authorization
         const Subject = require('../models/Subject');
@@ -169,6 +187,8 @@ router.post('/grid-update', auth, async (req, res) => {
         let created = 0;
         let errors = [];
 
+        const bulkOps = [];
+
         for (const data of gridData) {
             const { studentId, marksObtained, remarks } = data;
 
@@ -182,37 +202,34 @@ router.post('/grid-update', auth, async (req, res) => {
             }
 
             const percentage = ((marksObtained / exam.totalMarks) * 100).toFixed(2);
-            const grade = await calculateGrade(parseFloat(percentage), examId);
+            const grade = getGradeOffline(parseFloat(percentage));
 
-            try {
-                // Check if marks already exist
-                let marks = await Marks.findOne({ student: studentId, exam: examId });
-
-                if (marks) {
-                    // Update existing marks
-                    marks.marksObtained = marksObtained;
-                    marks.percentage = parseFloat(percentage);
-                    marks.grade = grade;
-                    marks.remarks = remarks || '';
-                    marks.enteredBy = req.user.userId;
-                    await marks.save();
-                    updated++;
-                } else {
-                    // Create new marks entry
-                    marks = new Marks({
-                        student: studentId,
-                        exam: examId,
-                        marksObtained,
-                        percentage: parseFloat(percentage),
-                        grade,
-                        remarks: remarks || '',
-                        enteredBy: req.user.userId
-                    });
-                    await marks.save();
-                    created++;
+            bulkOps.push({
+                updateOne: {
+                    filter: { student: studentId, exam: examId },
+                    update: {
+                        $set: {
+                            marksObtained,
+                            percentage: parseFloat(percentage),
+                            grade,
+                            remarks: remarks || '',
+                            enteredBy: req.user.userId,
+                            updatedAt: Date.now()
+                        }
+                    },
+                    upsert: true
                 }
+            });
+        }
+
+        if (bulkOps.length > 0) {
+            try {
+                const result = await Marks.bulkWrite(bulkOps, { ordered: false });
+                updated = result.modifiedCount;
+                created = result.upsertedCount;
             } catch (error) {
-                errors.push({ studentId, error: error.message });
+                console.error("BulkWrite error:", error);
+                errors.push({ error: "Some records failed to update" });
             }
         }
 
@@ -369,8 +386,10 @@ router.get('/student/:studentId', auth, async (req, res) => {
         }
 
         const marks = await Marks.find({ student: req.params.studentId })
+            .select('exam marksObtained percentage grade remarks enteredBy createdAt')
             .populate({
                 path: 'exam',
+                select: 'name type date totalMarks subject class',
                 populate: [
                     { path: 'subject', select: 'name' },
                     { path: 'class', select: 'name section' }
@@ -419,14 +438,17 @@ router.get('/student/:studentId/report-card', auth, async (req, res) => {
         }
 
         marks = await Marks.find(query)
+            .select('exam marksObtained percentage grade')
             .populate({
                 path: 'exam',
+                select: 'name type totalMarks date subject class academicYear',
                 populate: [
                     { path: 'subject', select: 'name' },
                     { path: 'class', select: 'name section' },
                     { path: 'academicYear', select: 'name' }
                 ]
-            });
+            })
+            .lean();
 
         // Group by subject
         const subjectWise = {};
@@ -484,30 +506,42 @@ router.get('/student/:studentId/report-card', auth, async (req, res) => {
         // Calculate class rank (if possible)
         let rank = null;
         if (student.currentClass) {
-            const classStudents = await User.find({
+            const classStudentIds = await User.find({
                 currentClass: student.currentClass._id,
                 role: 'student'
+            }).distinct('_id');
+
+            let matchStage = { student: { $in: classStudentIds } };
+            const marksAggregate = await Marks.aggregate([
+                { $match: matchStage },
+                {
+                    $lookup: {
+                        from: 'exams',
+                        localField: 'exam',
+                        foreignField: '_id',
+                        as: 'examData'
+                    }
+                },
+                { $unwind: '$examData' },
+                ...(academicYearId ? [{ $match: { 'examData.academicYear': new mongoose.Types.ObjectId(academicYearId) } }] : []),
+                {
+                    $group: {
+                        _id: '$student',
+                        totalObtained: { $sum: '$marksObtained' },
+                        totalMax: { $sum: '$examData.totalMarks' }
+                    }
+                }
+            ]);
+
+            const percentageMap = new Map();
+            marksAggregate.forEach(m => {
+                percentageMap.set(m._id.toString(), m.totalMax > 0 ? (m.totalObtained / m.totalMax) * 100 : 0);
             });
 
-            const studentPercentages = await Promise.all(
-                classStudents.map(async (s) => {
-                    const sMarks = await Marks.find({ student: s._id })
-                        .populate('exam', 'totalMarks academicYear');
-
-                    let sTotal = 0;
-                    let sMax = 0;
-
-                    sMarks.forEach(m => {
-                        if (!academicYearId || m.exam.academicYear?.toString() === academicYearId) {
-                            sTotal += m.marksObtained;
-                            sMax += m.exam.totalMarks;
-                        }
-                    });
-
-                    const sPercentage = sMax > 0 ? (sTotal / sMax) * 100 : 0;
-                    return { studentId: s._id.toString(), percentage: sPercentage };
-                })
-            );
+            const studentPercentages = classStudentIds.map(id => ({
+                studentId: id.toString(),
+                percentage: percentageMap.get(id.toString()) || 0
+            }));
 
             studentPercentages.sort((a, b) => b.percentage - a.percentage);
             rank = studentPercentages.findIndex(sp => sp.studentId === req.params.studentId) + 1;

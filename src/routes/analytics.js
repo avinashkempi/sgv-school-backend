@@ -1,4 +1,5 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const router = express.Router();
 const { authenticateToken: auth, checkRole } = require('../middleware/auth');
 const Marks = require('../models/Marks');
@@ -65,27 +66,33 @@ router.get('/student/:studentId/report-card', auth, async (req, res) => {
         const attendancePercentage = totalDays > 0 ? ((presentDays / totalDays) * 100).toFixed(1) : 0;
 
         // Get class rank (if applicable)
-        const classStudents = await User.find({
+        const classStudentIds = await User.find({
             currentClass: student.currentClass._id,
             role: 'student'
-        }).select('_id').lean();
+        }).distinct('_id');
 
         let rank = null;
-        if (examId) {
-            const allStudentMarks = await Promise.all(
-                classStudents.map(async (s) => {
-                    const studentMarks = await Marks.find({
-                        student: s._id,
-                        exam: examId
-                    }).lean();
+        if (examId && mongoose.Types.ObjectId.isValid(examId)) {
+            const marksAggregate = await Marks.aggregate([
+                { $match: { student: { $in: classStudentIds }, exam: new mongoose.Types.ObjectId(examId) } },
+                {
+                    $group: {
+                        _id: '$student',
+                        total: { $sum: '$marksObtained' }
+                    }
+                }
+            ]);
 
-                    const total = studentMarks.reduce((sum, m) => sum + m.marksObtained, 0);
-                    return { studentId: s._id, total };
-                })
-            );
+            const totalMap = new Map();
+            marksAggregate.forEach(m => totalMap.set(m._id.toString(), m.total));
+
+            const allStudentMarks = classStudentIds.map(id => ({
+                studentId: id.toString(),
+                total: totalMap.get(id.toString()) || 0
+            }));
 
             allStudentMarks.sort((a, b) => b.total - a.total);
-            const studentRankIndex = allStudentMarks.findIndex(s => s.studentId.toString() === studentId);
+            const studentRankIndex = allStudentMarks.findIndex(s => s.studentId === studentId);
             rank = studentRankIndex >= 0 ? studentRankIndex + 1 : null;
         }
 
@@ -404,25 +411,30 @@ router.get('/yoy-performance', [auth, checkRole(['super admin'])], async (req, r
         // Get all academic years, sorted chronologically
         const years = await AcademicYear.find({}).sort({ startDate: 1 }).lean();
 
-        const yoyData = [];
-
-        for (const year of years) {
-            // Student counts
-            const totalStudents = await User.countDocuments({ academicYear: year._id, role: 'student' });
-            const totalTeachers = await User.countDocuments({ role: 'teacher' });
-            const totalClasses = await Class.countDocuments({ academicYear: year._id });
+        const yoyData = await Promise.all(years.map(async (year) => {
+            // Fetch all statistics for this specific year concurrently
+            const [
+                totalStudents,
+                totalTeachers,
+                totalClasses,
+                historyRecords,
+                attendanceRecords
+            ] = await Promise.all([
+                User.countDocuments({ academicYear: year._id, role: 'student' }),
+                User.countDocuments({ role: 'teacher' }),
+                Class.countDocuments({ academicYear: year._id }),
+                StudentHistory.find({ academicYear: year._id }).lean(),
+                Attendance.find({
+                    date: { $gte: year.startDate, $lte: year.endDate }
+                }).lean()
+            ]);
 
             // Promotion outcomes from StudentHistory
-            const historyRecords = await StudentHistory.find({ academicYear: year._id }).lean();
             const promoted = historyRecords.filter(h => h.result === 'Promoted').length;
             const detained = historyRecords.filter(h => h.result === 'Detained').length;
             const graduated = historyRecords.filter(h => h.result === 'Graduated').length;
 
-            // Average attendance
-            const attendanceRecords = await Attendance.find({
-                date: { $gte: year.startDate, $lte: year.endDate }
-            }).lean();
-
+            // Average attendance calculation
             const totalAttRecords = attendanceRecords.length;
             const presentRecords = attendanceRecords.filter(a => ['present', 'late', 'excused'].includes(a.status)).length;
             const avgAttendance = totalAttRecords > 0 ? parseFloat(((presentRecords / totalAttRecords) * 100).toFixed(1)) : 0;
@@ -433,7 +445,7 @@ router.get('/yoy-performance', [auth, checkRole(['super admin'])], async (req, r
                 ? parseFloat((avgAttHistory.reduce((s, h) => s + h.totalAttendancePercentage, 0) / avgAttHistory.length).toFixed(1))
                 : null;
 
-            yoyData.push({
+            return {
                 year: {
                     _id: year._id,
                     name: year.name,
@@ -451,8 +463,8 @@ router.get('/yoy-performance', [auth, checkRole(['super admin'])], async (req, r
                     avgAttendance,
                     avgHistoricalAttendance
                 }
-            });
-        }
+            };
+        }));
 
         res.json({ success: true, yoyData });
     } catch (err) {

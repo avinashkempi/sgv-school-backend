@@ -51,10 +51,20 @@ const getDateRange = (range) => {
     return { startDate, endDate };
 };
 
+const adminStatsCache = new Map();
+const CACHE_TTL = 60 * 1000; // 60 seconds
+
 // Admin Stats
 exports.getAdminStats = async (req, res) => {
     try {
         const { range = 'thisMonth' } = req.query;
+        const cacheKey = `adminStats_${range}`;
+
+        const cached = adminStatsCache.get(cacheKey);
+        if (cached && Date.now() - cached.ts < CACHE_TTL) {
+            return res.json(cached.data);
+        }
+
         const { startDate, endDate } = getDateRange(range);
 
         const today = new Date();
@@ -223,7 +233,7 @@ exports.getAdminStats = async (req, res) => {
             }));
         }
 
-        res.json({
+        const responseData = {
             overview: {
                 totalStudents,
                 totalTeachers,
@@ -252,7 +262,10 @@ exports.getAdminStats = async (req, res) => {
                 feeTrend
             },
             recentComplaints
-        });
+        };
+
+        adminStatsCache.set(cacheKey, { data: responseData, ts: Date.now() });
+        res.json(responseData);
 
     } catch (error) {
         console.error('Admin Dashboard Error:', error);

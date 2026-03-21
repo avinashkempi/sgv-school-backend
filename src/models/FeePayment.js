@@ -68,5 +68,6 @@ FeePaymentSchema.index({ class: 1 });
 FeePaymentSchema.index({ academicYear: 1 });
 FeePaymentSchema.index({ status: 1 });
 FeePaymentSchema.index({ paymentDate: -1 });
+FeePaymentSchema.index({ student: 1, status: 1, paymentDate: -1 });
 
 module.exports = mongoose.model('FeePayment', FeePaymentSchema);

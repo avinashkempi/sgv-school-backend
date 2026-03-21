@@ -162,11 +162,11 @@ router.get('/student/:studentId', auth, async (req, res) => {
             exam: { $in: exams.map(e => e._id) }
         }).lean();
 
-        // Compute overall percentage for each classmate
         const classmatePercentages = classmates.map(cm => {
             const cmMarks = allClassMarks.filter(m => m.student.toString() === cm._id.toString());
             let cmGrandMax = 0;
             let cmGrandObtained = 0;
+            const examWisePct = {};
 
             examTypes.forEach(type => {
                 const typeExams = exams.filter(e => e.standardizedType === type);
@@ -187,11 +187,12 @@ router.get('/student/:studentId', auth, async (req, res) => {
                 if (typeExams.length > 0 && allHaveMarks) {
                     cmGrandMax += totalMax;
                     cmGrandObtained += totalObtained;
+                    examWisePct[type] = parseFloat(((totalObtained / totalMax) * 100).toFixed(1));
                 }
             });
 
             const pct = cmGrandMax > 0 ? parseFloat(((cmGrandObtained / cmGrandMax) * 100).toFixed(1)) : 0;
-            return { studentId: cm._id.toString(), percentage: pct };
+            return { studentId: cm._id.toString(), percentage: pct, examWisePct };
         });
 
         // Sort descending and find rank
@@ -199,6 +200,25 @@ router.get('/student/:studentId', auth, async (req, res) => {
         const myPct = classmatePercentages.find(c => c.studentId === studentId)?.percentage;
         const classRank = myPct !== undefined ? classmatePercentages.findIndex(c => c.percentage === myPct) + 1 : 0;
         const totalInClass = classmatePercentages.length;
+
+        // Formulate individual exam ranks
+        reportData.forEach(r => {
+            if (r.isCompleted) {
+                const type = r.examType;
+                const validPcts = classmatePercentages
+                    .filter(c => c.examWisePct[type] !== undefined)
+                    .map(c => ({ studentId: c.studentId, pct: c.examWisePct[type] }));
+                
+                validPcts.sort((a, b) => b.pct - a.pct);
+                
+                const myExamPct = validPcts.find(c => c.studentId === studentId)?.pct;
+                if (myExamPct !== undefined) {
+                    const examRankIndex = validPcts.findIndex(c => c.pct === myExamPct);
+                    r.classRank = examRankIndex !== -1 ? examRankIndex + 1 : null;
+                    r.totalInClassForExam = validPcts.length;
+                }
+            }
+        });
 
         res.json({
             student: {

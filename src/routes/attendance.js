@@ -41,43 +41,36 @@ router.post('/mark', [auth, yearContext, requireOpenYear], async (req, res) => {
             return res.status(403).json({ message: 'Not authorized to mark attendance for this class/subject' });
         }
 
-        for (const record of attendanceRecords) {
-            const { studentId, status, remarks, _period } = record;
-            // Ensure date is a Date object, not a timestamp number
-            const attendanceDate = new Date(date);
-            attendanceDate.setHours(0, 0, 0, 0);
+        const attendanceDate = new Date(date);
+        attendanceDate.setHours(0, 0, 0, 0);
 
-            const filter = {
-                user: studentId,
-                class: classId,
-                date: attendanceDate,
-                academicYear: academicYearId,
-                subject: null,
-                period: null
+        const bulkOps = attendanceRecords.map(record => {
+            const { studentId, status, remarks } = record;
+            return {
+                updateOne: {
+                    filter: {
+                        user: studentId,
+                        class: classId,
+                        date: attendanceDate,
+                        academicYear: academicYearId,
+                        subject: null,
+                        period: null
+                    },
+                    update: {
+                        $set: {
+                            status,
+                            remarks: remarks || '',
+                            markedBy: req.user.userId,
+                            role: 'student'
+                        }
+                    },
+                    upsert: true
+                }
             };
+        });
 
-            const existingAttendance = await Attendance.findOne(filter);
-
-            if (existingAttendance) {
-                existingAttendance.status = status;
-                existingAttendance.remarks = remarks || '';
-                existingAttendance.markedBy = req.user.userId;
-                await existingAttendance.save();
-            } else {
-                const attendance = new Attendance({
-                    user: studentId,
-                    role: 'student',
-                    academicYear: academicYearId,
-                    class: classId,
-                    subject: null, // Always null for class attendance
-                    date: attendanceDate,
-                    status,
-                    markedBy: req.user.userId,
-                    period: null, // Always null for class attendance
-                    remarks: remarks || ''
-                });
-                await attendance.save();
-            }
+        if (bulkOps.length > 0) {
+            await Attendance.bulkWrite(bulkOps, { ordered: false });
         }
 
         res.json({ message: 'Attendance marked successfully' });
@@ -100,39 +93,41 @@ router.post('/mark-staff', [auth, yearContext, requireOpenYear], async (req, res
         const { date, attendanceRecords } = req.body; // Records: [{ userId, status, remarks }]
         const academicYearId = req.academicYearContext;
 
-        const attendancePromises = attendanceRecords.map(async (record) => {
+        const dateMidnight = new Date(date).setHours(0, 0, 0, 0);
+
+        // Pre-fetch roles for all users
+        const userIds = attendanceRecords.map(r => r.userId);
+        const users = await User.find({ _id: { $in: userIds } }).select('role');
+        const roleMap = users.reduce((acc, user) => {
+            acc[user._id.toString()] = user.role;
+            return acc;
+        }, {});
+
+        const bulkOps = attendanceRecords.map(record => {
             const { userId, status, remarks } = record;
-
-            const filter = {
-                user: userId,
-                academicYear: academicYearId,
-                date: new Date(date).setHours(0, 0, 0, 0)
+            return {
+                updateOne: {
+                    filter: {
+                        user: userId,
+                        academicYear: academicYearId,
+                        date: dateMidnight
+                    },
+                    update: {
+                        $set: {
+                            status,
+                            remarks: remarks || '',
+                            markedBy: req.user.userId,
+                            role: roleMap[userId] || 'teacher'
+                        }
+                    },
+                    upsert: true
+                }
             };
-
-            const existingAttendance = await Attendance.findOne(filter);
-
-            if (existingAttendance) {
-                existingAttendance.status = status;
-                existingAttendance.remarks = remarks || '';
-                existingAttendance.markedBy = req.user.userId;
-                return await existingAttendance.save();
-            } else {
-                // Fetch user to get role
-                const user = await User.findById(userId);
-                const attendance = new Attendance({
-                    user: userId,
-                    role: user.role, // 'teacher' or others
-                    academicYear: academicYearId,
-                    date: new Date(date).setHours(0, 0, 0, 0),
-                    status,
-                    markedBy: req.user.userId,
-                    remarks: remarks || ''
-                });
-                return await attendance.save();
-            }
         });
 
-        await Promise.all(attendancePromises);
+        if (bulkOps.length > 0) {
+            await Attendance.bulkWrite(bulkOps, { ordered: false });
+        }
         res.json({ message: 'Staff attendance marked successfully' });
     } catch (err) {
         console.error(err.message);
@@ -224,7 +219,9 @@ router.get('/my-attendance', [auth, yearContext], async (req, res) => {
         }
 
         const attendance = await Attendance.find(filter)
-            .sort({ date: -1 });
+            .select('date status remarks subject')
+            .sort({ date: -1 })
+            .lean();
 
         // Calculate summary
         const totalRecords = attendance.length;

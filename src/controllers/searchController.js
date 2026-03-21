@@ -161,25 +161,30 @@ exports.filterStudents = async (req, res) => {
 
         // Calculate attendance for each student (if filtering by attendance)
         if (minAttendance || maxAttendance) {
-            const studentsWithAttendance = await Promise.all(
-                students.map(async (student) => {
-                    const totalDays = await Attendance.countDocuments({
-                        user: student._id,
-                        role: 'student'
-                    });
-                    const presentDays = await Attendance.countDocuments({
-                        user: student._id,
-                        role: 'student',
-                        status: 'present'
-                    });
+            const studentIds = students.map(s => s._id);
 
-                    const attendancePercentage = totalDays > 0
-                        ? (presentDays / totalDays) * 100
-                        : 0;
+            const attendanceAgg = await Attendance.aggregate([
+                { $match: { user: { $in: studentIds }, role: 'student' } },
+                {
+                    $group: {
+                        _id: '$user',
+                        totalDays: { $sum: 1 },
+                        presentDays: {
+                            $sum: { $cond: [{ $in: ['$status', ['present', 'late', 'excused']] }, 1, 0] }
+                        }
+                    }
+                }
+            ]);
 
-                    return { ...student, attendancePercentage };
-                })
-            );
+            const attendanceMap = new Map();
+            attendanceAgg.forEach(a => {
+                attendanceMap.set(a._id.toString(), a.totalDays > 0 ? (a.presentDays / a.totalDays) * 100 : 0);
+            });
+
+            const studentsWithAttendance = students.map(student => {
+                const percentage = attendanceMap.get(student._id.toString()) || 0;
+                return { ...student, attendancePercentage: percentage };
+            });
 
             students = studentsWithAttendance.filter(s => {
                 if (minAttendance && s.attendancePercentage < parseFloat(minAttendance)) return false;
@@ -190,15 +195,19 @@ exports.filterStudents = async (req, res) => {
 
         // Filter by fee status if specified
         if (feeStatus && feeStatus !== 'all') {
-            const studentsWithFees = await Promise.all(
-                students.map(async (student) => {
-                    const pendingFees = await FeePayment.countDocuments({
-                        student: student._id,
-                        status: 'pending'
-                    });
-                    return { ...student, hasPendingFees: pendingFees > 0 };
-                })
-            );
+            const studentIds = students.map(s => s._id);
+
+            const pendingFeesAgg = await FeePayment.aggregate([
+                { $match: { student: { $in: studentIds }, status: 'pending' } },
+                { $group: { _id: '$student', count: { $sum: 1 } } }
+            ]);
+
+            const pendingFeesMap = new Set(pendingFeesAgg.map(f => f._id.toString()));
+
+            const studentsWithFees = students.map(student => ({
+                ...student,
+                hasPendingFees: pendingFeesMap.has(student._id.toString())
+            }));
 
             students = studentsWithFees.filter(s => {
                 if (feeStatus === 'pending') return s.hasPendingFees;

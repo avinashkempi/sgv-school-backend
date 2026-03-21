@@ -44,6 +44,7 @@ const MarksSchema = new mongoose.Schema({
 MarksSchema.index({ student: 1, exam: 1 }, { unique: true });  // One marks entry per student per exam
 MarksSchema.index({ exam: 1 });
 MarksSchema.index({ student: 1 });
+MarksSchema.index({ exam: 1, student: 1, marksObtained: -1 });
 
 // Update timestamp on save
 MarksSchema.pre('save', function (next) {

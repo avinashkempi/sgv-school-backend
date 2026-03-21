@@ -131,6 +131,9 @@ const userSchema = new mongoose.Schema({
     type: Date,
     default: Date.now
   },
+  lastActiveAt: {
+    type: Date
+  },
   notificationPreferences: {
     homework: { type: Boolean, default: true },
     exam: { type: Boolean, default: true },
@@ -164,5 +167,6 @@ userSchema.index({ currentClass: 1 });
 userSchema.index({ academicYear: 1 });
 userSchema.index({ name: 1 });
 userSchema.index({ email: 1 });
+userSchema.index({ role: 1, currentClass: 1 });
 
 module.exports = mongoose.model('User', userSchema);

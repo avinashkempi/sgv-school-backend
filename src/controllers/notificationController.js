@@ -60,6 +60,7 @@ exports.getNotifications = async (req, res) => {
         }
 
         const notifications = await Notification.find(query)
+            .select('-actionData -metadata')
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(limit)
@@ -123,17 +124,21 @@ exports.getUnreadCount = async (req, res) => {
  */
 exports.markAsRead = async (req, res) => {
     try {
-        const { isRead = true } = req.body || {};
+        const isRead = req.body && req.body.isRead !== undefined ? req.body.isRead : true;
+        const notificationId = req.params.id;
         
         // Validate ObjectId
-        if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+        if (!mongoose.Types.ObjectId.isValid(notificationId)) {
             return res.status(400).json({ success: false, message: 'Invalid notification ID' });
         }
         
-        const notification = await Notification.findById(req.params.id);
+        const notification = await Notification.findById(notificationId);
 
         if (!notification) {
-            return res.status(404).json({ success: false, message: 'Notification not found' });
+            // This is expected if notification was already deleted or marked read elsewhere
+            // Only log as debug since this is a valid scenario (race condition or cleanup)
+            console.debug(`[Notification Controller] Notification already deleted or not found (ID: ${notificationId})`);
+            return res.status(404).json({ success: false, message: 'Notification not found or already deleted' });
         }
 
         // Only allow marking if this notification is addressed to the requesting user
@@ -359,8 +364,9 @@ exports.triggerNotification = async (data) => {
     try {
         const { title, message, type, category, priority, target, targetId, actionType, actionData, metadata, recipient } = data;
 
+        const notificationTitle = title ? title : 'New Notification';
         const notification = new Notification({
-            title,
+            title: notificationTitle,
             message,
             type: type || 'General',
             category: category || 'general',

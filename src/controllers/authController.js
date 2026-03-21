@@ -41,6 +41,9 @@ const login = async (req, res) => {
       { expiresIn: '365d' }
     );
 
+    // Update last active
+    await User.updateOne({ _id: user._id }, { lastActiveAt: new Date() });
+
     // Populate currentClass for login response
     await user.populate('currentClass', 'name branch');
 
@@ -93,6 +96,9 @@ const getMe = async (req, res) => {
         message: 'User not found'
       });
     }
+
+    // Update last active asynchronously (no need to await since we don't depend on result)
+    User.updateOne({ _id: req.user.userId }, { lastActiveAt: new Date() }).catch(err => console.error('Error updating lastActiveAt:', err));
 
     res.json({
       success: true,
