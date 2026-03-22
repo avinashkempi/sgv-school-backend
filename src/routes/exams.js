@@ -578,76 +578,6 @@ router.get('/performance/subject/:subjectId', auth, async (req, res) => {
     }
 });
 
-// @route   GET /api/exams/marks-status
-router.get('/marks-status', auth, async (req, res) => {
-    try {
-        const user = await User.findById(req.user.userId);
-        if (user.role !== 'admin' && user.role !== 'super admin') return res.status(403).json({ message: 'Not authorized' });
-        const { academicYearId } = req.query;
-        let yearId = academicYearId;
-        if (!yearId) {
-            const activeYear = await AcademicYear.findOne({ isActive: true });
-            if (activeYear) yearId = activeYear._id;
-        }
-        if (!yearId) return res.status(404).json({ message: 'No active academic year found' });
-
-        const exams = await Exam.find({ academicYear: yearId, isStandardized: true })
-            .populate('class', 'name section')
-            .populate('subject', 'name')
-            .lean();
-
-        console.log(`Found ${exams.length} exams for marks-status in year ${yearId}`);
-
-        if (exams.length === 0) return res.json([]);
-
-        // Sort in memory instead
-        exams.sort((a, b) => {
-            const classA = a.class ? `${a.class.name} ${a.class.section || ''}` : '';
-            const classB = b.class ? `${b.class.name} ${b.class.section || ''}` : '';
-            if (classA !== classB) return classA.localeCompare(classB);
-            const typeOrder = ['FA1', 'FA2', 'SA1', 'FA3', 'FA4', 'SA2'];
-            return typeOrder.indexOf(a.standardizedType) - typeOrder.indexOf(b.standardizedType);
-        });
-
-        const classIds = [...new Set(exams.map(e => e.class?._id))].filter(Boolean);
-        const studentCounts = await User.aggregate([
-            { $match: { role: 'student', currentClass: { $in: classIds } } },
-            { $group: { _id: '$currentClass', count: { $sum: 1 } } }
-        ]);
-        const studentCountMap = {};
-        studentCounts.forEach(item => { studentCountMap[item._id.toString()] = item.count; });
-
-        const examIds = exams.map(e => e._id);
-        const marksCounts = await Marks.aggregate([
-            { $match: { exam: { $in: examIds } } },
-            { $group: { _id: '$exam', count: { $sum: 1 } } }
-        ]);
-        const marksCountMap = {};
-        marksCounts.forEach(item => { marksCountMap[item._id.toString()] = item.count; });
-
-        const statusReport = exams.map(exam => {
-            const classId = exam.class?._id?.toString();
-            const examId = exam._id.toString();
-            const totalStudents = studentCountMap[classId] || 0;
-            const enteredMarksCount = marksCountMap[examId] || 0;
-            return {
-                _id: exam._id, examName: exam.name, examType: exam.standardizedType,
-                className: exam.class ? `${exam.class.name} ${exam.class.section || ''}` : 'Unknown',
-                subjectName: exam.subject?.name || 'Unknown', date: exam.date,
-                totalStudents, enteredMarksCount,
-                status: enteredMarksCount === 0 ? 'Pending' : (enteredMarksCount >= totalStudents ? 'Complete' : 'Partial')
-            };
-        });
-        res.json(statusReport);
-    } catch (err) {
-        console.error("marks-status error:", err);
-        res.status(500).json({ 
-            success: false, 
-            message: `Marks Status Error: ${err.message}`,
-            stack: err.stack
-        });
-    }
-});
 
 // @route   GET /api/exams/performance/school
 router.get('/performance/school', auth, async (req, res) => {
@@ -687,20 +617,70 @@ router.get('/performance/school', auth, async (req, res) => {
                 const exam = classExams.find(e => e._id.toString() === mark.exam.toString());
                 if (exam) { total += exam.totalMarks; obtained += mark.marksObtained; }
             });
-            return { classId: cls._id, className: `${cls.name} ${cls.section || ''}`, avgPercentage: total > 0 ? parseFloat(((obtained/total)*100).toFixed(2)) : 0 };
+
+            // Per-exam-type breakdown for this class
+            const examTypeBreakdown = examTypes.map(type => {
+                const typeExams = classExams.filter(e => e.standardizedType === type);
+                const typeMarks = allMarks.filter(m => typeExams.some(e => e._id.toString() === m.exam.toString()));
+                let tTotal = 0, tObtained = 0;
+                typeMarks.forEach(mark => {
+                    const exam = typeExams.find(e => e._id.toString() === mark.exam.toString());
+                    if (exam) { tTotal += exam.totalMarks; tObtained += mark.marksObtained; }
+                });
+                return {
+                    examType: type,
+                    avgPercentage: tTotal > 0 ? parseFloat(((tObtained / tTotal) * 100).toFixed(2)) : null,
+                    marksEntered: typeMarks.length,
+                    examsCount: typeExams.length
+                };
+            }).filter(b => b.examsCount > 0);
+
+            return {
+                classId: cls._id,
+                className: `${cls.name} ${cls.section || ''}`,
+                avgPercentage: total > 0 ? parseFloat(((obtained / total) * 100).toFixed(2)) : 0,
+                examsCount: classExams.length,
+                examTypeBreakdown
+            };
         });
 
         const subjectNameMap = new Map();
         exams.forEach(exam => {
             const name = exam.subject.name.trim();
             const marks = allMarks.filter(m => m.exam.toString() === exam._id.toString());
-            if (!subjectNameMap.has(name)) subjectNameMap.set(name, { total: 0, obtained: 0, count: 0 });
-            const s = subjectNameMap.get(name); s.total += exam.totalMarks * marks.length;
-            marks.forEach(m => s.obtained += m.marksObtained); s.count += 1;
+            if (!subjectNameMap.has(name)) subjectNameMap.set(name, { total: 0, obtained: 0, count: 0, examsByType: {} });
+            const s = subjectNameMap.get(name);
+            s.total += exam.totalMarks * marks.length;
+            marks.forEach(m => s.obtained += m.marksObtained);
+            s.count += 1;
+
+            // Group by exam type for breakdown
+            const type = exam.standardizedType;
+            if (!s.examsByType[type]) s.examsByType[type] = { total: 0, obtained: 0, count: 0 };
+            const t = s.examsByType[type];
+            t.total += exam.totalMarks * marks.length;
+            marks.forEach(m => t.obtained += m.marksObtained);
+            t.count += 1;
         });
-        const subjectwiseSummary = Array.from(subjectNameMap.entries()).map(([name, s]) => ({
-            subjectName: name, avgPercentage: s.total > 0 ? parseFloat(((s.obtained/s.total)*100).toFixed(2)) : 0
-        }));
+
+        const subjectwiseSummary = Array.from(subjectNameMap.entries()).map(([name, s]) => {
+            const examTypeBreakdown = examTypes.map(type => {
+                const t = s.examsByType[type];
+                if (!t || t.count === 0) return null;
+                return {
+                    examType: type,
+                    avgPercentage: t.total > 0 ? parseFloat(((t.obtained / t.total) * 100).toFixed(2)) : null,
+                    examsCount: t.count
+                };
+            }).filter(Boolean);
+
+            return {
+                subjectName: name,
+                avgPercentage: s.total > 0 ? parseFloat(((s.obtained / s.total) * 100).toFixed(2)) : 0,
+                examsCount: s.count,
+                examTypeBreakdown
+            };
+        });
 
         res.json({ examwisePerformance: schoolPerformance, classwiseSummary, subjectwiseSummary });
     } catch (err) {
