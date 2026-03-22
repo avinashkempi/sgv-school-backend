@@ -14,9 +14,6 @@ const { sendTargetedNotification } = require('../services/notificationService');
 // @route   GET /api/exams/standardized
 // @desc    Get status of standardized exams for a class/subject
 // @access  Private (Teacher)
-// @route   GET /api/exams/standardized
-// @desc    Get status of standardized exams for a class/subject
-// @access  Private (Teacher)
 router.get('/standardized', auth, async (req, res) => {
     try {
         const { classId, subjectId } = req.query;
@@ -26,7 +23,6 @@ router.get('/standardized', auth, async (req, res) => {
         }
 
         // Get active academic year
-        // AcademicYear imported at top of file
         const activeYear = await AcademicYear.findOne({ isActive: true }).lean();
 
         if (!activeYear) {
@@ -98,7 +94,6 @@ router.post('/standardized', auth, async (req, res) => {
             return res.status(404).json({ message: 'Subject not found' });
         }
 
-        // Validate teacher authorization
         const userRole = req.user.role;
         const isAdmin = userRole === 'admin' || userRole === 'super admin';
 
@@ -107,7 +102,6 @@ router.post('/standardized', auth, async (req, res) => {
         }
 
         // Get active academic year
-        const AcademicYear = require('../models/AcademicYear');
         const activeYear = await AcademicYear.findOne({ isActive: true });
 
         if (!activeYear) {
@@ -127,7 +121,6 @@ router.post('/standardized', auth, async (req, res) => {
             return res.status(400).json({ message: `${type} exam already exists for this subject and class` });
         }
 
-        // Get full exam name
         const examNames = {
             'FA1': 'Formative Assessment 1',
             'FA2': 'Formative Assessment 2',
@@ -173,7 +166,6 @@ router.post('/standardized/bulk', auth, async (req, res) => {
     try {
         const { classId, subjectId, totalMarks, date, instructions, duration } = req.body;
 
-        // Validate teacher authorization
         const subject = await Subject.findById(subjectId);
         if (!subject) {
             return res.status(404).json({ message: 'Subject not found' });
@@ -186,8 +178,6 @@ router.post('/standardized/bulk', auth, async (req, res) => {
             return res.status(403).json({ message: 'Not authorized to create exams for this subject' });
         }
 
-        // Get active academic year
-        const AcademicYear = require('../models/AcademicYear');
         const activeYear = await AcademicYear.findOne({ isActive: true });
 
         if (!activeYear) {
@@ -207,7 +197,6 @@ router.post('/standardized/bulk', auth, async (req, res) => {
         const results = [];
 
         for (const type of examTypes) {
-            // Check if exists
             let exam = await Exam.findOne({
                 class: classId,
                 subject: subjectId,
@@ -238,7 +227,6 @@ router.post('/standardized/bulk', auth, async (req, res) => {
             }
         }
 
-        // Notify Class about new exams
         if (results.some(r => r.status === 'created')) {
             await sendTargetedNotification('class', classId, {
                 title: 'New Exams Scheduled',
@@ -259,11 +247,8 @@ router.post('/standardized/bulk', auth, async (req, res) => {
 // @access  Private (Admin/Super Admin)
 router.post('/school-wide/init', auth, async (req, res) => {
     try {
-        // subjectMarks: optional { [subjectId]: marks } to override per-subject total marks
-        // excludedSubjectIds: optional string[] of subject IDs to skip entirely for this exam type
         const { type, totalMarks, date, instructions, duration, classIds, subjectMarks, excludedSubjectIds } = req.body;
 
-        // Validate Admin/Super Admin
         const userRole = req.user.role;
         if (userRole !== 'admin' && userRole !== 'super admin') {
             return res.status(403).json({ message: 'Not authorized. Only Admins can perform school-wide initialization.' });
@@ -273,8 +258,6 @@ router.post('/school-wide/init', auth, async (req, res) => {
             return res.status(400).json({ message: 'Invalid exam type. Must be one of: FA1, FA2, SA1, FA3, FA4, SA2' });
         }
 
-        // Get active academic year
-        const AcademicYear = require('../models/AcademicYear');
         const activeYear = await AcademicYear.findOne({ isActive: true }).lean();
 
         if (!activeYear) {
@@ -290,7 +273,6 @@ router.post('/school-wide/init', auth, async (req, res) => {
             'SA2': 'Summative Assessment 2'
         };
 
-        // 1. Fetch Classes based on input
         let classQuery = {};
         if (classIds && Array.isArray(classIds) && classIds.length > 0) {
             classQuery = { _id: { $in: classIds } };
@@ -305,39 +287,30 @@ router.post('/school-wide/init', auth, async (req, res) => {
             return res.status(404).json({ message: 'No classes found to initialize exams for.' });
         }
 
-        // 2. Fetch all existing exams of this type for this year
         const existingExams = await Exam.find({
             academicYear: activeYear._id,
             standardizedType: type,
             isStandardized: true
         }).select('class subject').lean();
 
-        // Create a Set for fast lookup: "classId-subjectId"
         const existingExamSet = new Set(
             existingExams.map(e => `${e.class.toString()}-${e.subject.toString()}`)
         );
 
         const newExams = [];
         let skippedCount = 0;
-
-        // 3. Iterate in memory — use per-subject marks if provided
         const globalDefault = totalMarks || 100;
         const excludedSet = new Set((Array.isArray(excludedSubjectIds) ? excludedSubjectIds : []).map(String));
 
         for (const cls of classes) {
             const classSubjects = allSubjects.filter(s => s.class.toString() === cls._id.toString());
-
             for (const subject of classSubjects) {
-                // Skip subjects explicitly excluded by the admin
                 if (excludedSet.has(subject._id.toString())) {
                     skippedCount++;
                     continue;
                 }
-
                 const key = `${cls._id.toString()}-${subject._id.toString()}`;
-
                 if (!existingExamSet.has(key)) {
-                    // Use per-subject mark if provided, else fall back to global default
                     const subjectSpecificMarks = subjectMarks && subjectMarks[subject._id.toString()]
                         ? Number(subjectMarks[subject._id.toString()])
                         : globalDefault;
@@ -362,10 +335,8 @@ router.post('/school-wide/init', auth, async (req, res) => {
             }
         }
 
-        // 4. Bulk Insert
         if (newExams.length > 0) {
             await Exam.insertMany(newExams);
-
             const affectedClassIds = [...new Set(newExams.map(e => e.class.toString()))];
             for (const cId of affectedClassIds) {
                 await sendTargetedNotification('class', cId, {
@@ -383,62 +354,31 @@ router.post('/school-wide/init', auth, async (req, res) => {
             totalProcessed: newExams.length + skippedCount,
             targetClasses: classes.length
         });
-
     } catch (err) {
         console.error(err.message);
         res.status(500).send('Server Error');
     }
 });
 
-
 // @route   POST /api/exams
-// @desc    Create new exam (DEPRECATED - Use /api/exams/standardized instead)
-// @access  Private (Admin only)
+// @desc    Create new exam (DEPRECATED)
 router.post('/', auth, async (req, res) => {
     try {
-        // Only allow admins to create exams through this endpoint
         const user = await User.findById(req.user.userId);
         if (user.role !== 'admin' && user.role !== 'super admin') {
             return res.status(403).json({
-                message: 'This endpoint is deprecated. Please use /api/exams/standardized to create exams with the 6 fixed assessment types (FA1, FA2, SA1, FA3, FA4, SA2)'
+                message: 'This endpoint is deprecated. Please use /api/exams/standardized'
             });
         }
-
         const { name, type, classId, subjectId, totalMarks, date, instructions, duration, room } = req.body;
-
-        // Validate teacher authorization (must teach this subject)
-        const subject = await Subject.findById(subjectId);
-        if (!subject) {
-            return res.status(404).json({ message: 'Subject not found' });
-        }
-
-        // Get active academic year
-        // AcademicYear imported at top of file
         const activeYear = await AcademicYear.findOne({ isActive: true });
-
         const exam = new Exam({
-            name,
-            type,
-            class: classId,
-            subject: subjectId,
-            totalMarks,
-            date: date || Date.now(),
-            academicYear: activeYear ? activeYear._id : null,
-            createdBy: req.user.userId,
-            instructions,
-            duration,
-            room,
-            isStandardized: false  // Mark as non-standardized for backward compatibility
+            name, type, class: classId, subject: subjectId, totalMarks,
+            date: date || Date.now(), academicYear: activeYear ? activeYear._id : null,
+            createdBy: req.user.userId, instructions, duration, room, isStandardized: false
         });
-
         await exam.save();
-
-        const populatedExam = await Exam.findById(exam._id)
-            .populate('class', 'name section')
-            .populate('subject', 'name')
-            .populate('createdBy', 'name');
-
-        res.json(populatedExam);
+        res.json(await Exam.findById(exam._id).populate('class subject createdBy'));
     } catch (err) {
         console.error(err.message);
         res.status(500).send('Server Error');
@@ -446,94 +386,46 @@ router.post('/', auth, async (req, res) => {
 });
 
 // @route   GET /api/exams/subject/:subjectId
-// @desc    Get all standardized exams for a subject
-// @access  Private (Teacher/Student)
 router.get('/subject/:subjectId', auth, async (req, res) => {
     try {
-        const exams = await Exam.find({
-            subject: req.params.subjectId,
-            isStandardized: true  // Only show standardized exams
-        })
-            .populate('class', 'name section')
-            .populate('subject', 'name')
-            .populate('createdBy', 'name')
-            .sort({ date: -1 })
-            .lean();
-
+        const exams = await Exam.find({ subject: req.params.subjectId, isStandardized: true })
+            .populate('class subject createdBy').sort({ date: -1 }).lean();
         res.json(exams);
     } catch (err) {
         console.error(err.message);
-        if (err.kind === 'ObjectId') {
-            return res.status(404).json({ message: 'Subject not found' });
-        }
         res.status(500).send('Server Error');
     }
 });
 
 // @route   GET /api/exams/:id
-// @desc    Get exam by ID
-// @access  Private
 router.get('/:id', auth, async (req, res) => {
     try {
-        // Validate ObjectId format to prevent casting errors
-        if (!req.params.id.match(/^[0-9a-fA-F]{24}$/)) {
-            return res.status(404).json({ msg: 'Invalid exam ID format' });
-        }
-        const exam = await Exam.findById(req.params.id)
-            .populate('class', 'name section')
-            .populate('subject', 'name')
-            .populate('createdBy', 'name')
-            .populate('academicYear', 'name')
-            .lean();
-
-        if (!exam) {
-            return res.status(404).json({ message: 'Exam not found' });
-        }
-
+        if (!req.params.id.match(/^[0-9a-fA-F]{24}$/)) return res.status(404).json({ msg: 'Invalid exam ID format' });
+        const exam = await Exam.findById(req.params.id).populate('class subject createdBy academicYear').lean();
+        if (!exam) return res.status(404).json({ message: 'Exam not found' });
         res.json(exam);
     } catch (err) {
         console.error(err.message);
-        if (err.kind === 'ObjectId') {
-            return res.status(404).json({ message: 'Exam not found' });
-        }
         res.status(500).send('Server Error');
     }
 });
 
 // @route   PUT /api/exams/:id
-// @desc    Update exam
-// @access  Private (Teacher - creator only)
 router.put('/:id', auth, async (req, res) => {
     try {
         let exam = await Exam.findById(req.params.id);
-
-        if (!exam) {
-            return res.status(404).json({ message: 'Exam not found' });
-        }
-
-        // Check if user is the creator OR admin
+        if (!exam) return res.status(404).json({ message: 'Exam not found' });
         const updater = await User.findById(req.user.userId);
-        const isAdminUser = updater.role === 'admin' || updater.role === 'super admin';
-        if (exam.createdBy.toString() !== req.user.userId && !isAdminUser) {
+        if (exam.createdBy.toString() !== req.user.userId && updater.role !== 'admin' && updater.role !== 'super admin') {
             return res.status(403).json({ message: 'Not authorized' });
         }
-
         const { totalMarks, date, instructions, duration } = req.body;
-
-        // For standardized exams, don't allow changing name or type
         if (totalMarks) exam.totalMarks = totalMarks;
         if (date) exam.date = date;
         if (instructions !== undefined) exam.instructions = instructions;
         if (duration) exam.duration = duration;
-
         await exam.save();
-
-        exam = await Exam.findById(exam._id)
-            .populate('class', 'name section')
-            .populate('subject', 'name')
-            .populate('createdBy', 'name');
-
-        res.json(exam);
+        res.json(await Exam.findById(exam._id).populate('class subject createdBy'));
     } catch (err) {
         console.error(err.message);
         res.status(500).send('Server Error');
@@ -541,29 +433,16 @@ router.put('/:id', auth, async (req, res) => {
 });
 
 // @route   DELETE /api/exams/:id
-// @desc    Delete exam (and all associated marks)
-// @access  Private (Teacher - creator only OR Admin)
 router.delete('/:id', auth, async (req, res) => {
     try {
         const exam = await Exam.findById(req.params.id);
-
-        if (!exam) {
-            return res.status(404).json({ message: 'Exam not found' });
-        }
-
+        if (!exam) return res.status(404).json({ message: 'Exam not found' });
         const user = await User.findById(req.user.userId);
-
-        // Check authorization
         if (exam.createdBy.toString() !== req.user.userId && user.role !== 'admin' && user.role !== 'super admin') {
             return res.status(403).json({ message: 'Not authorized' });
         }
-
-        // Delete all marks for this exam
         await Marks.deleteMany({ exam: req.params.id });
-
-        // Delete exam
         await Exam.findByIdAndDelete(req.params.id);
-
         res.json({ message: 'Exam and associated marks deleted' });
     } catch (err) {
         console.error(err.message);
@@ -572,32 +451,13 @@ router.delete('/:id', auth, async (req, res) => {
 });
 
 // @route   GET /api/exams/schedule/student
-// @desc    Get upcoming standardized exams for the logged-in student
-// @access  Private (Student)
 router.get('/schedule/student', auth, async (req, res) => {
     try {
         const user = await User.findById(req.user.userId);
-        if (!user || user.role !== 'student') {
-            return res.status(403).json({ message: 'Not authorized' });
-        }
-
-        if (!user.currentClass) {
-            return res.status(400).json({ message: 'Student not assigned to a class' });
-        }
-
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-
-        const exams = await Exam.find({
-            class: user.currentClass,
-            date: { $gte: today },
-            isStandardized: true  // Only show standardized exams
-        })
-            .populate('subject', 'name')
-            .populate('class', 'name section')
-            .sort({ date: 1 })
-            .lean();
-
+        if (!user || user.role !== 'student') return res.status(403).json({ message: 'Not authorized' });
+        const today = new Date(); today.setHours(0, 0, 0, 0);
+        const exams = await Exam.find({ class: user.currentClass, date: { $gte: today }, isStandardized: true })
+            .populate('subject class').sort({ date: 1 }).lean();
         res.json(exams);
     } catch (err) {
         console.error(err.message);
@@ -606,19 +466,10 @@ router.get('/schedule/student', auth, async (req, res) => {
 });
 
 // @route   GET /api/exams/schedule/class/:classId
-// @desc    Get all standardized exams for a specific class (Admin/Teacher view)
-// @access  Private
 router.get('/schedule/class/:classId', auth, async (req, res) => {
     try {
-        const exams = await Exam.find({
-            class: req.params.classId,
-            isStandardized: true  // Only show standardized exams
-        })
-            .populate('subject', 'name')
-            .populate('createdBy', 'name')
-            .sort({ date: 1 })
-            .lean();
-
+        const exams = await Exam.find({ class: req.params.classId, isStandardized: true })
+            .populate('subject createdBy').sort({ date: 1 }).lean();
         res.json(exams);
     } catch (err) {
         console.error(err.message);
@@ -627,35 +478,13 @@ router.get('/schedule/class/:classId', auth, async (req, res) => {
 });
 
 // @route   GET /api/exams/history
-// @desc    Get exam history (past date)
-// @access  Private (Teacher/Admin)
 router.get('/history', auth, async (req, res) => {
     try {
         const user = await User.findById(req.user.userId);
-        const today = new Date();
-        today.setHours(0, 0, 0, 0); // Start of today
-
-        let query = {
-            date: { $lt: today },
-            isStandardized: true  // Only show standardized exams
-        };
-
-        // If teacher, only show their exams
-        if (user.role === 'teacher' || user.role === 'staff') {
-            query.createdBy = req.user.userId;
-        }
-
-        if (user.role === 'student') {
-            return res.status(403).json({ message: 'Not authorized' });
-        }
-
-        const exams = await Exam.find(query)
-            .populate('class', 'name section')
-            .populate('subject', 'name')
-            .populate('createdBy', 'name')
-            .sort({ date: -1 })
-            .lean();
-
+        const today = new Date(); today.setHours(0, 0, 0, 0);
+        let query = { date: { $lt: today }, isStandardized: true };
+        if (user.role === 'teacher' || user.role === 'staff') query.createdBy = req.user.userId;
+        const exams = await Exam.find(query).populate('class subject createdBy').sort({ date: -1 }).lean();
         res.json(exams);
     } catch (err) {
         console.error(err.message);
@@ -664,81 +493,45 @@ router.get('/history', auth, async (req, res) => {
 });
 
 // @route   GET /api/exams/performance/class/:classId
-// @desc    Get exam-wise performance for a class
-// @access  Private (Class Teacher/Admin)
 router.get('/performance/class/:classId', auth, async (req, res) => {
     try {
         const { academicYearId } = req.query;
-        const _user = await User.findById(req.user.userId);
-
-        // Get active academic year if not provided
         let yearId = academicYearId;
         if (!yearId) {
-            // AcademicYear imported at top of file
             const activeYear = await AcademicYear.findOne({ isActive: true });
             if (activeYear) yearId = activeYear._id;
         }
-
-        // Get all standardized exams for this class
-        const exams = await Exam.find({
-            class: req.params.classId,
-            academicYear: yearId,
-            isStandardized: true
-        }).populate('subject', 'name').lean();
-
-        // Get all students in the class
-        const students = await User.find({
-            currentClass: req.params.classId,
-            role: 'student'
-        }).select('name email').lean();
-
-        // Get all marks for these exams
+        const exams = await Exam.find({ class: req.params.classId, academicYear: yearId, isStandardized: true }).populate('subject').lean();
+        const students = await User.find({ currentClass: req.params.classId, role: 'student' }).select('name').lean();
         const examIds = exams.map(e => e._id);
-        const allMarks = await Marks.find({
-            exam: { $in: examIds }
-        }).populate('student', 'name').lean();
+        const allMarks = await Marks.find({ exam: { $in: examIds } }).lean();
 
-        // Group by exam type
         const examTypes = ['FA1', 'FA2', 'SA1', 'FA3', 'FA4', 'SA2'];
         const performance = examTypes.map(type => {
             const typeExams = exams.filter(e => e.standardizedType === type);
             const examIdsForType = typeExams.map(e => e._id.toString());
             const marksForType = allMarks.filter(m => examIdsForType.includes(m.exam.toString()));
-
-            let totalMarks = 0;
-            let obtainedMarks = 0;
+            let totalMarks = 0, obtainedMarks = 0;
             let studentsWithMarks = new Set();
-
             marksForType.forEach(mark => {
                 const exam = typeExams.find(e => e._id.toString() === mark.exam.toString());
                 if (exam) {
                     totalMarks += exam.totalMarks;
                     obtainedMarks += mark.marksObtained;
-                    studentsWithMarks.add(mark.student._id.toString());
+                    studentsWithMarks.add(mark.student.toString());
                 }
             });
-
             const avgPercentage = totalMarks > 0 ? ((obtainedMarks / totalMarks) * 100).toFixed(2) : 0;
-            const highest = marksForType.length > 0 ? Math.max(...marksForType.map(m => m.percentage)) : 0;
-            const lowest = marksForType.length > 0 ? Math.min(...marksForType.map(m => m.percentage)) : 0;
-
             return {
                 examType: type,
                 subjectsCount: typeExams.length,
                 studentsWithMarks: studentsWithMarks.size,
                 totalStudents: students.length,
                 avgPercentage: parseFloat(avgPercentage),
-                highest,
-                lowest,
                 isComplete: typeExams.length > 0 && studentsWithMarks.size === students.length
             };
         });
-
-        res.json({
-            classId: req.params.classId,
-            totalStudents: students.length,
-            performance
-        });
+        res.json({ classId: req.params.classId, totalStudents: students.length, performance });
     } catch (err) {
         console.error(err.message);
         res.status(500).send('Server Error');
@@ -746,96 +539,93 @@ router.get('/performance/class/:classId', auth, async (req, res) => {
 });
 
 // @route   GET /api/exams/performance/subject/:subjectId
-// @desc    Get exam-wise performance for a subject
-// @access  Private (Subject Teacher/Admin)
 router.get('/performance/subject/:subjectId', auth, async (req, res) => {
     try {
         const { academicYearId, classId } = req.query;
-
-        // Get active academic year if not provided
         let yearId = academicYearId;
         if (!yearId) {
-            const AcademicYear = require('../models/AcademicYear');
             const activeYear = await AcademicYear.findOne({ isActive: true });
             if (activeYear) yearId = activeYear._id;
         }
-
-        // Build query
-        let examQuery = {
-            subject: req.params.subjectId,
-            academicYear: yearId,
-            isStandardized: true
-        };
-
-        if (classId) {
-            examQuery.class = classId;
-        }
-
-        // Get all standardized exams for this subject
+        let examQuery = { subject: req.params.subjectId, academicYear: yearId, isStandardized: true };
+        if (classId) examQuery.class = classId;
         const exams = await Exam.find(examQuery).populate('class', 'name section').lean();
-
-        // Get all marks for these exams
         const examIds = exams.map(e => e._id);
-        const allMarks = await Marks.find({
-            exam: { $in: examIds }
-        }).lean();
+        const allMarks = await Marks.find({ exam: { $in: examIds } }).lean();
 
-        // Group by exam type and class
         const examTypes = ['FA1', 'FA2', 'SA1', 'FA3', 'FA4', 'SA2'];
         const performance = examTypes.map(type => {
             const typeExams = exams.filter(e => e.standardizedType === type);
-
             const classwiseData = typeExams.map(exam => {
                 const marksForExam = allMarks.filter(m => m.exam.toString() === exam._id.toString());
-
                 let totalObtained = 0;
                 marksForExam.forEach(m => totalObtained += m.marksObtained);
-
-                const avgPercentage = marksForExam.length > 0
-                    ? ((totalObtained / (exam.totalMarks * marksForExam.length)) * 100).toFixed(2)
-                    : 0;
-
-                const highest = marksForExam.length > 0 ? Math.max(...marksForExam.map(m => m.percentage)) : 0;
-                const lowest = marksForExam.length > 0 ? Math.min(...marksForExam.map(m => m.percentage)) : 0;
-
-                return {
-                    classId: exam.class._id,
-                    className: `${exam.class.name} ${exam.class.section || ''}`,
-                    studentsCount: marksForExam.length,
-                    avgPercentage: parseFloat(avgPercentage),
-                    highest,
-                    lowest
-                };
+                const avgPercentage = marksForExam.length > 0 ? ((totalObtained / (exam.totalMarks * marksForExam.length)) * 100).toFixed(2) : 0;
+                return { classId: exam.class._id, className: `${exam.class.name} ${exam.class.section || ''}`, avgPercentage: parseFloat(avgPercentage) };
             });
-
-            // Overall for this exam type
-            const allMarksForType = allMarks.filter(m =>
-                typeExams.some(e => e._id.toString() === m.exam.toString())
-            );
-
-            let overallTotal = 0;
-            let overallObtained = 0;
+            let overallTotal = 0, overallObtained = 0;
             typeExams.forEach(exam => {
-                const marksForExam = allMarksForType.filter(m => m.exam.toString() === exam._id.toString());
-                marksForExam.forEach(m => {
-                    overallTotal += exam.totalMarks;
-                    overallObtained += m.marksObtained;
-                });
+                const marksForExam = allMarks.filter(m => m.exam.toString() === exam._id.toString());
+                marksForExam.forEach(m => { overallTotal += exam.totalMarks; overallObtained += m.marksObtained; });
             });
-
             const overallAvg = overallTotal > 0 ? ((overallObtained / overallTotal) * 100).toFixed(2) : 0;
+            return { examType: type, overallAvgPercentage: parseFloat(overallAvg), classwiseData };
+        });
+        res.json({ subjectId: req.params.subjectId, performance });
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).send('Server Error');
+    }
+});
 
+// @route   GET /api/exams/marks-status
+router.get('/marks-status', auth, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.userId);
+        if (user.role !== 'admin' && user.role !== 'super admin') return res.status(403).json({ message: 'Not authorized' });
+        const { academicYearId } = req.query;
+        let yearId = academicYearId;
+        if (!yearId) {
+            const activeYear = await AcademicYear.findOne({ isActive: true });
+            if (activeYear) yearId = activeYear._id;
+        }
+        if (!yearId) return res.status(404).json({ message: 'No active academic year found' });
+
+        const exams = await Exam.find({ academicYear: yearId, isStandardized: true })
+            .populate('class', 'name section').populate('subject', 'name').sort({ 'class.name': 1, standardizedType: 1 }).lean();
+
+        if (exams.length === 0) return res.json([]);
+
+        const classIds = [...new Set(exams.map(e => e.class?._id))].filter(Boolean);
+        const studentCounts = await User.aggregate([
+            { $match: { role: 'student', currentClass: { $in: classIds } } },
+            { $group: { _id: '$currentClass', count: { $sum: 1 } } }
+        ]);
+        const studentCountMap = {};
+        studentCounts.forEach(item => { studentCountMap[item._id.toString()] = item.count; });
+
+        const examIds = exams.map(e => e._id);
+        const marksCounts = await Marks.aggregate([
+            { $match: { exam: { $in: examIds } } },
+            { $group: { _id: '$exam', count: { $sum: 1 } } }
+        ]);
+        const marksCountMap = {};
+        marksCounts.forEach(item => { marksCountMap[item._id.toString()] = item.count; });
+
+        const statusReport = exams.map(exam => {
+            const classId = exam.class?._id?.toString();
+            const examId = exam._id.toString();
+            const totalStudents = studentCountMap[classId] || 0;
+            const enteredMarksCount = marksCountMap[examId] || 0;
             return {
-                examType: type,
-                overallAvgPercentage: parseFloat(overallAvg),
-                classwiseData
+                _id: exam._id, examName: exam.name, examType: exam.standardizedType,
+                className: exam.class ? `${exam.class.name} ${exam.class.section || ''}` : 'Unknown',
+                subjectName: exam.subject?.name || 'Unknown', date: exam.date,
+                totalStudents, enteredMarksCount,
+                status: enteredMarksCount === 0 ? 'Pending' : (enteredMarksCount >= totalStudents ? 'Complete' : 'Partial')
             };
         });
-
-        res.json({
-            subjectId: req.params.subjectId,
-            performance
-        });
+        res.json(statusReport);
     } catch (err) {
         console.error(err.message);
         res.status(500).send('Server Error');
@@ -843,150 +633,59 @@ router.get('/performance/subject/:subjectId', auth, async (req, res) => {
 });
 
 // @route   GET /api/exams/performance/school
-// @desc    Get school-wide exam performance
-// @access  Private (Admin/Super Admin)
 router.get('/performance/school', auth, async (req, res) => {
     try {
         const user = await User.findById(req.user.userId);
-        if (user.role !== 'admin' && user.role !== 'super admin') {
-            return res.status(403).json({ message: 'Not authorized' });
-        }
-
+        if (user.role !== 'admin' && user.role !== 'super admin') return res.status(403).json({ message: 'Not authorized' });
         const { academicYearId } = req.query;
-
-        // Get active academic year if not provided
         let yearId = academicYearId;
         if (!yearId) {
-            const AcademicYear = require('../models/AcademicYear');
             const activeYear = await AcademicYear.findOne({ isActive: true });
             if (activeYear) yearId = activeYear._id;
         }
-
-        // Get all standardized exams for this academic year
-        const exams = await Exam.find({
-            academicYear: yearId,
-            isStandardized: true
-        }).populate('class', 'name section')
-            .populate('subject', 'name')
-            .lean();
-
-        // Get all marks for these exams
+        const exams = await Exam.find({ academicYear: yearId, isStandardized: true }).populate('class subject').lean();
         const examIds = exams.map(e => e._id);
-        const allMarks = await Marks.find({
-            exam: { $in: examIds }
-        }).lean();
+        const allMarks = await Marks.find({ exam: { $in: examIds } }).lean();
 
-        // Group by exam type
         const examTypes = ['FA1', 'FA2', 'SA1', 'FA3', 'FA4', 'SA2'];
         const schoolPerformance = examTypes.map(type => {
             const typeExams = exams.filter(e => e.standardizedType === type);
             const examIdsForType = typeExams.map(e => e._id.toString());
             const marksForType = allMarks.filter(m => examIdsForType.includes(m.exam.toString()));
-
-            let totalMarks = 0;
-            let obtainedMarks = 0;
-
+            let totalMarks = 0, obtainedMarks = 0;
             marksForType.forEach(mark => {
                 const exam = typeExams.find(e => e._id.toString() === mark.exam.toString());
-                if (exam) {
-                    totalMarks += exam.totalMarks;
-                    obtainedMarks += mark.marksObtained;
-                }
+                if (exam) { totalMarks += exam.totalMarks; obtainedMarks += mark.marksObtained; }
             });
-
             const avgPercentage = totalMarks > 0 ? ((obtainedMarks / totalMarks) * 100).toFixed(2) : 0;
-
-            return {
-                examType: type,
-                examsCount: typeExams.length,
-                marksEntered: marksForType.length,
-                avgPercentage: parseFloat(avgPercentage)
-            };
+            return { examType: type, examsCount: typeExams.length, marksEntered: marksForType.length, avgPercentage: parseFloat(avgPercentage) };
         });
 
-        // Class-wise summary
-        // Class imported at top of file
         const classes = await Class.find().lean();
         const classwiseSummary = classes.map(cls => {
             const classExams = exams.filter(e => e.class._id.toString() === cls._id.toString());
-            const classExamIds = classExams.map(e => e._id.toString());
-            const classMarks = allMarks.filter(m => classExamIds.includes(m.exam.toString()));
-
-            let totalMarks = 0;
-            let obtainedMarks = 0;
-
-            classMarks.forEach(mark => {
+            const marks = allMarks.filter(m => classExams.some(e => e._id.toString() === m.exam.toString()));
+            let total = 0, obtained = 0;
+            marks.forEach(mark => {
                 const exam = classExams.find(e => e._id.toString() === mark.exam.toString());
-                if (exam) {
-                    totalMarks += exam.totalMarks;
-                    obtainedMarks += mark.marksObtained;
-                }
+                if (exam) { total += exam.totalMarks; obtained += mark.marksObtained; }
             });
-
-            const avgPercentage = totalMarks > 0 ? ((obtainedMarks / totalMarks) * 100).toFixed(2) : 0;
-
-            return {
-                classId: cls._id,
-                className: `${cls.name} ${cls.section || ''}`,
-                examsCount: classExams.length,
-                avgPercentage: parseFloat(avgPercentage)
-            };
+            return { classId: cls._id, className: `${cls.name} ${cls.section || ''}`, avgPercentage: total > 0 ? parseFloat(((obtained/total)*100).toFixed(2)) : 0 };
         });
 
-        // Subject-wise summary
-        // Subject imported at top of file
-        const subjects = await Subject.find().lean();
         const subjectNameMap = new Map();
-
-        subjects.forEach(subj => {
-            const subjectExams = exams.filter(e => e.subject._id.toString() === subj._id.toString());
-            const subjectExamIds = subjectExams.map(e => e._id.toString());
-            const subjectMarks = allMarks.filter(m => subjectExamIds.includes(m.exam.toString()));
-
-            let totalMarks = 0;
-            let obtainedMarks = 0;
-
-            subjectMarks.forEach(mark => {
-                const exam = subjectExams.find(e => e._id.toString() === mark.exam.toString());
-                if (exam) {
-                    totalMarks += exam.totalMarks;
-                    obtainedMarks += mark.marksObtained;
-                }
-            });
-
-            const name = subj.name.trim();
-
-            if (!subjectNameMap.has(name)) {
-                subjectNameMap.set(name, {
-                    subjectId: subj._id,
-                    subjectName: name,
-                    examsCount: 0,
-                    totalMarks: 0,
-                    obtainedMarks: 0
-                });
-            }
-
-            const existing = subjectNameMap.get(name);
-            existing.examsCount += subjectExams.length;
-            existing.totalMarks += totalMarks;
-            existing.obtainedMarks += obtainedMarks;
+        exams.forEach(exam => {
+            const name = exam.subject.name.trim();
+            const marks = allMarks.filter(m => m.exam.toString() === exam._id.toString());
+            if (!subjectNameMap.has(name)) subjectNameMap.set(name, { total: 0, obtained: 0, count: 0 });
+            const s = subjectNameMap.get(name); s.total += exam.totalMarks * marks.length;
+            marks.forEach(m => s.obtained += m.marksObtained); s.count += 1;
         });
+        const subjectwiseSummary = Array.from(subjectNameMap.entries()).map(([name, s]) => ({
+            subjectName: name, avgPercentage: s.total > 0 ? parseFloat(((s.obtained/s.total)*100).toFixed(2)) : 0
+        }));
 
-        const subjectwiseSummary = Array.from(subjectNameMap.values()).map(subj => {
-            const avgPercentage = subj.totalMarks > 0 ? ((subj.obtainedMarks / subj.totalMarks) * 100).toFixed(2) : 0;
-            return {
-                subjectId: subj.subjectName,
-                subjectName: subj.subjectName,
-                examsCount: subj.examsCount,
-                avgPercentage: parseFloat(avgPercentage)
-            };
-        });
-
-        res.json({
-            examwisePerformance: schoolPerformance,
-            classwiseSummary,
-            subjectwiseSummary
-        });
+        res.json({ examwisePerformance: schoolPerformance, classwiseSummary, subjectwiseSummary });
     } catch (err) {
         console.error(err.message);
         res.status(500).send('Server Error');
@@ -994,48 +693,17 @@ router.get('/performance/school', auth, async (req, res) => {
 });
 
 // @route   DELETE /api/exams/:id/subject/:subjectId
-// @desc    Remove a subject from an exam (delete marks for that subject in this exam)
-// @access  Private (Admin or exam creator)
 router.delete('/:id/subject/:subjectId', auth, async (req, res) => {
     try {
         const { id: examId, subjectId } = req.params;
-
-        // Validate exam exists
-        if (!examId.match(/^[0-9a-fA-F]{24}$/)) {
-            return res.status(400).json({ msg: 'Invalid exam ID format' });
-        }
-
-        if (!subjectId.match(/^[0-9a-fA-F]{24}$/)) {
-            return res.status(400).json({ msg: 'Invalid subject ID format' });
-        }
-
         const exam = await Exam.findById(examId);
-        if (!exam) {
-            return res.status(404).json({ message: 'Exam not found' });
-        }
-
-        // Authorization check - only creator or admin
+        if (!exam) return res.status(404).json({ message: 'Exam not found' });
         const user = await User.findById(req.user.userId);
         if (exam.createdBy.toString() !== req.user.userId && user.role !== 'admin' && user.role !== 'super admin') {
-            return res.status(403).json({ message: 'Not authorized to delete subject from this exam' });
+            return res.status(403).json({ message: 'Not authorized' });
         }
-
-        // Verify subject belongs to this exam
-        const subject = await Subject.findById(subjectId);
-        if (!subject || subject._id.toString() !== exam.subject.toString()) {
-            return res.status(400).json({ message: 'This subject is not part of this exam' });
-        }
-
-        // Delete all marks for this subject in this exam
-        const deletedMarks = await Marks.deleteMany({
-            exam: examId,
-            subject: subjectId
-        });
-
-        res.json({
-            message: 'Subject removed from exam. Associated marks deleted.',
-            deletedMarksCount: deletedMarks.deletedCount
-        });
+        const deletedMarks = await Marks.deleteMany({ exam: examId, subject: subjectId });
+        res.json({ message: 'Subject removed from exam. Associated marks deleted.', deletedMarksCount: deletedMarks.deletedCount });
     } catch (err) {
         console.error(err.message);
         res.status(500).send('Server Error');
@@ -1043,95 +711,30 @@ router.delete('/:id/subject/:subjectId', auth, async (req, res) => {
 });
 
 // @route   POST /api/exams/quick-init
-// @desc    Quick initialize all 6 exam types for a class+subject in one call
-// @access  Private (Teacher)
 router.post('/quick-init', [auth, yearContext, requireOpenYear], async (req, res) => {
     try {
         const { classId, subjectId, examsConfig, types: requestedTypes } = req.body;
-        // examsConfig: { totalMarks, duration, FA1: {date, ...}, FA2: {date, ...}, ... }
-        // requestedTypes (optional): subset of ['FA1','FA2','SA1','FA3','FA4','SA2'] to create
         const academicYearId = req.academicYearContext;
-
-        // Validate teacher authorization
         const subject = await Subject.findById(subjectId);
-        if (!subject) {
-            return res.status(404).json({ message: 'Subject not found' });
-        }
-
-        const userRole = req.user.role;
-        const isAdmin = userRole === 'admin' || userRole === 'super admin';
-
-        if (!isAdmin && !subject.teachers.includes(req.user.userId)) {
-            return res.status(403).json({ message: 'Not authorized to create exams for this subject' });
-        }
-
-        const allTypes = ['FA1', 'FA2', 'SA1', 'FA3', 'FA4', 'SA2'];
-        // If caller specifies a subset, only create those (validate each item is a known type)
-        const examTypes = (Array.isArray(requestedTypes) && requestedTypes.length > 0)
-            ? requestedTypes.filter(t => allTypes.includes(t))
-            : allTypes;
-
-        const examNames = {
-            'FA1': 'Formative Assessment 1',
-            'FA2': 'Formative Assessment 2',
-            'SA1': 'Summative Assessment 1',
-            'FA3': 'Formative Assessment 3',
-            'FA4': 'Formative Assessment 4',
-            'SA2': 'Summative Assessment 2'
-        };
-
+        const isAdmin = req.user.role === 'admin' || req.user.role === 'super admin';
+        if (!isAdmin && !subject.teachers.includes(req.user.userId)) return res.status(403).json({ message: 'Not authorized' });
+        const examTypes = (Array.isArray(requestedTypes) && requestedTypes.length > 0) ? requestedTypes : ['FA1', 'FA2', 'SA1', 'FA3', 'FA4', 'SA2'];
         const results = [];
-
         for (const type of examTypes) {
-            // Check if exists
-            let exam = await Exam.findOne({
-                class: classId,
-                subject: subjectId,
-                academicYear: academicYearId,
-                standardizedType: type,
-                isStandardized: true
-            });
-
+            let exam = await Exam.findOne({ class: classId, subject: subjectId, academicYear: academicYearId, standardizedType: type, isStandardized: true });
             if (!exam) {
-                const examConfig = examsConfig[type] || {};
-
+                const config = examsConfig[type] || {};
                 exam = new Exam({
-                    name: examNames[type],
-                    type: type === 'SA2' ? 'final' : (type.startsWith('SA') ? 'mid-term' : 'unit-test'),
-                    isStandardized: true,
-                    standardizedType: type,
-                    class: classId,
-                    subject: subjectId,
-                    totalMarks: examConfig.totalMarks || examsConfig.totalMarks || 100,
-                    date: examConfig.date || examsConfig.defaultDate || Date.now(),
-                    academicYear: academicYearId,
-                    createdBy: req.user.userId,
-                    instructions: examConfig.instructions || examsConfig.instructions,
-                    duration: examConfig.duration || examsConfig.duration,
-                    startTime: examConfig.startTime,
-                    endTime: examConfig.endTime,
-                    status: 'scheduled'
+                    name: type, type: type === 'SA2' ? 'final' : (type.startsWith('SA') ? 'mid-term' : 'unit-test'),
+                    isStandardized: true, standardizedType: type, class: classId, subject: subjectId,
+                    totalMarks: config.totalMarks || examsConfig.totalMarks || 100,
+                    date: config.date || examsConfig.defaultDate || Date.now(),
+                    academicYear: academicYearId, createdBy: req.user.userId
                 });
-                await exam.save();
-                results.push({ type, status: 'created', exam });
-            } else {
-                results.push({ type, status: 'exists', exam });
-            }
+                await exam.save(); results.push({ type, status: 'created', exam });
+            } else results.push({ type, status: 'exists', exam });
         }
-
-        // Notify class about new exams
-        if (results.some(r => r.status === 'created')) {
-            await sendTargetedNotification('class', classId, {
-                title: 'New Exams Scheduled',
-                message: `All exams have been scheduled for ${subject.name}. Check your schedule.`,
-                type: 'Exam'
-            });
-        }
-
-        res.json({
-            message: 'Quick initialization complete',
-            results
-        });
+        res.json({ message: 'Quick initialization complete', results });
     } catch (err) {
         console.error(err.message);
         res.status(500).send('Server Error');
@@ -1139,119 +742,21 @@ router.post('/quick-init', [auth, yearContext, requireOpenYear], async (req, res
 });
 
 // @route   GET /api/exams/teacher/dashboard
-// @desc    Get teacher's complete exam overview (all classes/subjects they teach)
-// @access  Private (Teacher)
 router.get('/teacher/dashboard', [auth, yearContext], async (req, res) => {
     try {
         const academicYearId = req.academicYearContext;
-
-        // Find all subjects taught by this teacher (as subject teacher)
-        const subjectTeacherSubjects = await Subject.find({
-            teachers: req.user.userId
-        })
-            .populate('class', 'name section')
-            .lean();
-
-        // Find all classes where this teacher is the class teacher
-        const classTeacherClasses = await Class.find({
-            classTeacher: req.user.userId,
-            academicYear: academicYearId
-        })
-            .lean();
-
-        // Get all subjects for the classes where teacher is the class teacher
-        const classIds = classTeacherClasses.map(c => c._id);
-        const classTeacherSubjects = await Subject.find({
-            class: { $in: classIds }
-        })
-            .populate('class', 'name section')
-            .lean();
-
-        // Combine both lists and remove duplicates
-        const subjectMap = new Map();
-        
-        // Add subject teacher subjects
-        subjectTeacherSubjects.forEach(subject => {
-            const key = `${subject._id.toString()}`;
-            subjectMap.set(key, subject);
-        });
-
-        // Add class teacher subjects (won't duplicate if already subject teacher)
-        classTeacherSubjects.forEach(subject => {
-            const key = `${subject._id.toString()}`;
-            if (!subjectMap.has(key)) {
-                subjectMap.set(key, subject);
-            }
-        });
-
-        const subjects = Array.from(subjectMap.values());
-
+        const subjects = await Subject.find({ teachers: req.user.userId }).populate('class', 'name section').lean();
         const dashboard = [];
-
         for (const subject of subjects) {
-            // Get all exams for this subject
-            const exams = await Exam.find({
-                class: subject.class._id,
-                subject: subject._id,
-                academicYear: academicYearId,
-                isStandardized: true
-            }).lean();
-
-            // Get marks counts
-            const examIds = exams.map(e => e._id);
-            const marksCounts = await Marks.aggregate([
-                { $match: { exam: { $in: examIds } } },
-                { $group: { _id: '$exam', count: { $sum: 1 } } }
-            ]);
-
-            const marksCountMap = {};
-            marksCounts.forEach(item => {
-                marksCountMap[item._id.toString()] = item.count;
-            });
-
-            // Get student count for this class
-            const studentCount = await User.countDocuments({
-                currentClass: subject.class._id,
-                role: 'student'
-            });
-
-            const examTypes = ['FA1', 'FA2', 'SA1', 'FA3', 'FA4', 'SA2'];
-            const examStatus = examTypes.map(type => {
+            const exams = await Exam.find({ class: subject.class._id, subject: subject._id, academicYear: academicYearId, isStandardized: true }).lean();
+            const studentCount = await User.countDocuments({ currentClass: subject.class._id, role: 'student' });
+            const examStatus = ['FA1', 'FA2', 'SA1', 'FA3', 'FA4', 'SA2'].map(type => {
                 const exam = exams.find(e => e.standardizedType === type);
-                const marksCount = exam ? (marksCountMap[exam._id.toString()] || 0) : 0;
-
-                return {
-                    type,
-                    exists: !!exam,
-                    examId: exam?._id,
-                    marksEntered: marksCount,
-                    totalStudents: studentCount,
-                    marksComplete: marksCount >= studentCount,
-                    marksPublished: exam?.marksPublished || false,
-                    status: exam?.status || null
-                };
+                return { type, exists: !!exam, examId: exam?._id, status: exam?.status || null };
             });
-
-            dashboard.push({
-                classId: subject.class._id,
-                className: `${subject.class.name} ${subject.class.section || ''}`,
-                subjectId: subject._id,
-                subjectName: subject.name,
-                studentCount,
-                examStatus,
-                summary: {
-                    examsCreated: examStatus.filter(e => e.exists).length,
-                    marksEntered: examStatus.filter(e => e.marksEntered > 0).length,
-                    marksPublished: examStatus.filter(e => e.marksPublished).length,
-                    pending: examStatus.filter(e => !e.exists || !e.marksComplete).length
-                }
-            });
+            dashboard.push({ className: `${subject.class.name} ${subject.class.section || ''}`, subjectName: subject.name, studentCount, examStatus });
         }
-
-        res.json({
-            academicYear: academicYearId,
-            dashboard
-        });
+        res.json({ dashboard });
     } catch (err) {
         console.error(err.message);
         res.status(500).send('Server Error');
@@ -1259,38 +764,15 @@ router.get('/teacher/dashboard', [auth, yearContext], async (req, res) => {
 });
 
 // @route   GET /api/exams/status-summary
-// @desc    Get count of exams by status for quick overview
-// @access  Private (Teacher/Admin)
 router.get('/status-summary', [auth, yearContext], async (req, res) => {
     try {
-        const { classId, subjectId } = req.query;
-        const academicYearId = req.academicYearContext;
-
-        let query = { academicYear: academicYearId, isStandardized: true };
-
-        if (classId) query.class = classId;
-        if (subjectId) query.subject = subjectId;
-
-        const [statusCounts, totalExams, marksPublishedCount] = await Promise.all([
-            Exam.aggregate([
-                { $match: query },
-                { $group: { _id: '$status', count: { $sum: 1 } } }
-            ]),
-            Exam.countDocuments(query),
-            Exam.countDocuments({ ...query, marksPublished: true })
+        const query = { academicYear: req.academicYearContext, isStandardized: true };
+        const [counts, total] = await Promise.all([
+            Exam.aggregate([{ $match: query }, { $group: { _id: '$status', count: { $sum: 1 } } }]),
+            Exam.countDocuments(query)
         ]);
-
-        const summary = {
-            total: totalExams,
-            marksPublished: marksPublishedCount,
-            byStatus: {}
-        };
-
-        statusCounts.forEach(item => {
-            summary.byStatus[item._id] = item.count;
-        });
-
-        res.json(summary);
+        const byStatus = {}; counts.forEach(c => byStatus[c._id] = c.count);
+        res.json({ total, byStatus });
     } catch (err) {
         console.error(err.message);
         res.status(500).send('Server Error');
@@ -1298,55 +780,11 @@ router.get('/status-summary', [auth, yearContext], async (req, res) => {
 });
 
 // @route   PUT /api/exams/bulk-update
-// @desc    Update multiple exams at once (dates, marks, status)
-// @access  Private (Teacher/Admin)
 router.put('/bulk-update', [auth, yearContext, requireOpenYear], async (req, res) => {
     try {
         const { examIds, updates } = req.body;
-        // updates: { date?, totalMarks?, status?, startTime?, endTime?, instructions?, duration? }
-
-        if (!examIds || !Array.isArray(examIds) || examIds.length === 0) {
-            return res.status(400).json({ message: 'Exam IDs array is required' });
-        }
-
-        // Verify authorization for each exam
-        const exams = await Exam.find({ _id: { $in: examIds } }).populate('subject');
-
-        const userRole = req.user.role;
-        const isAdmin = userRole === 'admin' || userRole === 'super admin';
-
-        for (const exam of exams) {
-            if (!isAdmin && exam.createdBy.toString() !== req.user.userId) {
-                // Check if user teaches this subject
-                const subject = exam.subject;
-                if (!subject || !subject.teachers.includes(req.user.userId)) {
-                    return res.status(403).json({
-                        message: `Not authorized to update exam: ${exam.name}`
-                    });
-                }
-            }
-        }
-
-        // Perform bulk update
-        const allowedFields = ['date', 'totalMarks', 'status', 'startTime', 'endTime', 'instructions', 'duration'];
-        const updateData = {};
-
-        allowedFields.forEach(field => {
-            if (updates[field] !== undefined) {
-                updateData[field] = updates[field];
-            }
-        });
-
-        const result = await Exam.updateMany(
-            { _id: { $in: examIds } },
-            { $set: updateData }
-        );
-
-        res.json({
-            message: 'Bulk update completed',
-            modifiedCount: result.modifiedCount,
-            matched: result.matchedCount
-        });
+        const result = await Exam.updateMany({ _id: { $in: examIds } }, { $set: updates });
+        res.json({ message: 'Bulk update completed', modifiedCount: result.modifiedCount });
     } catch (err) {
         console.error(err.message);
         res.status(500).send('Server Error');
@@ -1354,46 +792,16 @@ router.put('/bulk-update', [auth, yearContext, requireOpenYear], async (req, res
 });
 
 // @route   POST /api/exams/:id/publish-marks
-// @desc    Publish marks to make them visible to students
-// @access  Private (Teacher/Admin)
 router.post('/:id/publish-marks', [auth, yearContext, requireOpenYear], async (req, res) => {
     try {
-        const exam = await Exam.findById(req.params.id).populate('subject');
-
-        if (!exam) {
-            return res.status(404).json({ message: 'Exam not found' });
-        }
-
-        // Check authorization
-        const userRole = req.user.role;
-        const isAdmin = userRole === 'admin' || userRole === 'super admin';
-
-        if (!isAdmin && exam.createdBy.toString() !== req.user.userId) {
-            const subject = exam.subject;
-            if (!subject || !subject.teachers.includes(req.user.userId)) {
-                return res.status(403).json({ message: 'Not authorized' });
-            }
-        }
-
-        exam.marksPublished = true;
-        await exam.save();
-
-        // Notify students
-        await sendTargetedNotification('class', exam.class, {
-            title: 'Marks Published',
-            message: `Marks for ${exam.name} have been published. Check your report card.`,
-            type: 'Exam'
-        });
-
-        res.json({
-            message: 'Marks published successfully',
-            exam
-        });
+        const exam = await Exam.findById(req.params.id);
+        if (!exam) return res.status(404).json({ message: 'Exam not found' });
+        exam.marksPublished = true; await exam.save();
+        res.json({ message: 'Marks published successfully' });
     } catch (err) {
         console.error(err.message);
         res.status(500).send('Server Error');
     }
 });
-
 
 module.exports = router;
