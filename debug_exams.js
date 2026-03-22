@@ -12,33 +12,65 @@ async function check() {
     try {
         const uri = process.env.MONGODB_URI;
         if (!uri) throw new Error('MONGODB_URI not found in .env');
-        
         await mongoose.connect(uri);
-        console.log('Connected to MongoDB');
 
         const activeYear = await AcademicYear.findOne({ isActive: true }).lean();
-        console.log('Active Academic Year:', activeYear ? `${activeYear.name} (${activeYear._id})` : 'NONE');
+        const yearId = activeYear._id;
 
-        if (activeYear) {
-            const examsInYear = await Exam.countDocuments({ academicYear: activeYear._id });
-            console.log('Exams in Active Year:', examsInYear);
+        const exams = await Exam.find({ academicYear: yearId, isStandardized: true })
+            .populate('class', 'name section')
+            .populate('subject', 'name')
+            .lean();
 
-            const standardizedInYear = await Exam.countDocuments({ 
-                academicYear: activeYear._id, 
-                isStandardized: true 
-            });
-            console.log('Standardized Exams in Active Year:', standardizedInYear);
+        console.log(`Found ${exams.length} exams for marks-status in year ${yearId}`);
 
-            const examsWithReportType = await Exam.find({ academicYear: activeYear._id, standardizedType: { $exists: true } }).limit(5).populate('class subject').lean();
-            console.log('Sample Exams with standardizedType:', JSON.stringify(examsWithReportType, null, 2));
-        } else {
-            const totalExams = await Exam.countDocuments({});
-            console.log('Total Exams in DB:', totalExams);
-        }
+        if (exams.length === 0) return console.log('Empty exams array');
+
+        // Sort in memory instead
+        exams.sort((a, b) => {
+            const classA = a.class ? `${a.class.name} ${a.class.section || ''}` : '';
+            const classB = b.class ? `${b.class.name} ${b.class.section || ''}` : '';
+            if (classA !== classB) return classA.localeCompare(classB);
+            const typeOrder = ['FA1', 'FA2', 'SA1', 'FA3', 'FA4', 'SA2'];
+            return typeOrder.indexOf(a.standardizedType) - typeOrder.indexOf(b.standardizedType);
+        });
+
+        const classIds = [...new Set(exams.map(e => e.class?._id))].filter(Boolean);
+        const studentCounts = await User.aggregate([
+            { $match: { role: 'student', currentClass: { $in: classIds } } },
+            { $group: { _id: '$currentClass', count: { $sum: 1 } } }
+        ]);
+        const studentCountMap = {};
+        studentCounts.forEach(item => { studentCountMap[item._id.toString()] = item.count; });
+
+        const examIds = exams.map(e => e._id);
+        const marksCounts = await Marks.aggregate([
+            { $match: { exam: { $in: examIds } } },
+            { $group: { _id: '$exam', count: { $sum: 1 } } }
+        ]);
+        const marksCountMap = {};
+        marksCounts.forEach(item => { marksCountMap[item._id.toString()] = item.count; });
+
+        const statusReport = exams.map(exam => {
+            const classId = exam.class?._id?.toString();
+            const examId = exam._id.toString();
+            const totalStudents = studentCountMap[classId] || 0;
+            const enteredMarksCount = marksCountMap[examId] || 0;
+            return {
+                _id: exam._id, examName: exam.name, examType: exam.standardizedType,
+                className: exam.class ? `${exam.class.name} ${exam.class.section || ''}` : 'Unknown',
+                subjectName: exam.subject?.name || 'Unknown', date: exam.date,
+                totalStudents, enteredMarksCount,
+                status: enteredMarksCount === 0 ? 'Pending' : (enteredMarksCount >= totalStudents ? 'Complete' : 'Partial')
+            };
+        });
+        
+        console.log("FINAL OUTPUT:");
+        console.log(JSON.stringify(statusReport, null, 2));
 
         process.exit(0);
     } catch (err) {
-        console.error('Error:', err);
+        console.error('SERVER ERROR:', err);
         process.exit(1);
     }
 }
