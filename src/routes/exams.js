@@ -592,9 +592,22 @@ router.get('/marks-status', auth, async (req, res) => {
         if (!yearId) return res.status(404).json({ message: 'No active academic year found' });
 
         const exams = await Exam.find({ academicYear: yearId, isStandardized: true })
-            .populate('class', 'name section').populate('subject', 'name').sort({ 'class.name': 1, standardizedType: 1 }).lean();
+            .populate('class', 'name section')
+            .populate('subject', 'name')
+            .lean();
+
+        console.log(`Found ${exams.length} exams for marks-status in year ${yearId}`);
 
         if (exams.length === 0) return res.json([]);
+
+        // Sort in memory instead
+        exams.sort((a, b) => {
+            const classA = a.class ? `${a.class.name} ${a.class.section || ''}` : '';
+            const classB = b.class ? `${b.class.name} ${b.class.section || ''}` : '';
+            if (classA !== classB) return classA.localeCompare(classB);
+            const typeOrder = ['FA1', 'FA2', 'SA1', 'FA3', 'FA4', 'SA2'];
+            return typeOrder.indexOf(a.standardizedType) - typeOrder.indexOf(b.standardizedType);
+        });
 
         const classIds = [...new Set(exams.map(e => e.class?._id))].filter(Boolean);
         const studentCounts = await User.aggregate([
