@@ -640,8 +640,12 @@ router.get('/marks-status', auth, async (req, res) => {
         });
         res.json(statusReport);
     } catch (err) {
-        console.error(err.message);
-        res.status(500).send('Server Error');
+        console.error("marks-status error:", err);
+        res.status(500).json({ 
+            success: false, 
+            message: `Marks Status Error: ${err.message}`,
+            stack: err.stack
+        });
     }
 });
 
