@@ -25,11 +25,28 @@ const getActiveYearId = async (providedId) => {
     return activeYear ? activeYear._id : null;
 };
 
+// Exam-type weights: FA1=10%, FA2=10%, SA1=30%, FA3=10%, FA4=10%, SA2=30%
+const EXAM_WEIGHTS = { FA1: 10, FA2: 10, SA1: 30, FA3: 10, FA4: 10, SA2: 30 };
+
+/**
+ * Compute weighted overall percentage for a student.
+ * Each completed exam type contributes: (typeObtained/typeMax)*100 * weight.
+ * If only some types are done, the denominator is the sum of their weights.
+ */
+const computeWeightedPercentage = (completedTypeScores) => {
+    // completedTypeScores: { FA1: pct, SA1: pct, ... } — only completed types
+    const totalWeight = Object.keys(completedTypeScores)
+        .reduce((sum, type) => sum + (EXAM_WEIGHTS[type] || 0), 0);
+    if (totalWeight === 0) return 0;
+    const weightedSum = Object.entries(completedTypeScores)
+        .reduce((sum, [type, pct]) => sum + pct * (EXAM_WEIGHTS[type] || 0), 0);
+    return parseFloat((weightedSum / totalWeight).toFixed(1));
+};
+
 // Helper: compute overall percentage for a student given exams + marks
 const computeStudentOverall = (exams, marks) => {
     const examTypes = ['FA1', 'FA2', 'SA1', 'FA3', 'FA4', 'SA2'];
-    let grandTotalMax = 0;
-    let grandTotalObtained = 0;
+    const completedTypeScores = {};
 
     examTypes.forEach(type => {
         const typeExams = exams.filter(e => e.standardizedType === type);
@@ -50,16 +67,12 @@ const computeStudentOverall = (exams, marks) => {
             }
         });
 
-        // Only count completed exam types
-        if (typeExams.length > 0 && allHaveMarks) {
-            grandTotalMax += totalMax;
-            grandTotalObtained += totalObtained;
+        if (typeExams.length > 0 && allHaveMarks && totalMax > 0) {
+            completedTypeScores[type] = (totalObtained / totalMax) * 100;
         }
     });
 
-    return grandTotalMax > 0
-        ? parseFloat(((grandTotalObtained / grandTotalMax) * 100).toFixed(1))
-        : 0;
+    return computeWeightedPercentage(completedTypeScores);
 };
 
 // @route   GET /api/reports/student/:studentId
@@ -104,50 +117,76 @@ router.get('/student/:studentId', auth, async (req, res) => {
         const reportData = examTypes.map(type => {
             const typeExams = exams.filter(e => e.standardizedType === type);
 
-            let totalMax = 0;
-            let totalObtained = 0;
+            // --- status resolution ---
+            // not_initialized : no exams created for this type yet
+            // pending         : exams exist but at least one mark is missing
+            // completed       : exams exist and ALL marks are entered
+            let status = 'not_initialized';
+            if (typeExams.length > 0) {
+                status = 'pending';
+            }
+
+            let totalMax = 0;      // max of subjects that HAVE marks
+            let totalObtained = 0; // obtained of subjects that HAVE marks
+
             const subjects = typeExams.map(exam => {
                 const markEntry = marks.find(m => m.exam.toString() === exam._id.toString());
-                const obtained = markEntry ? markEntry.marksObtained : 0;
                 const max = exam.totalMarks;
 
-                totalMax += max;
-                if (markEntry) totalObtained += obtained;
+                if (markEntry) {
+                    const obtained = markEntry.marksObtained;
+                    totalMax += max;
+                    totalObtained += obtained;
+                    return {
+                        subject: exam.subject.name,
+                        subjectId: exam.subject._id,
+                        maxMarks: max,
+                        obtainedMarks: obtained,
+                        percentage: ((obtained / max) * 100).toFixed(1),
+                        grade: getGrade((obtained / max) * 100)
+                    };
+                }
 
+                // Marks not yet entered for this subject
                 return {
                     subject: exam.subject.name,
                     subjectId: exam.subject._id,
                     maxMarks: max,
-                    obtainedMarks: markEntry ? obtained : null,
-                    percentage: markEntry ? ((obtained / max) * 100).toFixed(1) : null,
-                    grade: markEntry ? getGrade((obtained / max) * 100) : '-'
+                    obtainedMarks: null,
+                    percentage: null,
+                    grade: '-'
                 };
             });
 
-            const percentage = totalMax > 0 ? ((totalObtained / totalMax) * 100).toFixed(1) : 0;
+            const allMarksEntered = typeExams.length > 0 && subjects.every(s => s.obtainedMarks !== null);
+            if (allMarksEntered) status = 'completed';
+
+            // percentage is only computed from subjects that HAVE marks.
+            // For a completed type this is the full type %; for a pending type
+            // it reflects only the subjects entered so far (clearly communicated via status).
+            const percentage = totalMax > 0 ? parseFloat(((totalObtained / totalMax) * 100).toFixed(1)) : null;
 
             return {
                 examType: type,
-                isCompleted: typeExams.length > 0 && subjects.every(s => s.obtainedMarks !== null),
+                status,                         // 'not_initialized' | 'pending' | 'completed'
+                isCompleted: status === 'completed',
                 totalMax,
                 totalObtained,
                 percentage,
-                grade: getGrade(percentage),
+                grade: percentage !== null ? getGrade(percentage) : '-',
                 subjects
             };
         });
 
-        // Calculate Overall Performance
-        let grandTotalMax = 0;
-        let grandTotalObtained = 0;
+        // Calculate Overall Performance using weighted percentages
+        const completedTypeScores = {};
         reportData.forEach(r => {
-            if (r.isCompleted) {
-                grandTotalMax += r.totalMax;
-                grandTotalObtained += r.totalObtained;
+            if (r.isCompleted && r.totalMax > 0) {
+                completedTypeScores[r.examType] = (r.totalObtained / r.totalMax) * 100;
             }
         });
 
-        const overallPercentage = grandTotalMax > 0 ? ((grandTotalObtained / grandTotalMax) * 100).toFixed(1) : 0;
+        const overallPercentage = computeWeightedPercentage(completedTypeScores);
 
         // --- Class Rank Calculation ---
         // Get all students in the same class
@@ -164,8 +203,7 @@ router.get('/student/:studentId', auth, async (req, res) => {
 
         const classmatePercentages = classmates.map(cm => {
             const cmMarks = allClassMarks.filter(m => m.student.toString() === cm._id.toString());
-            let cmGrandMax = 0;
-            let cmGrandObtained = 0;
+            const cmCompletedTypeScores = {};
             const examWisePct = {};
 
             examTypes.forEach(type => {
@@ -184,14 +222,14 @@ router.get('/student/:studentId', auth, async (req, res) => {
                     }
                 });
 
-                if (typeExams.length > 0 && allHaveMarks) {
-                    cmGrandMax += totalMax;
-                    cmGrandObtained += totalObtained;
-                    examWisePct[type] = parseFloat(((totalObtained / totalMax) * 100).toFixed(1));
+                if (typeExams.length > 0 && allHaveMarks && totalMax > 0) {
+                    const typePct = parseFloat(((totalObtained / totalMax) * 100).toFixed(1));
+                    cmCompletedTypeScores[type] = typePct;
+                    examWisePct[type] = typePct;
                 }
             });
 
-            const pct = cmGrandMax > 0 ? parseFloat(((cmGrandObtained / cmGrandMax) * 100).toFixed(1)) : 0;
+            const pct = computeWeightedPercentage(cmCompletedTypeScores);
             return { studentId: cm._id.toString(), percentage: pct, examWisePct };
         });
 
@@ -358,11 +396,12 @@ router.get('/class-ranking/:classId', auth, async (req, res) => {
 
         const examTypes = ['FA1', 'FA2', 'SA1', 'FA3', 'FA4', 'SA2'];
 
-        // Compute percentages for each student
+        // Compute weighted percentages for each student
         const rankings = students.map(student => {
             const studentMarks = allMarks.filter(m => m.student.toString() === student._id.toString());
-            let grandTotalMax = 0;
+            const completedTypeScores = {};
             let grandTotalObtained = 0;
+            let grandTotalMax = 0;
 
             examTypes.forEach(type => {
                 const typeExams = exams.filter(e => e.standardizedType === type);
@@ -380,15 +419,14 @@ router.get('/class-ranking/:classId', auth, async (req, res) => {
                     }
                 });
 
-                if (typeExams.length > 0 && allHaveMarks) {
-                    grandTotalMax += totalMax;
+                if (typeExams.length > 0 && allHaveMarks && totalMax > 0) {
+                    completedTypeScores[type] = (totalObtained / totalMax) * 100;
                     grandTotalObtained += totalObtained;
+                    grandTotalMax += totalMax;
                 }
             });
 
-            const percentage = grandTotalMax > 0
-                ? parseFloat(((grandTotalObtained / grandTotalMax) * 100).toFixed(1))
-                : 0;
+            const percentage = computeWeightedPercentage(completedTypeScores);
 
             return {
                 studentId: student._id,
