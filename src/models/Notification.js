@@ -13,12 +13,12 @@ const notificationSchema = new mongoose.Schema({
   },
   type: {
     type: String,
-    enum: ['General', 'Homework', 'Exam', 'Fee', 'Emergency', 'Event'],
+    enum: ['General', 'Homework', 'Exam', 'Fee', 'Emergency', 'Event', 'Birthday'],
     default: 'General'
   },
   category: {
     type: String,
-    enum: ['exam', 'fee', 'attendance', 'complaint', 'event', 'general', 'leave', 'announcement'],
+    enum: ['exam', 'fee', 'attendance', 'complaint', 'event', 'general', 'leave', 'announcement', 'birthday'],
     default: 'general'
   },
   priority: {
