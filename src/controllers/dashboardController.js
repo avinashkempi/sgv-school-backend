@@ -613,16 +613,39 @@ exports.getStudentStats = async (req, res) => {
                 { $match: { student: new (require('mongoose').Types.ObjectId)(studentId), status: 'success' } },
                 { $group: { _id: null, total: { $sum: '$amount' } } }
             ]),
-            // Recent marks for performance chart
-            Marks.find({ student: studentId })
-                .sort({ createdAt: -1 })
-                .limit(10)
-                .populate({
-                    path: 'exam',
-                    select: 'name',
-                    populate: { path: 'subject', select: 'name' }
-                })
-                .lean(),
+            // Performance trend — average % per standardized exam type (FA1, FA2, SA1, FA3, FA4, SA2)
+            Marks.aggregate([
+                { $match: { student: new (require('mongoose').Types.ObjectId)(studentId) } },
+                {
+                    $lookup: {
+                        from: 'exams',
+                        localField: 'exam',
+                        foreignField: '_id',
+                        as: 'examDetails'
+                    }
+                },
+                { $unwind: '$examDetails' },
+                {
+                    $match: {
+                        'examDetails.marksPublished': true,
+                        'examDetails.standardizedType': { $exists: true, $ne: null }
+                    }
+                },
+                {
+                    $group: {
+                        _id: '$examDetails.standardizedType',
+                        avgPercentage: {
+                            $avg: {
+                                $multiply: [
+                                    { $divide: ['$marksObtained', '$examDetails.totalMarks'] },
+                                    100
+                                ]
+                            }
+                        },
+                        subjectCount: { $sum: 1 }
+                    }
+                }
+            ]),
             // Next exam filtered to student's class
             classId
                 ? Exam.findOne({
@@ -648,13 +671,19 @@ exports.getStudentStats = async (req, res) => {
         // appPaid = payments made via app after import
         const dueAmount = Math.max(csvPending - appPaid, 0);
 
-        // 3. Performance trend
-        const performanceTrend = recentMarks.map(m => ({
-            exam: m.exam?.name || 'Unknown',
-            subject: m.exam?.subject?.name || 'Subject',
-            marks: m.marksObtained,
-            date: m.createdAt
-        })).reverse();
+        // 3. Performance trend — exam-type wise, ordered FA1 → FA2 → SA1 → FA3 → FA4 → SA2
+        const EXAM_ORDER = ['FA1', 'FA2', 'SA1', 'FA3', 'FA4', 'SA2'];
+        const examTypeMap = {};
+        recentMarks.forEach(m => {
+            examTypeMap[m._id] = parseFloat(m.avgPercentage.toFixed(1));
+        });
+        const performanceTrend = EXAM_ORDER
+            .filter(type => examTypeMap[type] !== undefined)
+            .map(type => ({
+                examType: type,
+                percentage: examTypeMap[type],
+                subjectCount: recentMarks.find(m => m._id === type)?.subjectCount || 0
+            }));
 
         // 4. Next Exam Date
         const nextExamDate = nextExam
