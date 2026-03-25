@@ -70,15 +70,43 @@ router.post('/apply', authenticateToken, async (req, res) => {
 
         res.status(201).json({ success: true, data: leaveRequest });
 
-        // Trigger Notification for Admin/Teacher
-        const targetRole = req.user.role === 'student' ? 'teacher' : 'admin';
-        notificationController.triggerNotification({
-            title: 'New Leave Request',
-            message: `${user.name} has applied for leave from ${startDate} to ${endDate}.`,
-            type: 'Emergency', // Or appropriate type
-            target: targetRole,
-            metadata: { leaveId: leaveRequest._id }
-        });
+        // Trigger Notification — send only to the concerned approver(s)
+        try {
+            if (req.user.role === 'student') {
+                // Student leave: notify ONLY the class teacher of the student's class
+                const classObj = await Class.findById(classId).select('classTeacher').lean();
+                if (classObj?.classTeacher) {
+                    notificationController.triggerNotification({
+                        title: 'New Leave Request',
+                        message: `${user.name} has applied for leave from ${startDate} to ${endDate}.`,
+                        type: 'Emergency',
+                        target: 'user',
+                        targetId: classObj.classTeacher,
+                        metadata: { leaveId: leaveRequest._id }
+                    });
+                }
+            } else if (req.user.role === 'teacher') {
+                // Teacher leave: notify all admins
+                notificationController.triggerNotification({
+                    title: 'New Leave Request',
+                    message: `${user.name} (Teacher) has applied for leave from ${startDate} to ${endDate}.`,
+                    type: 'Emergency',
+                    target: 'admin',
+                    metadata: { leaveId: leaveRequest._id }
+                });
+            } else if (req.user.role === 'admin') {
+                // Admin leave: notify all super admins
+                notificationController.triggerNotification({
+                    title: 'New Leave Request',
+                    message: `${user.name} (Admin) has applied for leave from ${startDate} to ${endDate}.`,
+                    type: 'Emergency',
+                    target: 'super admin',
+                    metadata: { leaveId: leaveRequest._id }
+                });
+            }
+        } catch (notifErr) {
+            console.error('[Leave Apply] Notification error:', notifErr);
+        }
     } catch (error) {
         console.error('[Leave Apply] Error:', error);
         res.status(500).json({ success: false, message: 'Server Error', error: error.message });

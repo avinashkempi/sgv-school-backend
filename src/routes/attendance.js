@@ -207,6 +207,9 @@ router.get('/class/:classId/date/:date', [auth, yearContext], async (req, res) =
 router.get('/my-attendance', [auth, yearContext], async (req, res) => {
     try {
         const { startDate, endDate } = req.query;
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 30;
+
         const filter = {
             user: req.user.userId,
             academicYear: req.academicYearContext
@@ -218,19 +221,20 @@ router.get('/my-attendance', [auth, yearContext], async (req, res) => {
             if (endDate) filter.date.$lte = new Date(endDate).setHours(23, 59, 59, 999);
         }
 
-        const attendance = await Attendance.find(filter)
+        // Fetch all records for accurate summary stats
+        const allAttendance = await Attendance.find(filter)
             .select('date status remarks subject')
             .sort({ date: -1 })
             .lean();
 
-        // Calculate summary
-        const totalRecords = attendance.length;
-        const presentCount = attendance.filter(a => a.status === 'present').length;
+        // Calculate summary over all records
+        const totalRecords = allAttendance.length;
+        const presentCount = allAttendance.filter(a => a.status === 'present').length;
         const percentage = totalRecords > 0 ? ((presentCount / totalRecords) * 100).toFixed(2) : 0;
 
         // Calculate Monthly Breakdown
         const monthlyStats = {};
-        attendance.forEach(record => {
+        allAttendance.forEach(record => {
             const date = new Date(record.date);
             const monthKey = date.toLocaleString('default', { month: 'long', year: 'numeric' });
 
@@ -251,16 +255,27 @@ router.get('/my-attendance', [auth, yearContext], async (req, res) => {
             percentage: ((monthlyStats[key].present / monthlyStats[key].total) * 100).toFixed(1)
         }));
 
+        // Paginate the attendance list
+        const totalPages = Math.ceil(totalRecords / limit);
+        const attendance = allAttendance.slice((page - 1) * limit, page * limit);
+
         res.json({
             attendance,
             summary: {
                 total: totalRecords,
                 present: presentCount,
-                absent: attendance.filter(a => a.status === 'absent').length,
-                late: attendance.filter(a => a.status === 'late').length,
-                excused: attendance.filter(a => a.status === 'excused').length,
+                absent: allAttendance.filter(a => a.status === 'absent').length,
+                late: allAttendance.filter(a => a.status === 'late').length,
+                excused: allAttendance.filter(a => a.status === 'excused').length,
                 percentage: parseFloat(percentage),
-                monthlyBreakdown // Added monthly breakdown
+                monthlyBreakdown
+            },
+            pagination: {
+                page,
+                limit,
+                totalRecords,
+                totalPages,
+                hasMore: page < totalPages
             }
         });
     } catch (err) {
@@ -364,10 +379,12 @@ router.get('/student/:studentId', [auth, yearContext], async (req, res) => {
     try {
         const { studentId } = req.params;
         const { startDate, endDate, subject } = req.query;
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 30;
         const academicYearId = req.academicYearContext;
 
         const filter = {
-            user: studentId, // Changed from student to user
+            user: studentId,
             academicYear: academicYearId
         };
 
@@ -379,25 +396,38 @@ router.get('/student/:studentId', [auth, yearContext], async (req, res) => {
 
         if (subject) filter.subject = subject;
 
-        const attendance = await Attendance.find(filter)
+        // Fetch all records for accurate summary stats
+        const allAttendance = await Attendance.find(filter)
             .populate('class', 'name section')
             .populate('subject', 'name')
             .populate('markedBy', 'name')
-            .sort({ date: -1 });
+            .sort({ date: -1 })
+            .lean();
 
-        const totalRecords = attendance.length;
-        const presentCount = attendance.filter(a => a.status === 'present').length;
+        const totalRecords = allAttendance.length;
+        const presentCount = allAttendance.filter(a => a.status === 'present').length;
         const percentage = totalRecords > 0 ? ((presentCount / totalRecords) * 100).toFixed(2) : 0;
+
+        // Paginate
+        const totalPages = Math.ceil(totalRecords / limit);
+        const attendance = allAttendance.slice((page - 1) * limit, page * limit);
 
         res.json({
             attendance,
             summary: {
                 total: totalRecords,
                 present: presentCount,
-                absent: attendance.filter(a => a.status === 'absent').length,
-                late: attendance.filter(a => a.status === 'late').length,
-                excused: attendance.filter(a => a.status === 'excused').length,
+                absent: allAttendance.filter(a => a.status === 'absent').length,
+                late: allAttendance.filter(a => a.status === 'late').length,
+                excused: allAttendance.filter(a => a.status === 'excused').length,
                 percentage: parseFloat(percentage)
+            },
+            pagination: {
+                page,
+                limit,
+                totalRecords,
+                totalPages,
+                hasMore: page < totalPages
             }
         });
     } catch (err) {

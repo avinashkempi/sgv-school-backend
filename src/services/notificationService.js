@@ -269,6 +269,12 @@ async function sendTargetedNotification(target, targetId, notificationData, send
         } else if (target === 'teacher') {
             const teachers = await User.find({ role: 'teacher' }).select('_id');
             userIds = teachers.map(t => t._id);
+        } else if (target === 'admin') {
+            const admins = await User.find({ role: 'admin' }).select('_id');
+            userIds = admins.map(a => a._id);
+        } else if (target === 'super admin') {
+            const superAdmins = await User.find({ role: 'super admin' }).select('_id');
+            userIds = superAdmins.map(a => a._id);
         } else if (target === 'staff') {
             const staff = await User.find({ role: { $in: ['staff', 'support_staff'] } }).select('_id');
             userIds = staff.map(s => s._id);

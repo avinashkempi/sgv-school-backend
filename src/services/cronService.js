@@ -176,6 +176,7 @@ async function runEventNotifications() {
 /**
  * Register all daily cron jobs.
  * Runs every day at 08:00 AM server time.
+ * Also runs immediately on startup if it's past 08:00 AM and today's jobs haven't run yet.
  */
 function startBirthdayCron() {
     // "0 8 * * *" = at 08:00 every day
@@ -194,6 +195,21 @@ function startBirthdayCron() {
     });
 
     console.log('✅ Birthday & Event cron jobs registered (run daily at 08:00 AM)');
+
+    // Startup catchup: if the server starts after 08:00 AM, run immediately.
+    // The duplicate guards inside each function will safely skip if already sent today.
+    const now = new Date();
+    const eightAM = new Date(now);
+    eightAM.setHours(8, 0, 0, 0);
+
+    if (now >= eightAM) {
+        console.log('[Cron] Server started after 08:00 AM — running catchup check now...');
+        Promise.resolve()
+            .then(() => runBirthdayNotifications())
+            .catch(err => console.error('[Birthday Cron] Catchup error:', err))
+            .then(() => runEventNotifications())
+            .catch(err => console.error('[Event Cron] Catchup error:', err));
+    }
 }
 
 module.exports = { startBirthdayCron, runBirthdayNotifications, runEventNotifications };
