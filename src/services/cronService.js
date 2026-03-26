@@ -196,14 +196,16 @@ function startBirthdayCron() {
 
     console.log('✅ Birthday & Event cron jobs registered (run daily at 08:00 AM IST)');
 
-    // Startup catchup: if the server starts after 08:00 AM, run immediately.
+    // Startup catchup: if the server starts after 08:00 AM IST, run immediately.
     // The duplicate guards inside each function will safely skip if already sent today.
     const now = new Date();
-    const eightAM = new Date(now);
-    eightAM.setHours(8, 0, 0, 0);
+    // Use IST (Asia/Kolkata) to determine the local hour, regardless of server timezone
+    const nowIST = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    const eightAM_IST = new Date(nowIST);
+    eightAM_IST.setHours(8, 0, 0, 0);
 
-    if (now >= eightAM) {
-        console.log('[Cron] Server started after 08:00 AM — running catchup check now...');
+    if (nowIST >= eightAM_IST) {
+        console.log('[Cron] Server started after 08:00 AM IST — running catchup check now...');
         Promise.resolve()
             .then(() => runBirthdayNotifications())
             .catch(err => console.error('[Birthday Cron] Catchup error:', err))
