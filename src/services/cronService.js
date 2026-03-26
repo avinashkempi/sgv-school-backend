@@ -179,9 +179,9 @@ async function runEventNotifications() {
  * Also runs immediately on startup if it's past 08:00 AM and today's jobs haven't run yet.
  */
 function startBirthdayCron() {
-    // "0 8 * * *" = at 08:00 every day
+    // "0 8 * * *" = at 08:00 every day, locked to IST so it fires at 8 AM local time
     cron.schedule('0 8 * * *', async () => {
-        console.log('[Cron] Daily 08:00 AM job triggered');
+        console.log('[Cron] Daily 08:00 AM IST job triggered');
         try {
             await runBirthdayNotifications();
         } catch (err) {
@@ -192,9 +192,9 @@ function startBirthdayCron() {
         } catch (err) {
             console.error('[Event Cron] Unhandled error in scheduled job:', err);
         }
-    });
+    }, { timezone: 'Asia/Kolkata' });
 
-    console.log('✅ Birthday & Event cron jobs registered (run daily at 08:00 AM)');
+    console.log('✅ Birthday & Event cron jobs registered (run daily at 08:00 AM IST)');
 
     // Startup catchup: if the server starts after 08:00 AM, run immediately.
     // The duplicate guards inside each function will safely skip if already sent today.
