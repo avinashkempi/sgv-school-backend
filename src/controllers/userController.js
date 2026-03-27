@@ -60,7 +60,7 @@ const getAllUsers = async (req, res) => {
       success: true,
       data: usersWithId,
       pagination: {
-        current: page,
+        page,
         pages: Math.ceil(total / limit),
         total,
         limit
@@ -338,12 +338,19 @@ const searchUsers = async (req, res) => {
       filter.academicYear = req.query.academicYearId;
     }
 
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const skip = (page - 1) * limit;
+
     const users = await User.find(filter, '-password')
       .populate('currentClass', 'name section')
       .populate('academicYear', 'name')
-      .limit(20) // Limit results to 20
       .sort({ name: 1 }) // Sort by name
+      .skip(skip)
+      .limit(limit)
       .lean();
+
+    const total = await User.countDocuments(filter);
 
     // Map _id to id
     const usersWithId = users.map(user => ({
@@ -351,7 +358,16 @@ const searchUsers = async (req, res) => {
       id: user._id
     }));
 
-    res.json(usersWithId);
+    res.json({
+      success: true,
+      data: usersWithId,
+      pagination: {
+        page,
+        pages: Math.ceil(total / limit),
+        total,
+        limit
+      }
+    });
   } catch (error) {
     console.error('Search users error:', error);
     res.status(500).json({
