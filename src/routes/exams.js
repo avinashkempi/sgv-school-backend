@@ -335,9 +335,14 @@ router.post('/school-wide/init', auth, async (req, res) => {
             }
         }
 
+        if (newExams.length === 0 && skippedCount > 0) {
+            return res.status(400).json({ message: 'Exams of this type have already been initialized for the selected scopes.' });
+        }
+
         if (newExams.length > 0) {
             await Exam.insertMany(newExams);
             const affectedClassIds = [...new Set(newExams.map(e => e.class.toString()))];
+
             for (const cId of affectedClassIds) {
                 await sendTargetedNotification('class', cId, {
                     title: `Exam Scheduled: ${type}`,
@@ -747,11 +752,49 @@ router.get('/teacher/dashboard', [auth, yearContext], async (req, res) => {
         for (const subject of subjects) {
             const exams = await Exam.find({ class: subject.class._id, subject: subject._id, academicYear: academicYearId, isStandardized: true }).lean();
             const studentCount = await User.countDocuments({ currentClass: subject.class._id, role: 'student' });
+            
+            const examIds = exams.map(e => e._id);
+            const marksCounts = await Marks.aggregate([
+                { $match: { exam: { $in: examIds } } },
+                { $group: { _id: '$exam', count: { $sum: 1 } } }
+            ]);
+            const marksMap = {};
+            marksCounts.forEach(m => marksMap[m._id.toString()] = m.count);
+
+            let examsCreated = exams.length;
+            let marksEntered = 0;
+            let marksPublished = 0;
+
             const examStatus = ['FA1', 'FA2', 'SA1', 'FA3', 'FA4', 'SA2'].map(type => {
                 const exam = exams.find(e => e.standardizedType === type);
-                return { type, exists: !!exam, examId: exam?._id, status: exam?.status || null };
+                let marksComplete = false;
+                if (exam) {
+                    const count = marksMap[exam._id.toString()] || 0;
+                    marksComplete = count > 0;
+                    if (marksComplete) marksEntered++;
+                    if (exam.marksPublished) marksPublished++;
+                }
+                return { 
+                    type, 
+                    exists: !!exam, 
+                    examId: exam?._id, 
+                    status: exam?.status || null,
+                    marksComplete,
+                    marksPublished: exam?.marksPublished || false
+                };
             });
-            dashboard.push({ className: `${subject.class.name} ${subject.class.section || ''}`, subjectName: subject.name, studentCount, examStatus });
+            
+            let pending = examsCreated - marksEntered; // exams that don't have marks entered
+
+            dashboard.push({ 
+                classId: subject.class._id,
+                subjectId: subject._id,
+                className: `${subject.class.name} ${subject.class.section || ''}`, 
+                subjectName: subject.name, 
+                studentCount, 
+                examStatus,
+                summary: { examsCreated, marksEntered, marksPublished, pending }
+            });
         }
         res.json({ dashboard });
     } catch (err) {
