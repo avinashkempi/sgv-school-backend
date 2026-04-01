@@ -91,12 +91,16 @@ async function sendBatchNotifications(tokens, notification, data = {}) {
                         const errorMsg = resp.error?.message || 'Unknown error';
                         
                         // Categorize errors for better debugging
-                        if (errorCode === 'messaging/invalid-registration-token' || errorMsg.includes('Requested entity was not found')) {
+                        if (errorCode === 'messaging/invalid-registration-token' || 
+                            errorCode === 'messaging/registration-token-not-registered' ||
+                            errorMsg.includes('Requested entity was not found') ||
+                            errorMsg.includes('NotRegistered') ||
+                            errorMsg.includes('not a valid FCM registration token')) {
                             console.warn(`[Notifications] Invalid/Expired token removed (will delete from DB)`);
                         } else if (errorCode === 'messaging/mismatched-credential' || errorMsg.includes('SenderId mismatch')) {
                             console.error(`[Notifications] SenderId Mismatch Error - Firebase config mismatch between app build and backend`);
                         } else {
-                            console.error(`[Notifications] Failed to send - Error: ${errorMsg}`);
+                            console.error(`[Notifications] Failed to send - Error: ${errorMsg} (Code: ${errorCode})`);
                         }
                     }
                 });
