@@ -21,6 +21,7 @@ router.post('/students/csv', authenticateToken, checkRole(['admin', 'super admin
     }
 
     const wipeData = req.body.wipe === 'true'; // Check if wipe is requested
+    const feesOnly = req.body.feesOnly === 'true'; // Check if fees only update is requested
     const results = [];
 
     try {
@@ -31,7 +32,7 @@ router.post('/students/csv', authenticateToken, checkRole(['admin', 'super admin
             .on('end', async () => {
                 try {
                     // Process the imported data
-                    const importResult = await processImport(results, { wipe: wipeData, academicYearId: req.body.academicYearId });
+                    const importResult = await processImport(results, { wipe: wipeData, academicYearId: req.body.academicYearId, feesOnly });
 
                     // Clean up uploaded file
                     fs.unlinkSync(req.file.path);
