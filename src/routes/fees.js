@@ -431,7 +431,7 @@ router.get('/analytics', [auth, checkRole(['admin', 'super admin']), yearContext
 
         const firstDayOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
 
-        const [todayPayments, monthPayments, allCollected] = await Promise.all([
+        const [todayPayments, monthPayments, globalStats] = await Promise.all([
             // Collected Today (from payments array — needs date filter)
             StudentFee.aggregate([
                 { $match: { academicYear: academicYearId } },
@@ -446,17 +446,29 @@ router.get('/analytics', [auth, checkRole(['admin', 'super admin']), yearContext
                 { $match: { "payments.date": { $gte: firstDayOfMonth } } },
                 { $group: { _id: null, total: { $sum: '$payments.amount' } } }
             ]),
-            // Total Collected — use totalPaid field (works for both CSV-imported and app payments)
+            // Global Stats for the Academic Year
             StudentFee.aggregate([
                 { $match: { academicYear: academicYearId } },
-                { $group: { _id: null, total: { $sum: '$totalPaid' } } }
+                { $group: { 
+                    _id: null, 
+                    totalCollected: { $sum: '$totalPaid' },
+                    totalPending: { $sum: '$pendingAmount' },
+                    totalArrears: { $sum: '$arrears' },
+                    totalFees: { $sum: '$totalFees' }
+                } }
             ])
         ]);
+
+        const stats = globalStats[0] || {};
+        const totalExpectedFees = (stats.totalFees || 0) + (stats.totalArrears || 0);
 
         res.json({
             collectedToday: todayPayments[0]?.total || 0,
             collectedThisMonth: monthPayments[0]?.total || 0,
-            totalCollected: allCollected[0]?.total || 0
+            totalCollected: stats.totalCollected || 0,
+            totalPending: stats.totalPending || 0,
+            totalArrears: stats.totalArrears || 0,
+            totalExpectedFees: totalExpectedFees
         });
 
     } catch (err) {

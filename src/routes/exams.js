@@ -518,21 +518,35 @@ router.get('/performance/class/:classId', auth, async (req, res) => {
             const marksForType = allMarks.filter(m => examIdsForType.includes(m.exam.toString()));
             let totalMarks = 0, obtainedMarks = 0;
             let studentsWithMarks = new Set();
+            const studentMarks = {};
             marksForType.forEach(mark => {
                 const exam = typeExams.find(e => e._id.toString() === mark.exam.toString());
                 if (exam) {
                     totalMarks += exam.totalMarks;
                     obtainedMarks += mark.marksObtained;
-                    studentsWithMarks.add(mark.student.toString());
+                    const studentId = mark.student.toString();
+                    studentsWithMarks.add(studentId);
+                    if (!studentMarks[studentId]) {
+                        studentMarks[studentId] = { obtained: 0, total: 0 };
+                    }
+                    studentMarks[studentId].obtained += mark.marksObtained;
+                    studentMarks[studentId].total += exam.totalMarks;
                 }
             });
             const avgPercentage = totalMarks > 0 ? ((obtainedMarks / totalMarks) * 100).toFixed(2) : 0;
+            
+            const percentages = Object.values(studentMarks).map(sm => sm.total > 0 ? (sm.obtained / sm.total) * 100 : 0);
+            const highest = percentages.length > 0 ? Math.max(...percentages) : 0;
+            const lowest = percentages.length > 0 ? Math.min(...percentages) : 0;
+
             return {
                 examType: type,
                 subjectsCount: typeExams.length,
                 studentsWithMarks: studentsWithMarks.size,
                 totalStudents: students.length,
                 avgPercentage: parseFloat(avgPercentage),
+                highest: parseFloat(highest.toFixed(2)),
+                lowest: parseFloat(lowest.toFixed(2)),
                 isComplete: typeExams.length > 0 && studentsWithMarks.size === students.length
             };
         });
@@ -564,9 +578,24 @@ router.get('/performance/subject/:subjectId', auth, async (req, res) => {
             const classwiseData = typeExams.map(exam => {
                 const marksForExam = allMarks.filter(m => m.exam.toString() === exam._id.toString());
                 let totalObtained = 0;
-                marksForExam.forEach(m => totalObtained += m.marksObtained);
+                const percentages = [];
+                marksForExam.forEach(m => {
+                    totalObtained += m.marksObtained;
+                    if (exam.totalMarks > 0) {
+                        percentages.push((m.marksObtained / exam.totalMarks) * 100);
+                    }
+                });
+                const highest = percentages.length > 0 ? Math.max(...percentages) : 0;
+                const lowest = percentages.length > 0 ? Math.min(...percentages) : 0;
                 const avgPercentage = marksForExam.length > 0 ? ((totalObtained / (exam.totalMarks * marksForExam.length)) * 100).toFixed(2) : 0;
-                return { classId: exam.class._id, className: `${exam.class.name} ${exam.class.section || ''}`, avgPercentage: parseFloat(avgPercentage) };
+                return { 
+                    classId: exam.class._id, 
+                    className: `${exam.class.name} ${exam.class.section || ''}`, 
+                    studentsCount: marksForExam.length,
+                    avgPercentage: parseFloat(avgPercentage),
+                    highest: parseFloat(highest.toFixed(2)),
+                    lowest: parseFloat(lowest.toFixed(2))
+                };
             });
             let overallTotal = 0, overallObtained = 0;
             typeExams.forEach(exam => {
