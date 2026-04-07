@@ -150,7 +150,7 @@ router.get('/low-attendance-alerts', auth, async (req, res) => {
             if (totalDays === 0) continue;
 
             const presentDays = attendanceRecords.filter(a =>
-                ['present', 'late', 'excused'].includes(a.status)
+                ['present', 'late', 'excused', 'half-day'].includes(a.status)
             ).length;
 
             const percentage = (presentDays / totalDays) * 100;
@@ -217,7 +217,7 @@ router.get('/trends/:studentId', auth, async (req, res) => {
                 }
 
                 weeklyData[weekKey].total++;
-                if (['present', 'late', 'excused'].includes(record.status)) {
+                if (['present', 'late', 'excused', 'half-day'].includes(record.status)) {
                     weeklyData[weekKey].present++;
                 }
             });
@@ -243,7 +243,7 @@ router.get('/trends/:studentId', auth, async (req, res) => {
                 }
 
                 monthlyData[monthKey].total++;
-                if (['present', 'late', 'excused'].includes(record.status)) {
+                if (['present', 'late', 'excused', 'half-day'].includes(record.status)) {
                     monthlyData[monthKey].present++;
                 }
             });
@@ -264,7 +264,7 @@ router.get('/trends/:studentId', auth, async (req, res) => {
                 }
 
                 yearlyData[yearKey].total++;
-                if (['present', 'late', 'excused'].includes(record.status)) {
+                if (['present', 'late', 'excused', 'half-day'].includes(record.status)) {
                     yearlyData[yearKey].present++;
                 }
             });

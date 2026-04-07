@@ -14,7 +14,11 @@ const createEventValidation = [
   body('isSchoolEvent')
     .optional()
     .isBoolean()
-    .withMessage('isSchoolEvent must be a boolean value')
+    .withMessage('isSchoolEvent must be a boolean value'),
+  body('isHoliday')
+    .optional()
+    .isBoolean()
+    .withMessage('isHoliday must be a boolean value')
 ];
 
 const updateEventValidation = [
@@ -33,7 +37,11 @@ const updateEventValidation = [
   body('isSchoolEvent')
     .optional()
     .isBoolean()
-    .withMessage('isSchoolEvent must be a boolean value')
+    .withMessage('isSchoolEvent must be a boolean value'),
+  body('isHoliday')
+    .optional()
+    .isBoolean()
+    .withMessage('isHoliday must be a boolean value')
 ];
 
 module.exports = {

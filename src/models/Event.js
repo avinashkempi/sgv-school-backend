@@ -20,6 +20,10 @@ const eventSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  isHoliday: {
+    type: Boolean,
+    default: false
+  },
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
@@ -35,5 +39,6 @@ const eventSchema = new mongoose.Schema({
 eventSchema.index({ date: -1 });
 eventSchema.index({ createdBy: 1 });
 eventSchema.index({ isSchoolEvent: 1 });
+eventSchema.index({ isHoliday: 1 });
 
 module.exports = mongoose.model('Event', eventSchema);

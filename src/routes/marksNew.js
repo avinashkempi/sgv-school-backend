@@ -17,7 +17,7 @@ router.post('/grid-update', [auth, yearContext, requireOpenYear], async (req, re
         const { examId, gridData } = req.body;
         // gridData: [{ studentId, marksObtained, remarks? }, ...]
 
-        const exam = await Exam.findById(examId).populate('subject');
+        const exam = await Exam.findById(examId).populate('subject').populate('class');
         if (!exam) {
             return res.status(404).json({ message: 'Exam not found' });
         }
@@ -25,8 +25,11 @@ router.post('/grid-update', [auth, yearContext, requireOpenYear], async (req, re
         // Validate teacher authorization
         const userRole = req.user.role;
         const isAdmin = userRole === 'admin' || userRole === 'super admin';
+        
+        const isSubjectTeacher = exam.subject && exam.subject.teachers.includes(req.user.userId);
+        const isClassTeacher = exam.class && exam.class.classTeacher && exam.class.classTeacher.toString() === req.user.userId.toString();
 
-        if (!isAdmin && !exam.subject.teachers.includes(req.user.userId)) {
+        if (!isAdmin && !isSubjectTeacher && !isClassTeacher) {
             return res.status(403).json({ message: 'Not authorized to enter marks for this exam' });
         }
 
@@ -272,7 +275,10 @@ router.put('/bulk-grade', [auth, yearContext, requireOpenYear], async (req, res)
         const marks = await Marks.find({ _id: { $in: marksIds } })
             .populate({
                 path: 'exam',
-                populate: { path: 'subject' }
+                populate: [
+                    { path: 'subject' },
+                    { path: 'class' }
+                ]
             });
 
         const userRole = req.user.role;
@@ -281,7 +287,12 @@ router.put('/bulk-grade', [auth, yearContext, requireOpenYear], async (req, res)
         for (const mark of marks) {
             if (!isAdmin) {
                 const subject = mark.exam.subject;
-                if (!subject || !subject.teachers.includes(req.user.userId)) {
+                const examClass = mark.exam.class;
+                
+                const isSubjectTeacher = subject && subject.teachers.includes(req.user.userId);
+                const isClassTeacher = examClass && examClass.classTeacher && examClass.classTeacher.toString() === req.user.userId.toString();
+
+                if (!isSubjectTeacher && !isClassTeacher) {
                     return res.status(403).json({
                         message: 'Not authorized to update these marks'
                     });

@@ -89,15 +89,17 @@ router.post('/standardized', auth, async (req, res) => {
         }
 
         // Validate teacher authorization
-        const subject = await Subject.findById(subjectId);
+        const subject = await Subject.findById(subjectId).populate('class');
         if (!subject) {
             return res.status(404).json({ message: 'Subject not found' });
         }
 
         const userRole = req.user.role;
         const isAdmin = userRole === 'admin' || userRole === 'super admin';
+        const isSubjectTeacher = subject.teachers.includes(req.user.userId);
+        const isClassTeacher = subject.class && subject.class.classTeacher && subject.class.classTeacher.toString() === req.user.userId.toString();
 
-        if (!isAdmin && !subject.teachers.includes(req.user.userId)) {
+        if (!isAdmin && !isSubjectTeacher && !isClassTeacher) {
             return res.status(403).json({ message: 'Not authorized to create exam for this subject' });
         }
 
@@ -166,15 +168,17 @@ router.post('/standardized/bulk', auth, async (req, res) => {
     try {
         const { classId, subjectId, totalMarks, date, instructions, duration } = req.body;
 
-        const subject = await Subject.findById(subjectId);
+        const subject = await Subject.findById(subjectId).populate('class');
         if (!subject) {
             return res.status(404).json({ message: 'Subject not found' });
         }
 
         const userRole = req.user.role;
         const isAdmin = userRole === 'admin' || userRole === 'super admin';
+        const isSubjectTeacher = subject.teachers.includes(req.user.userId);
+        const isClassTeacher = subject.class && subject.class.classTeacher && subject.class.classTeacher.toString() === req.user.userId.toString();
 
-        if (!isAdmin && !subject.teachers.includes(req.user.userId)) {
+        if (!isAdmin && !isSubjectTeacher && !isClassTeacher) {
             return res.status(403).json({ message: 'Not authorized to create exams for this subject' });
         }
 
@@ -746,9 +750,11 @@ router.post('/quick-init', [auth, yearContext, requireOpenYear], async (req, res
     try {
         const { classId, subjectId, examsConfig, types: requestedTypes } = req.body;
         const academicYearId = req.academicYearContext;
-        const subject = await Subject.findById(subjectId);
+        const subject = await Subject.findById(subjectId).populate('class');
         const isAdmin = req.user.role === 'admin' || req.user.role === 'super admin';
-        if (!isAdmin && !subject.teachers.includes(req.user.userId)) return res.status(403).json({ message: 'Not authorized' });
+        const isSubjectTeacher = subject.teachers.includes(req.user.userId);
+        const isClassTeacher = subject.class && subject.class.classTeacher && subject.class.classTeacher.toString() === req.user.userId.toString();
+        if (!isAdmin && !isSubjectTeacher && !isClassTeacher) return res.status(403).json({ message: 'Not authorized' });
         const examTypes = (Array.isArray(requestedTypes) && requestedTypes.length > 0) ? requestedTypes : ['FA1', 'FA2', 'SA1', 'FA3', 'FA4', 'SA2'];
         const results = [];
         for (const type of examTypes) {
@@ -776,7 +782,18 @@ router.post('/quick-init', [auth, yearContext, requireOpenYear], async (req, res
 router.get('/teacher/dashboard', [auth, yearContext], async (req, res) => {
     try {
         const academicYearId = req.academicYearContext;
-        const subjects = await Subject.find({ teachers: req.user.userId }).populate('class', 'name section').lean();
+        
+        // Find classes where the user is a class teacher
+        const classesAsClassTeacher = await Class.find({ classTeacher: req.user.userId }).distinct('_id');
+
+        // Find subjects where user is subject teacher OR class teacher
+        const subjects = await Subject.find({
+            $or: [
+                { teachers: req.user.userId },
+                { class: { $in: classesAsClassTeacher } }
+            ]
+        }).populate('class', 'name section').lean();
+
         const dashboard = [];
         for (const subject of subjects) {
             const exams = await Exam.find({ class: subject.class._id, subject: subject._id, academicYear: academicYearId, isStandardized: true }).lean();

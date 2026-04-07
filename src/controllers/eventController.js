@@ -1,6 +1,7 @@
 const { validationResult } = require('express-validator');
 const Event = require('../models/Event');
 const Notification = require('../models/Notification');
+const Attendance = require('../models/Attendance');
 const { sendTargetedNotification } = require('../services/notificationService');
 
 const createEvent = async (req, res) => {
@@ -15,7 +16,7 @@ const createEvent = async (req, res) => {
       });
     }
 
-    const { title, date, description, isSchoolEvent } = req.body;
+    const { title, date, description, isSchoolEvent, isHoliday } = req.body;
 
     // Create new event
     const event = new Event({
@@ -23,9 +24,19 @@ const createEvent = async (req, res) => {
       date,
       description,
       isSchoolEvent: isSchoolEvent !== undefined ? isSchoolEvent : false,
+      isHoliday: isHoliday !== undefined ? isHoliday : false,
       createdBy: req.user.userId
     });
     await event.save();
+
+    // If it's a holiday, clear attendance for that day
+    if (event.isHoliday) {
+      const targetDate = new Date(date);
+      targetDate.setHours(0, 0, 0, 0);
+      const nextDay = new Date(targetDate);
+      nextDay.setDate(targetDate.getDate() + 1);
+      await Attendance.deleteMany({ date: { $gte: targetDate, $lt: nextDay } });
+    }
 
     // Immediately create a notification for the new event
     const notificationTitle = title ? `New Event: ${title}` : 'New Event';
@@ -127,6 +138,10 @@ const getEvent = async (req, res) => {
       query.isSchoolEvent = req.query.isSchoolEvent === 'true';
     }
 
+    if (req.query.isHoliday !== undefined) {
+      query.isHoliday = req.query.isHoliday === 'true';
+    }
+
     const events = await Event.find(query)
       .sort({ date: -1 }) // Default sort by date descending
       .skip(skip)
@@ -166,7 +181,7 @@ const updateEvent = async (req, res) => {
     }
 
     const eventId = req.params.id;
-    const { title, date, description, isSchoolEvent } = req.body;
+    const { title, date, description, isSchoolEvent, isHoliday } = req.body;
 
     const event = await Event.findById(eventId);
     if (!event) {
@@ -181,8 +196,22 @@ const updateEvent = async (req, res) => {
     if (date !== undefined) event.date = date;
     if (description !== undefined) event.description = description;
     if (isSchoolEvent !== undefined) event.isSchoolEvent = isSchoolEvent;
+    
+    let becameHoliday = false;
+    if (isHoliday !== undefined) {
+      if (!event.isHoliday && isHoliday) becameHoliday = true;
+      event.isHoliday = isHoliday;
+    }
 
     await event.save();
+
+    if (becameHoliday) {
+      const targetDate = new Date(event.date);
+      targetDate.setHours(0, 0, 0, 0);
+      const nextDay = new Date(targetDate);
+      nextDay.setDate(targetDate.getDate() + 1);
+      await Attendance.deleteMany({ date: { $gte: targetDate, $lt: nextDay } });
+    }
 
     res.json({
       success: true,

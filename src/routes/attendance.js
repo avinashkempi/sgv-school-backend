@@ -8,6 +8,7 @@ const User = require('../models/User');
 const Class = require('../models/Class');
 const Subject = require('../models/Subject');
 const LeaveRequest = require('../models/LeaveRequest');
+const Event = require('../models/Event');
 
 // @route   POST /api/attendance/mark
 // @desc    Mark attendance for students (bulk)
@@ -243,7 +244,7 @@ router.get('/my-attendance', [auth, yearContext], async (req, res) => {
             }
 
             monthlyStats[monthKey].total++;
-            if (record.status === 'present' || record.status === 'late' || record.status === 'excused') {
+            if (['present', 'late', 'excused', 'half-day'].includes(record.status)) {
                 monthlyStats[monthKey].present++;
             }
         });
@@ -267,6 +268,7 @@ router.get('/my-attendance', [auth, yearContext], async (req, res) => {
                 absent: allAttendance.filter(a => a.status === 'absent').length,
                 late: allAttendance.filter(a => a.status === 'late').length,
                 excused: allAttendance.filter(a => a.status === 'excused').length,
+                halfDay: allAttendance.filter(a => a.status === 'half-day').length,
                 percentage: parseFloat(percentage),
                 monthlyBreakdown
             },
@@ -298,7 +300,7 @@ router.get('/student/:studentId/summary', [auth, yearContext], async (req, res) 
             academicYear: academicYearId
         });
         const totalClasses = allAttendance.length;
-        const presentClasses = allAttendance.filter(a => ['present', 'late', 'excused'].includes(a.status)).length;
+        const presentClasses = allAttendance.filter(a => ['present', 'late', 'excused', 'half-day'].includes(a.status)).length;
         const overallPercentage = totalClasses > 0 ? ((presentClasses / totalClasses) * 100).toFixed(1) : 0;
 
         // 2. Subject-wise Stats
@@ -325,7 +327,7 @@ router.get('/student/:studentId/summary', [auth, yearContext], async (req, res) 
             }
 
             subjectStats[subjectId].total++;
-            if (['present', 'late', 'excused'].includes(record.status)) {
+            if (['present', 'late', 'excused', 'half-day'].includes(record.status)) {
                 subjectStats[subjectId].present++;
             }
         });
@@ -346,7 +348,7 @@ router.get('/student/:studentId/summary', [auth, yearContext], async (req, res) 
             }
 
             monthlyStats[monthKey].total++;
-            if (['present', 'late', 'excused'].includes(record.status)) {
+            if (['present', 'late', 'excused', 'half-day'].includes(record.status)) {
                 monthlyStats[monthKey].present++;
             }
         });
@@ -420,6 +422,7 @@ router.get('/student/:studentId', [auth, yearContext], async (req, res) => {
                 absent: allAttendance.filter(a => a.status === 'absent').length,
                 late: allAttendance.filter(a => a.status === 'late').length,
                 excused: allAttendance.filter(a => a.status === 'excused').length,
+                halfDay: allAttendance.filter(a => a.status === 'half-day').length,
                 percentage: parseFloat(percentage)
             },
             pagination: {
@@ -517,7 +520,7 @@ router.get('/school-summary', [auth, yearContext], async (req, res) => {
         // Map attendance to find who is present/absent
         attendanceRecords.forEach(record => {
             if (record.role === 'student') {
-                if (['present', 'late', 'excused'].includes(record.status)) {
+                if (['present', 'late', 'excused', 'half-day'].includes(record.status)) {
                     studentPresent++;
                 } else if (record.status === 'absent') {
                     absentList.push({
@@ -532,7 +535,7 @@ router.get('/school-summary', [auth, yearContext], async (req, res) => {
                     });
                 }
             } else if (record.role === 'teacher') {
-                if (['present', 'late', 'excused'].includes(record.status)) {
+                if (['present', 'late', 'excused', 'half-day'].includes(record.status)) {
                     teacherPresent++;
                 } else if (record.status === 'absent') {
                     absentList.push({
@@ -623,10 +626,18 @@ router.get('/missing-tracker', [auth, yearContext], async (req, res) => {
         const effectiveEnd = end >= today ? new Date(today.getTime() - 86400000) : end;
         effectiveEnd.setHours(23, 59, 59, 999);
 
+        // Fetch custom holidays in range
+        const holidaysRaw = await Event.distinct('date', {
+            isHoliday: true,
+            date: { $gte: start, $lte: effectiveEnd }
+        });
+        const holidayDates = holidaysRaw.map(d => d.toISOString().split('T')[0]);
+
         const daysInRange = [];
         for (let d = new Date(start); d <= effectiveEnd; d.setDate(d.getDate() + 1)) {
             // Skip Sundays for standard school
-            if (d.getDay() !== 0) {
+            const ds = d.toISOString().split('T')[0];
+            if (d.getDay() !== 0 && !holidayDates.includes(ds)) {
                 daysInRange.push(new Date(d));
             }
         }

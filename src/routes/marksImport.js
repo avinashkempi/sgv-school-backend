@@ -23,9 +23,13 @@ router.post('/import/csv', auth, async (req, res) => {
 
         // Check authorization
         const isTeacher = req.user.role === 'teacher' && exam.createdBy.toString() === req.user.id;
-        const isAdmin = req.user.role === 'admin' || req.user.role === 'super-admin';
+        const isAdmin = req.user.role === 'admin' || req.user.role === 'super-admin' || req.user.role === 'super admin';
+        
+        const userId = req.user.id || req.user.userId;
+        const isSubjectTeacher = exam.subject && exam.subject.teachers && exam.subject.teachers.includes(userId);
+        const isClassTeacher = exam.class && exam.class.classTeacher && exam.class.classTeacher.toString() === userId.toString();
 
-        if (!isTeacher && !isAdmin) {
+        if (!isTeacher && !isAdmin && !isSubjectTeacher && !isClassTeacher) {
             return res.status(403).json({ message: 'Not authorized to import marks for this exam' });
         }
 
