@@ -382,7 +382,8 @@ router.get('/analytics/class/:classId', [auth, yearContext], async (req, res) =>
                 totalMax,
                 percentage: parseFloat(percentage),
                 grade: getDefaultGrade(parseFloat(percentage)),
-                examsAttempted: studentMarks.length
+                examsAttempted: studentMarks.length,
+                totalExams: exams.length
             };
         });
 
