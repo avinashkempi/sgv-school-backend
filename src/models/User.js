@@ -36,6 +36,18 @@ const userSchema = new mongoose.Schema({
     default: 'student'
   },
 
+  tokenVersion: {
+    type: Number,
+    default: 0
+  },
+  passwordChangedAt: {
+    type: Date
+  },
+  isActive: {
+    type: Boolean,
+    default: true
+  },
+
   // Student specific fields
   admissionDate: {
     type: Date
@@ -141,6 +153,26 @@ const userSchema = new mongoose.Schema({
     event: { type: Boolean, default: true },
     general: { type: Boolean, default: true }
   }
+});
+
+// Invalidate existing sessions when account access or password changes
+userSchema.pre('save', function (next) {
+  const shouldRevokeSessions = !this.isNew && (
+    this.isModified('password') ||
+    this.isModified('role') ||
+    this.isModified('isActive') ||
+    this.isModified('isAdmitted')
+  );
+
+  if (shouldRevokeSessions) {
+    this.tokenVersion = (this.tokenVersion ?? 0) + 1;
+
+    if (this.isModified('password')) {
+      this.passwordChangedAt = new Date();
+    }
+  }
+
+  next();
 });
 
 // Hash password before saving
