@@ -1,8 +1,65 @@
 const jwt = require('jsonwebtoken');
+const User = require('../models/User');
 
-const authenticateToken = (req, res, next) => {
+const allowedUserRoles = User.schema.path('role').enumValues;
+const TOKEN_EXPIRED_OR_INVALID_MESSAGE = 'Invalid or expired token';
+
+const sanitizeUserForRequest = (user) => ({
+  id: user._id.toString(),
+  userId: user._id.toString(),
+  name: user.name,
+  role: user.role
+});
+
+const isTokenIssuedBeforePasswordChange = (payload, user) => {
+  if (!payload.iat || !user.passwordChangedAt) return false;
+
+  const passwordChangedAtSeconds = Math.floor(new Date(user.passwordChangedAt).getTime() / 1000);
+  return payload.iat < passwordChangedAtSeconds;
+};
+
+const loadAndValidateTokenUser = async (payload) => {
+  if (!payload?.userId || payload.tokenVersion === undefined || !payload.role) {
+    return null;
+  }
+
+  const user = await User.findById(payload.userId)
+    .select('name role tokenVersion passwordChangedAt isActive isAdmitted')
+    .lean();
+
+  if (!user) return null;
+
+  const isKnownRole = allowedUserRoles.includes(user.role);
+  const tokenRoleStillMatchesDb = payload.role === user.role;
+  const tokenVersionStillCurrent = payload.tokenVersion === (user.tokenVersion ?? 0);
+  const passwordWasChangedAfterTokenIssue = isTokenIssuedBeforePasswordChange(payload, user);
+  const isInactive = user.isActive === false || user.isAdmitted === false;
+  const isAlumni = user.role === 'alumni';
+
+  if (
+    !isKnownRole ||
+    !tokenRoleStillMatchesDb ||
+    !tokenVersionStillCurrent ||
+    passwordWasChangedAfterTokenIssue ||
+    isInactive ||
+    isAlumni
+  ) {
+    return null;
+  }
+
+  return sanitizeUserForRequest(user);
+};
+
+const verifyToken = (token) => new Promise((resolve, reject) => {
+  jwt.verify(token, process.env.JWT_SECRET, (err, payload) => {
+    if (err) return reject(err);
+    resolve(payload);
+  });
+});
+
+const authenticateToken = async (req, res, next) => {
   const authHeader = req.headers['authorization'];
-  let token = authHeader && authHeader.split(' ')[1];
+  const token = authHeader && authHeader.split(' ')[1];
 
   if (!token) {
     return res.status(401).json({
@@ -11,21 +68,29 @@ const authenticateToken = (req, res, next) => {
     });
   }
 
-  jwt.verify(token, process.env.JWT_SECRET, (err, payload) => {
-    if (err) {
+  try {
+    const payload = await verifyToken(token);
+    const user = await loadAndValidateTokenUser(payload);
+
+    if (!user) {
       return res.status(403).json({
         success: false,
-        message: 'Invalid or expired token'
+        message: TOKEN_EXPIRED_OR_INVALID_MESSAGE
       });
     }
-    // Attach decoded payload to req.user. Payload includes role when issued from authController.
-    req.user = payload;
-    next();
-  });
+
+    req.user = user;
+    return next();
+  } catch (error) {
+    return res.status(403).json({
+      success: false,
+      message: TOKEN_EXPIRED_OR_INVALID_MESSAGE
+    });
+  }
 };
 
 // Optional authentication middleware - sets req.user if token is valid, else null
-const optionalAuthenticateToken = (req, res, next) => {
+const optionalAuthenticateToken = async (req, res, next) => {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
 
@@ -34,14 +99,14 @@ const optionalAuthenticateToken = (req, res, next) => {
     return next();
   }
 
-  jwt.verify(token, process.env.JWT_SECRET, (err, payload) => {
-    if (err) {
-      req.user = null;
-    } else {
-      req.user = payload;
-    }
-    next();
-  });
+  try {
+    const payload = await verifyToken(token);
+    req.user = await loadAndValidateTokenUser(payload);
+  } catch (error) {
+    req.user = null;
+  }
+
+  return next();
 };
 
 // Middleware to allow only admin or super admin users
