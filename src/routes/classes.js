@@ -8,13 +8,13 @@ const User = require('../models/User');
 const AcademicYear = require('../models/AcademicYear');
 const Timetable = require('../models/Timetable');
 const { authenticateToken: auth, checkRole } = require('../middleware/auth');
-const { yearContext } = require('../middleware/yearContext');
+const { yearContext, requireOpenYear } = require('../middleware/yearContext');
 const _notificationService = require('../services/notificationService');
 
 // @route   GET /api/classes
 // @desc    Get all classes
 // @access  Private
-router.get('/', [auth, yearContext], async (req, res) => {
+router.get('/', [auth, yearContext, requireOpenYear], async (req, res) => {
     try {
         const classes = await Class.find({ academicYear: req.academicYearContext })
             .populate('classTeacher', 'name email')
@@ -29,7 +29,7 @@ router.get('/', [auth, yearContext], async (req, res) => {
 // @route   GET /api/classes/my-classes
 // @desc    Get classes where the logged-in user is the teacher
 // @access  Private (Teacher)
-router.get('/my-classes', [auth, yearContext], async (req, res) => {
+router.get('/my-classes', [auth, yearContext, requireOpenYear], async (req, res) => {
     try {
         const classes = await Class.find({ 
             classTeacher: req.user.userId,
@@ -150,7 +150,7 @@ router.get('/:id/full-details', auth, async (req, res) => {
 // @route   POST /api/classes
 // @desc    Create a new class
 // @access  Super Admin
-router.post('/', [auth, checkRole(['super admin']), yearContext], async (req, res) => {
+router.post('/', [auth, checkRole(['super admin']), yearContext, requireOpenYear], async (req, res) => {
     const { name, section, branch, classTeacher } = req.body;
 
     try {
@@ -173,7 +173,7 @@ router.post('/', [auth, checkRole(['super admin']), yearContext], async (req, re
 // @route   PUT /api/classes/:id
 // @desc    Update a class
 // @access  Super Admin
-router.put('/:id', [auth, checkRole(['super admin'])], async (req, res) => {
+router.put('/:id', [auth, checkRole(['super admin']), yearContext, requireOpenYear], async (req, res) => {
     const { name, section, branch, classTeacher } = req.body;
 
     try {
@@ -196,7 +196,7 @@ router.put('/:id', [auth, checkRole(['super admin'])], async (req, res) => {
 // @route   DELETE /api/classes/:id
 // @desc    Delete a class
 // @access  Super Admin
-router.delete('/:id', [auth, checkRole(['super admin'])], async (req, res) => {
+router.delete('/:id', [auth, checkRole(['super admin']), yearContext, requireOpenYear], async (req, res) => {
     try {
         const classData = await Class.findById(req.params.id);
         if (!classData) return res.status(404).json({ msg: 'Class not found' });
@@ -224,7 +224,7 @@ router.delete('/:id', [auth, checkRole(['super admin'])], async (req, res) => {
 // @route   POST /api/classes/:id/content
 // @desc    Create content for a class
 // @access  Class Teacher or Admin
-router.post('/:id/content', auth, async (req, res) => {
+router.post('/:id/content', [auth, yearContext, requireOpenYear], async (req, res) => {
     const { title, description, type, subject, link } = req.body;
     const classId = req.params.id;
 
@@ -268,7 +268,7 @@ router.post('/:id/content', auth, async (req, res) => {
 // @route   POST /api/classes/:id/students
 // @desc    Add one or more students to a class
 // @access  Class Teacher (for their class) or Admin/Super Admin
-router.post('/:id/students', [auth, yearContext], async (req, res) => {
+router.post('/:id/students', [auth, yearContext, requireOpenYear], async (req, res) => {
     const { studentId, studentIds } = req.body;
     const classId = req.params.id;
 
@@ -372,7 +372,7 @@ router.post('/:id/students', [auth, yearContext], async (req, res) => {
 // @route   DELETE /api/classes/:id/students/:studentId
 // @desc    Remove a student from a class
 // @access  Class Teacher (for their class) or Admin/Super Admin
-router.delete('/:id/students/:studentId', auth, async (req, res) => {
+router.delete('/:id/students/:studentId', [auth, yearContext, requireOpenYear], async (req, res) => {
     const { id: classId, studentId } = req.params;
 
     try {
@@ -446,7 +446,7 @@ router.get('/:id/subjects', auth, async (req, res) => {
 // @route   POST /api/classes/:id/subjects
 // @desc    Add a subject to a class
 // @access  Class Teacher (for their class) or Admin/Super Admin
-router.post('/:id/subjects', [auth, yearContext], async (req, res) => {
+router.post('/:id/subjects', [auth, yearContext, requireOpenYear], async (req, res) => {
     const { name, globalSubjectId } = req.body;
     const classId = req.params.id;
 
@@ -509,7 +509,7 @@ router.post('/:id/subjects', [auth, yearContext], async (req, res) => {
 // @route   DELETE /api/classes/:id/subjects/:subjectId
 // @desc    Delete a subject
 // @access  Class Teacher or Admin
-router.delete('/:id/subjects/:subjectId', auth, async (req, res) => {
+router.delete('/:id/subjects/:subjectId', [auth, yearContext, requireOpenYear], async (req, res) => {
     try {
         const { id: classId, subjectId } = req.params;
 

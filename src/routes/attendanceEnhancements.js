@@ -1,17 +1,32 @@
 const express = require('express');
 const router = express.Router();
 const { authenticateToken: auth } = require('../middleware/auth');
+const { yearContext, requireOpenYear } = require('../middleware/yearContext');
+const { canAccessClass, requireStudentAccessParam } = require('../middleware/accessControl');
 const Attendance = require('../models/Attendance');
 const User = require('../models/User');
 
 // @route   POST /api/attendance/bulk-quick-mark
 // @desc    Quick mark all students as present/absent with exceptions
 // @access  Private (Teacher/Admin)
-router.post('/bulk-quick-mark', auth, async (req, res) => {
+router.post('/bulk-quick-mark', [auth, yearContext, requireOpenYear], async (req, res) => {
     try {
         const { classId, date, defaultStatus, exceptions } = req.body;
         // defaultStatus: 'present' or 'absent'
         // exceptions: [{ studentId, status, remarks }]
+
+        if (!(await canAccessClass(req.user, classId))) {
+            return res.status(403).json({ success: false, message: 'Not authorized to mark attendance for this class' });
+        }
+
+        if (!['present', 'absent', 'late', 'excused', 'half-day'].includes(defaultStatus)) {
+            return res.status(400).json({ success: false, message: 'Invalid default attendance status' });
+        }
+
+        const invalidException = exceptions?.find(e => !['present', 'absent', 'late', 'excused', 'half-day'].includes(e.status));
+        if (invalidException) {
+            return res.status(400).json({ success: false, message: 'Invalid exception attendance status' });
+        }
 
         // Get all students in class
         const students = await User.find({ currentClass: classId, role: 'student' }).select('_id');
@@ -30,7 +45,8 @@ router.post('/bulk-quick-mark', auth, async (req, res) => {
                 date: attendanceDate,
                 status: exception ? exception.status : defaultStatus,
                 remarks: exception ? (exception.remarks || '') : '',
-                markedBy: req.user.userId
+                markedBy: req.user.userId,
+                academicYear: req.academicYearContext
             };
         });
 
@@ -42,10 +58,11 @@ router.post('/bulk-quick-mark', auth, async (req, res) => {
                     class: record.class,
                     date: record.date,
                     subject: null,
-                    period: null
+                    period: null,
+                    academicYear: req.academicYearContext
                 },
                 record,
-                { upsert: true, new: true }
+                { upsert: true, new: true, runValidators: true }
             );
         }
 
@@ -132,6 +149,14 @@ router.get('/low-attendance-alerts', auth, async (req, res) => {
         startDate.setDate(startDate.getDate() - parseInt(days));
         startDate.setHours(0, 0, 0, 0);
 
+        if (classId) {
+            if (!(await canAccessClass(req.user, classId))) {
+                return res.status(403).json({ success: false, message: 'Not authorized' });
+            }
+        } else if (!['admin', 'super admin'].includes(req.user.role)) {
+            return res.status(403).json({ success: false, message: 'Class filter is required for teachers' });
+        }
+
         // Get all students in class
         let studentQuery = { role: 'student' };
         if (classId) studentQuery.currentClass = classId;
@@ -194,7 +219,7 @@ router.get('/low-attendance-alerts', auth, async (req, res) => {
 // @route   GET /api/attendance/trends/:studentId
 // @desc    Get attendance trends for a student
 // @access  Private
-router.get('/trends/:studentId', auth, async (req, res) => {
+router.get('/trends/:studentId', [auth, requireStudentAccessParam('studentId')], async (req, res) => {
     try {
         const { studentId } = req.params;
         const { period = 'monthly' } = req.query; // 'weekly', 'monthly', 'yearly'

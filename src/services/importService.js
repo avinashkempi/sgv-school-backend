@@ -5,7 +5,7 @@ const Class = require('../models/Class');
 const AcademicYear = require('../models/AcademicYear');
 const FeeStructure = require('../models/FeeStructure');
 const { wipeNonAdminData } = require('./wipeService');
-const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
 
 // Utility to parse currency string "₹11,900" -> 11900
 const parseCurrency = (str) => {
@@ -31,6 +31,21 @@ const parseDate = (dateStr) => {
     }
 };
 
+const generateTemporaryPassword = () => crypto.randomBytes(9).toString('base64url') + 'A1!';
+
+const getRowValue = (row, key) => {
+    const normalizedKey = key.toLowerCase().trim();
+    const actualKey = Object.keys(row).find(k => k.toLowerCase().trim() === normalizedKey);
+    return actualKey ? row[actualKey] : null;
+};
+
+const normalizeBranch = (branch) => {
+    const value = (branch || 'Main').toString().trim();
+    return ['Ugar', 'Mangasuli', 'Main'].includes(value) ? value : 'Main';
+};
+
+const classMapKey = (academicYearId, branch, className) => `${academicYearId || 'none'}:${branch}:${className.toUpperCase()}`;
+
 const processImport = async (csvData, options = { wipe: false }) => {
     const results = {
         total: csvData.length,
@@ -42,13 +57,7 @@ const processImport = async (csvData, options = { wipe: false }) => {
         updatedStudents: []
     };
 
-    try {
-        // 1. Optional Wipe
-        if (options.wipe) {
-            await wipeNonAdminData({ confirmed: true });
-        }
-
-        // 2. Resolve Academic Year FIRST (needed for class creation)
+    // 1. Resolve Academic Year FIRST (needed for class creation and scoped wipes)
         let academicYear;
         if (options.academicYearId) {
             academicYear = await AcademicYear.findById(options.academicYearId);
@@ -60,23 +69,25 @@ const processImport = async (csvData, options = { wipe: false }) => {
             academicYear = await AcademicYear.findOne({});
         }
 
-        // 3. Extract and Create Classes from CSV
-        // Get unique class names from CSV
-        const uniqueClasses = [...new Set(csvData.map(row => row['Class'] ? row['Class'].toString().toUpperCase() : '').filter(c => c))];
-        console.log(`Found ${uniqueClasses.length} unique classes in CSV`);
+        // 2. Optional Wipe, scoped to the selected or active academic year.
+        if (options.wipe) {
+            await wipeNonAdminData({ confirmed: true, academicYearId: academicYear?._id });
+        }
 
-        // Helper to parse Branch from row (assuming all rows of a class have same branch, or take first)
-        const getBranchForClass = (className) => {
-            const row = csvData.find(r => r['Class'] && r['Class'].toString().toUpperCase() === className);
-            return row ? row['Branch'] : '';
-        };
+        // 3. Extract and Create Classes from CSV, scoped by branch and academic year.
+        const uniqueClassEntries = new Map();
+        for (const row of csvData) {
+            const className = row['Class'] ? row['Class'].toString().toUpperCase().trim() : '';
+            if (!className) continue;
+            const branch = normalizeBranch(row['Branch']);
+            uniqueClassEntries.set(classMapKey(academicYear?._id, branch, className), { className, branch });
+        }
+        console.log(`Found ${uniqueClassEntries.size} unique class/branch entries in CSV`);
 
-        // Create Classes if they don't exist (or if wiped)
-        for (const className of uniqueClasses) {
-            const branch = getBranchForClass(className) || 'Main';
-            const existingClass = await Class.findOne({ name: className, branch });
+        for (const { className, branch } of uniqueClassEntries.values()) {
+            const classValue = className.toLowerCase().replace(/\s+/g, '_');
+            const existingClass = await Class.findOne({ name: className, branch, academicYear: academicYear?._id });
             if (!existingClass) {
-                const classValue = className.toLowerCase().replace(/\s+/g, '_');
                 await Class.create({
                     name: className,
                     value: classValue,
@@ -87,9 +98,9 @@ const processImport = async (csvData, options = { wipe: false }) => {
             }
         }
 
-        // 4. Cache Classes
-        const classes = await Class.find({});
-        const classMap = new Map(classes.map(c => [c.name.toUpperCase(), c._id]));
+        // 4. Cache Classes for the target academic year only.
+        const classes = await Class.find(academicYear ? { academicYear: academicYear._id } : {});
+        const classMap = new Map(classes.map(c => [classMapKey(c.academicYear, c.branch, c.name), c._id]));
 
 
         // Track processed classes for fee structure to avoid redundant DB calls per row
@@ -115,8 +126,9 @@ const processImport = async (csvData, options = { wipe: false }) => {
                 }
 
                 // Resolve Class
-                const className = row['Class'] ? row['Class'].toString().toUpperCase() : '';
-                const classId = classMap.get(className);
+                const className = row['Class'] ? row['Class'].toString().toUpperCase().trim() : '';
+                const branch = normalizeBranch(row['Branch']);
+                const classId = classMap.get(classMapKey(academicYear?._id, branch, className));
 
                 if (!classId && className) {
                     console.warn(`Class ${className} not found in map for student ${row['Student Name']}`);
@@ -134,7 +146,7 @@ const processImport = async (csvData, options = { wipe: false }) => {
                     if (!student) {
                         throw new Error(`Student not found with phone ${loginPhone} (Fees-Only mode skips student creation)`);
                     }
-                    await processFees(student, row, academicYear, classId, row['Branch']);
+                    await processFees(student, row, academicYear, classId, branch);
                     results.updated++;
                     results.updatedStudents.push({
                         name: student.name,
@@ -145,12 +157,6 @@ const processImport = async (csvData, options = { wipe: false }) => {
                 }
 
                 // --- FULL IMPORT MODE ---
-                // Helper to get value from row with normalized keys (trim + case insensitive)
-                const getRowValue = (key) => {
-                    const normalizedKey = key.toLowerCase().trim();
-                    const actualKey = Object.keys(row).find(k => k.toLowerCase().trim() === normalizedKey);
-                    return actualKey ? row[actualKey] : null;
-                };
 
                 // Process Fee Structure for Class (First record wins)
                 if (classId && academicYear && !processedFeeStructures.has(classId.toString())) {
@@ -160,26 +166,27 @@ const processImport = async (csvData, options = { wipe: false }) => {
 
                 // Construct Student Data
                 const studentData = {
-                    name: getRowValue('Student Name'),
+                    name: getRowValue(row, 'Student Name'),
                     phone: loginPhone, // Unique Key
                     guardianPhone: backupPhone, // Backup contact
-                    password: loginPhone + '@123', // Default password = phone@123
+                    password: generateTemporaryPassword(),
+                    mustChangePassword: true,
                     role: 'student',
                     currentClass: classId,
                     academicYear: academicYear ? academicYear._id : null,
 
                     // Profile Fields
-                    gender: getRowValue('Gender'),
-                    dateOfBirth: parseDate(getRowValue('Date of Birth')),
-                    address: getRowValue('Address'),
-                    isAdmitted: getRowValue('Admission') === 'TRUE' || getRowValue('Admission') === true || getRowValue('Admission') === 'True',
-                    remarks: getRowValue('Remarks'),
+                    gender: getRowValue(row, 'Gender'),
+                    dateOfBirth: parseDate(getRowValue(row, 'Date of Birth')),
+                    address: getRowValue(row, 'Address'),
+                    isAdmitted: getRowValue(row, 'Admission') === 'TRUE' || getRowValue(row, 'Admission') === true || getRowValue(row, 'Admission') === 'True',
+                    remarks: getRowValue(row, 'Remarks'),
 
                     // IDs
-                    regNo: getRowValue('Reg No'),
-                    satsNumber: getRowValue('SATS Number'),
-                    penNumber: getRowValue('PEN Number'),
-                    apaarId: getRowValue('APAAR ID')
+                    regNo: getRowValue(row, 'Reg No'),
+                    satsNumber: getRowValue(row, 'SATS Number'),
+                    penNumber: getRowValue(row, 'PEN Number'),
+                    apaarId: getRowValue(row, 'APAAR ID')
                 };
 
                 // Upsert Student
@@ -193,7 +200,7 @@ const processImport = async (csvData, options = { wipe: false }) => {
                 } else {
                     // Update existing — exclude password so pre-save hook
                     // doesn't double-hash an already-hashed password.
-                    const { password: _pw, ...studentUpdateData } = studentData;
+                    const { password: _pw, mustChangePassword: _mcp, ...studentUpdateData } = studentData;
                     Object.assign(student, studentUpdateData);
                     // Add to updated list
                     results.updatedStudents.push({
@@ -204,10 +211,19 @@ const processImport = async (csvData, options = { wipe: false }) => {
                 }
 
                 await student.save();
-                if (isNew) results.created++; else results.updated++;
+                if (isNew) {
+                    results.created++;
+                    if (!results.createdStudents) results.createdStudents = [];
+                    results.createdStudents.push({
+                        name: student.name,
+                        phone: student.phone,
+                        class: className,
+                        temporaryPassword: studentData.password
+                    });
+                } else results.updated++;
 
                 // Process Fees
-                await processFees(student, row, academicYear, classId, row['Branch']);
+                await processFees(student, row, academicYear, classId, branch);
 
             } catch (error) {
                 results.failed++;
@@ -218,10 +234,6 @@ const processImport = async (csvData, options = { wipe: false }) => {
                 });
             }
         }
-
-    } catch (error) {
-        throw error;
-    }
 
     return results;
 };
@@ -359,7 +371,8 @@ const processStaffImport = async (csvData) => {
             const userData = {
                 name: name,
                 phone: phone,
-                password: phone + '@123', // Default password = phone@123
+                password: generateTemporaryPassword(),
+                mustChangePassword: true,
                 role: role,
                 designation: designation, // Store exact designation
 
@@ -383,7 +396,7 @@ const processStaffImport = async (csvData) => {
             } else {
                 // Update existing — exclude password so pre-save hook
                 // doesn't double-hash an already-hashed password.
-                const { password: _pw, ...userUpdateData } = userData;
+                const { password: _pw, mustChangePassword: _mcp, ...userUpdateData } = userData;
                 // Only update if role is not super admin (safety)
                 if (user.role !== 'super admin') {
                     Object.assign(user, userUpdateData);
@@ -400,7 +413,8 @@ const processStaffImport = async (csvData) => {
                 results.createdStaff.push({
                     name: user.name,
                     designation: user.designation,
-                    phone: user.phone
+                    phone: user.phone,
+                    temporaryPassword: userData.password
                 });
             } else {
                 results.updated++;

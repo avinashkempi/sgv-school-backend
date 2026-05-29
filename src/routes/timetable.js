@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { authenticateToken: auth } = require('../middleware/auth');
+const { yearContext, requireOpenYear } = require('../middleware/yearContext');
 const Timetable = require('../models/Timetable');
 const User = require('../models/User');
 const _Class = require('../models/Class');
@@ -8,7 +9,7 @@ const _Class = require('../models/Class');
 // @route   POST /api/timetable
 // @desc    Create or Update timetable for a class
 // @access  Private (Admin, Super Admin)
-router.post('/', auth, async (req, res) => {
+router.post('/', [auth, yearContext, requireOpenYear], async (req, res) => {
     try {
         const { classId, schedule, breaks } = req.body;
 

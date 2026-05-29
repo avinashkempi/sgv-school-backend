@@ -3,6 +3,7 @@ const router = express.Router();
 const GlobalSubject = require('../models/GlobalSubject');
 const Subject = require('../models/Subject');
 const { authenticateToken: auth, checkRole } = require('../middleware/auth');
+const { yearContext, requireOpenYear } = require('../middleware/yearContext');
 
 // @route   GET /api/subjects
 // @desc    Get all global subjects

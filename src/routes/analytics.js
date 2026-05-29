@@ -2,6 +2,7 @@ const express = require('express');
 const mongoose = require('mongoose');
 const router = express.Router();
 const { authenticateToken: auth, checkRole } = require('../middleware/auth');
+const { requireStudentAccessParam, requireClassAccessParam, canAccessSubject, canAccessClass } = require('../middleware/accessControl');
 const Marks = require('../models/Marks');
 const User = require('../models/User');
 const Class = require('../models/Class');
@@ -13,7 +14,7 @@ const FeePayment = require('../models/FeePayment');
 // @route   GET /api/analytics/student/:studentId/report-card
 // @desc    Generate comprehensive report card data for a student
 // @access  Private
-router.get('/student/:studentId/report-card', auth, async (req, res) => {
+router.get('/student/:studentId/report-card', [auth, requireStudentAccessParam('studentId')], async (req, res) => {
     try {
         const { studentId } = req.params;
         const { examId } = req.query;
@@ -132,7 +133,7 @@ router.get('/student/:studentId/report-card', auth, async (req, res) => {
 // @route   GET /api/analytics/class/:classId/performance
 // @desc    Get class performance analytics
 // @access  Private (Teacher/Admin)
-router.get('/class/:classId/performance', auth, async (req, res) => {
+router.get('/class/:classId/performance', [auth, requireClassAccessParam('classId')], async (req, res) => {
     try {
         const { classId } = req.params;
         const { examId } = req.query;
@@ -213,6 +214,9 @@ router.get('/class/:classId/performance', auth, async (req, res) => {
 router.get('/subject/:subjectId/analysis', auth, async (req, res) => {
     try {
         const { subjectId } = req.params;
+        if (!(await canAccessSubject(req.user, subjectId))) {
+            return res.status(403).json({ success: false, message: 'Not authorized' });
+        }
 
         const subject = await Subject.findById(subjectId).lean();
         if (!subject) {
@@ -330,6 +334,13 @@ router.get('/school/overview', [auth, checkRole(['admin', 'super admin'])], asyn
 router.get('/trends/performance', auth, async (req, res) => {
     try {
         const { classId, subjectId, period = 'monthly' } = req.query;
+
+        if (classId && !(await canAccessClass(req.user, classId))) {
+            return res.status(403).json({ success: false, message: 'Not authorized' });
+        }
+        if (subjectId && !(await canAccessSubject(req.user, subjectId))) {
+            return res.status(403).json({ success: false, message: 'Not authorized' });
+        }
 
         const matchQuery = {};
         if (classId) {

@@ -274,6 +274,8 @@ exports.sendNotification = async (req, res) => {
             targetRole = 'teacher';
         } else if (target === 'staff') {
             targetRole = 'staff';
+        } else if (target === 'support_staff') {
+            targetRole = 'support_staff';
         } else if (target === 'admin') {
             targetRole = 'admin';
         }

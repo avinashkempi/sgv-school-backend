@@ -10,12 +10,34 @@ const os = require('os');
 // Setup multer for file upload
 const upload = multer({ dest: os.tmpdir() });
 
+const ensureImportAllowed = (req, res, next) => {
+    if (process.env.NODE_ENV === 'production' && process.env.ENABLE_IMPORTS !== 'true') {
+        return res.status(403).json({ message: 'CSV imports are disabled in production.' });
+    }
+    next();
+};
+
+const validateWipeRequest = (req, res, next) => {
+    const wipeRequested = req.body.wipe === true || req.body.wipe === 'true';
+    if (!wipeRequested) return next();
+
+    if (req.user.role !== 'super admin') {
+        return res.status(403).json({ message: 'Only super admins can run destructive imports.' });
+    }
+
+    if (req.body.confirmText !== 'WIPE_STUDENTS_FOR_YEAR') {
+        return res.status(400).json({ message: 'Destructive import requires confirmText=WIPE_STUDENTS_FOR_YEAR.' });
+    }
+
+    next();
+};
+
 /**
  * @route POST /api/import/students/csv
  * @desc Import students from CSV file
  * @access Private (Admin/Super Admin)
  */
-router.post('/students/csv', authenticateToken, checkRole(['admin', 'super admin']), upload.single('file'), async (req, res) => {
+router.post('/students/csv', authenticateToken, checkRole(['admin', 'super admin']), ensureImportAllowed, upload.single('file'), validateWipeRequest, async (req, res) => {
     if (!req.file) {
         return res.status(400).json({ message: 'No file uploaded' });
     }
@@ -85,7 +107,7 @@ router.get('/template', authenticateToken, checkRole(['admin', 'super admin']), 
  * @desc Import students from local data folder (Direct Sync)
  * @access Private (Admin)
  */
-router.post('/students/local', authenticateToken, checkRole(['admin', 'super admin']), async (req, res) => {
+router.post('/students/local', authenticateToken, checkRole(['super admin']), ensureImportAllowed, validateWipeRequest, async (req, res) => {
     const filePath = './data/student_data.csv';
     const wipeData = req.body.wipe === 'true';
     const academicYearId = req.body.academicYearId;
@@ -129,7 +151,7 @@ router.post('/students/local', authenticateToken, checkRole(['admin', 'super adm
  * @desc Import staff from local data folder (Direct Sync)
  * @access Private (Admin)
  */
-router.post('/staff/local', authenticateToken, checkRole(['admin', 'super admin']), async (req, res) => {
+router.post('/staff/local', authenticateToken, checkRole(['super admin']), ensureImportAllowed, async (req, res) => {
     const filePath = './data/staff_data.csv';
     const results = [];
 

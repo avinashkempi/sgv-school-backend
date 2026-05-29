@@ -1,5 +1,6 @@
 const { validationResult } = require('express-validator');
 const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
 const User = require('../models/User');
 
 const login = async (req, res) => {
@@ -36,9 +37,9 @@ const login = async (req, res) => {
 
     // Generate JWT token (include role so middleware can enforce permissions)
     const token = jwt.sign(
-      { userId: user._id, name: user.name, role: user.role },
+      { userId: user._id, name: user.name },
       process.env.JWT_SECRET,
-      { expiresIn: '365d' }
+      { expiresIn: '30d' }
     );
 
     // Update last active
@@ -73,7 +74,8 @@ const login = async (req, res) => {
         regNo: user.regNo,
         satsNumber: user.satsNumber,
         penNumber: user.penNumber,
-        apaarId: user.apaarId
+        apaarId: user.apaarId,
+        mustChangePassword: user.mustChangePassword || false
       }
     });
   } catch (error) {
@@ -124,7 +126,8 @@ const getMe = async (req, res) => {
         regNo: user.regNo,
         satsNumber: user.satsNumber,
         penNumber: user.penNumber,
-        apaarId: user.apaarId
+        apaarId: user.apaarId,
+        mustChangePassword: user.mustChangePassword || false
       }
     });
   } catch (error) {
@@ -136,7 +139,48 @@ const getMe = async (req, res) => {
   }
 };
 
+
+const changePassword = async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+
+    if (!newPassword || newPassword.length < 8) {
+      return res.status(400).json({ success: false, message: 'New password must be at least 8 characters long' });
+    }
+
+    const user = await User.findById(req.user.userId);
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    if (!user.mustChangePassword) {
+      if (!currentPassword) {
+        return res.status(400).json({ success: false, message: 'Current password is required' });
+      }
+      const isCurrentValid = await user.comparePassword(currentPassword);
+      if (!isCurrentValid) {
+        return res.status(401).json({ success: false, message: 'Current password is incorrect' });
+      }
+    }
+
+    const samePassword = await bcrypt.compare(newPassword, user.password);
+    if (samePassword) {
+      return res.status(400).json({ success: false, message: 'New password must be different from the current password' });
+    }
+
+    user.password = newPassword;
+    user.mustChangePassword = false;
+    await user.save();
+
+    res.json({ success: true, message: 'Password changed successfully' });
+  } catch (error) {
+    console.error('Change password error:', error);
+    res.status(500).json({ success: false, message: 'Server error changing password' });
+  }
+};
+
 module.exports = {
   login,
-  getMe
+  getMe,
+  changePassword
 };

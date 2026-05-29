@@ -3,7 +3,9 @@ const router = express.Router();
 const Marks = require('../models/Marks');
 const Exam = require('../models/Exam');
 const User = require('../models/User');
-const auth = require('../middleware/auth');
+const { authenticateToken: auth } = require('../middleware/auth');
+const { yearContext, requireOpenYear } = require('../middleware/yearContext');
+const { hasObjectIdMatch } = require('../middleware/accessControl');
 
 /**
  * CSV Import Route
@@ -11,7 +13,7 @@ const auth = require('../middleware/auth');
  * @desc Import marks from CSV file
  * @access Private (Teacher/Admin)
  */
-router.post('/import/csv', auth, async (req, res) => {
+router.post('/import/csv', [auth, yearContext, requireOpenYear], async (req, res) => {
     try {
         const { examId, csvData } = req.body;
 
@@ -22,11 +24,11 @@ router.post('/import/csv', auth, async (req, res) => {
         }
 
         // Check authorization
-        const isTeacher = req.user.role === 'teacher' && exam.createdBy.toString() === req.user.id;
-        const isAdmin = req.user.role === 'admin' || req.user.role === 'super-admin' || req.user.role === 'super admin';
+        const isTeacher = req.user.role === 'teacher' && exam.createdBy.toString() === req.user.userId;
+        const isAdmin = req.user.role === 'admin' || req.user.role === 'super admin';
         
-        const userId = req.user.id || req.user.userId;
-        const isSubjectTeacher = exam.subject && exam.subject.teachers && exam.subject.teachers.includes(userId);
+        const userId = req.user.userId;
+        const isSubjectTeacher = exam.subject && exam.subject.teachers && hasObjectIdMatch(exam.subject.teachers, userId);
         const isClassTeacher = exam.class && exam.class.classTeacher && exam.class.classTeacher.toString() === userId.toString();
 
         if (!isTeacher && !isAdmin && !isSubjectTeacher && !isClassTeacher) {
@@ -98,7 +100,7 @@ router.post('/import/csv', auth, async (req, res) => {
                     existingMark.percentage = percentage;
                     existingMark.grade = grade;
                     existingMark.remarks = row.remarks || existingMark.remarks;
-                    existingMark.enteredBy = req.user.id;
+                    existingMark.enteredBy = req.user.userId;
                     existingMark.updatedAt = Date.now();
                     await existingMark.save();
                     results.updated++;
@@ -111,7 +113,7 @@ router.post('/import/csv', auth, async (req, res) => {
                         percentage,
                         grade,
                         remarks: row.remarks || '',
-                        enteredBy: req.user.id
+                        enteredBy: req.user.userId
                     });
                     results.imported++;
                 }

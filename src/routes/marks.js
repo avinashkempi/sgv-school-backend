@@ -2,6 +2,8 @@ const express = require('express');
 const mongoose = require('mongoose');
 const router = express.Router();
 const { authenticateToken: auth } = require('../middleware/auth');
+const { yearContext, requireOpenYear } = require('../middleware/yearContext');
+const { requireStudentAccessParam, requireClassAccessParam } = require('../middleware/accessControl');
 const Marks = require('../models/Marks');
 const Exam = require('../models/Exam');
 const GradeConfig = require('../models/GradeConfig');
@@ -44,7 +46,7 @@ const getDefaultGrade = (percentage) => {
 // @route   POST /api/marks/bulk
 // @desc    Enter marks for multiple students (bulk upload)
 // @access  Private (Teacher)
-router.post('/bulk', auth, async (req, res) => {
+router.post('/bulk', [auth, yearContext, requireOpenYear], async (req, res) => {
     try {
         const { examId, marksData } = req.body;
         // marksData = [{ studentId, marksObtained, remarks? }, ...]
@@ -152,7 +154,7 @@ router.post('/bulk', auth, async (req, res) => {
 // @route   POST /api/marks/grid-update
 // @desc    Update marks from grid view
 // @access  Private (Teacher)
-router.post('/grid-update', auth, async (req, res) => {
+router.post('/grid-update', [auth, yearContext, requireOpenYear], async (req, res) => {
     try {
         const { examId, gridData } = req.body;
         // gridData = [{ studentId, marksObtained, remarks? }, ...]
@@ -245,7 +247,7 @@ router.post('/grid-update', auth, async (req, res) => {
 // @route   POST /api/marks
 // @desc    Enter/Update marks for a single student
 // @access  Private (Teacher)
-router.post('/', auth, async (req, res) => {
+router.post('/', [auth, yearContext, requireOpenYear], async (req, res) => {
     try {
         const { examId, studentId, marksObtained, remarks } = req.body;
 
@@ -380,7 +382,7 @@ router.get('/exam/:examId', auth, async (req, res) => {
 // @route   GET /api/marks/student/:studentId
 // @desc    Get all marks for a student
 // @access  Private (Student/Teacher/Admin)
-router.get('/student/:studentId', auth, async (req, res) => {
+router.get('/student/:studentId', [auth, requireStudentAccessParam('studentId')], async (req, res) => {
     try {
         // Role-based access: students can only view their own marks
         if (req.user.role === 'student' && req.user.userId !== req.params.studentId) {
@@ -411,7 +413,7 @@ router.get('/student/:studentId', auth, async (req, res) => {
 // @route   GET /api/marks/student/:studentId/report-card
 // @desc    Generate comprehensive report card for a student
 // @access  Private
-router.get('/student/:studentId/report-card', auth, async (req, res) => {
+router.get('/student/:studentId/report-card', [auth, requireStudentAccessParam('studentId')], async (req, res) => {
     try {
         // Role-based access: students can only view their own report card
         if (req.user.role === 'student' && req.user.userId !== req.params.studentId) {
@@ -575,7 +577,7 @@ router.get('/student/:studentId/report-card', auth, async (req, res) => {
 // @route   DELETE /api/marks/:id
 // @desc    Delete marks entry
 // @access  Private (Teacher - who entered OR Admin)
-router.delete('/:id', auth, async (req, res) => {
+router.delete('/:id', [auth, yearContext, requireOpenYear], async (req, res) => {
     try {
         // Validate ObjectId format
         if (!req.params.id.match(/^[0-9a-fA-F]{24}$/)) {
@@ -606,7 +608,7 @@ router.delete('/:id', auth, async (req, res) => {
 // @route   GET /api/marks/class/:classId/summary
 // @desc    Class-wise marks summary across all exams
 // @access  Private (Teacher/Admin)
-router.get('/class/:classId/summary', auth, async (req, res) => {
+router.get('/class/:classId/summary', [auth, requireClassAccessParam('classId')], async (req, res) => {
     try {
         // Get all exams for this class
         const exams = await Exam.find({
@@ -670,7 +672,7 @@ router.get('/class/:classId/summary', auth, async (req, res) => {
 // @route   GET /api/marks/analytics/class/:classId
 // @desc    Detailed class analytics with student rankings
 // @access  Private (Teacher/Admin)
-router.get('/analytics/class/:classId', auth, async (req, res) => {
+router.get('/analytics/class/:classId', [auth, requireClassAccessParam('classId')], async (req, res) => {
     try {
         const { examType } = req.query;
 

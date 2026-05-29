@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
 const { authenticateToken: auth, checkRole } = require('../middleware/auth');
+const { yearContext, requireOpenYear } = require('../middleware/yearContext');
 const Feedback = require('../models/Feedback');
 const User = require('../models/User');
 const Subject = require('../models/Subject');
@@ -27,7 +28,7 @@ const checkTeacherPermissions = async (teacherId, studentId, classId) => {
 // @route   POST /api/feedback
 // @desc    Create feedback for a student
 // @access  Teacher, Admin, Super Admin
-router.post('/', [auth, checkRole(['teacher', 'admin', 'super admin'])], async (req, res) => {
+router.post('/', [auth, checkRole(['teacher', 'admin', 'super admin']), yearContext, requireOpenYear], async (req, res) => {
     const { studentId, message, subjectId } = req.body;
     const teacherId = req.user.userId;
     const role = req.user.role;
@@ -101,7 +102,7 @@ router.get('/my', [auth, checkRole(['student'])], async (req, res) => {
 // @route   GET /api/feedback/sent
 // @desc    Get feedback sent by logged-in user (teacher sees own, admin/super admin sees all)
 // @access  Teacher, Admin, Super Admin
-router.get('/sent', [auth, checkRole(['teacher', 'admin', 'super admin'])], async (req, res) => {
+router.get('/sent', [auth, checkRole(['teacher', 'admin', 'super admin']), yearContext, requireOpenYear], async (req, res) => {
     try {
         const role = req.user.role;
         // Admin/Super Admin see all sent feedback; teachers see only their own
@@ -126,7 +127,7 @@ router.get('/sent', [auth, checkRole(['teacher', 'admin', 'super admin'])], asyn
 // @route   GET /api/feedback/all
 // @desc    Get all feedback
 // @access  Admin, Super Admin
-router.get('/all', [auth, checkRole(['admin', 'super admin'])], async (req, res) => {
+router.get('/all', [auth, checkRole(['admin', 'super admin']), yearContext, requireOpenYear], async (req, res) => {
     try {
         const feedback = await Feedback.find()
             .populate('student', 'name')
@@ -145,7 +146,7 @@ router.get('/all', [auth, checkRole(['admin', 'super admin'])], async (req, res)
 // @route   PUT /api/feedback/:id
 // @desc    Update feedback
 // @access  Teacher (own), Admin, Super Admin
-router.put('/:id', auth, async (req, res) => {
+router.put('/:id', [auth, yearContext, requireOpenYear], async (req, res) => {
     const { message } = req.body;
     const userId = req.user.userId;
     const role = req.user.role;
@@ -188,7 +189,7 @@ router.put('/:id', auth, async (req, res) => {
 // @route   DELETE /api/feedback/:id
 // @desc    Delete feedback
 // @access  Teacher (own), Admin, Super Admin
-router.delete('/:id', auth, async (req, res) => {
+router.delete('/:id', [auth, yearContext, requireOpenYear], async (req, res) => {
     const userId = req.user.userId;
     const role = req.user.role;
 

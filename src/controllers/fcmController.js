@@ -22,12 +22,13 @@ function isValidFCMToken(token) {
  */
 const registerFCMToken = async (req, res) => {
     try {
-        const { token, userId, platform, isAuthenticated } = req.body;
+        const { token, platform } = req.body;
+        const userId = req.user.userId;
 
-        if (!token || !userId || !platform) {
+        if (!token || !platform) {
             return res.status(400).json({
                 success: false,
-                message: 'Missing required fields: token, userId, platform',
+                message: 'Missing required fields: token, platform',
             });
         }
 
@@ -46,7 +47,7 @@ const registerFCMToken = async (req, res) => {
                 $set: {
                     userId,
                     platform,
-                    isAuthenticated: isAuthenticated || false,
+                    isAuthenticated: true,
                     updatedAt: new Date(),
                 },
                 $setOnInsert: { createdAt: new Date() },
@@ -83,7 +84,7 @@ const unregisterFCMToken = async (req, res) => {
             });
         }
 
-        await FCMToken.deleteOne({ token });
+        await FCMToken.deleteOne({ token, userId: req.user.userId });
 
         res.status(200).json({
             success: true,
