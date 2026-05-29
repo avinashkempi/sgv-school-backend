@@ -35,11 +35,18 @@ const login = async (req, res) => {
       });
     }
 
-    // Generate JWT token (include role so middleware can enforce permissions)
+    if (user.isActive === false || user.isAdmitted === false || user.role === 'alumni') {
+      return res.status(403).json({
+        success: false,
+        message: 'Account is inactive'
+      });
+    }
+
+    // Generate a short-lived JWT token tied to the current DB-backed session version
     const token = jwt.sign(
-      { userId: user._id, name: user.name },
+      { userId: user._id, role: user.role, tokenVersion: user.tokenVersion ?? 0 },
       process.env.JWT_SECRET,
-      { expiresIn: '30d' }
+      { expiresIn: '8h' }
     );
 
     // Update last active
@@ -52,6 +59,7 @@ const login = async (req, res) => {
       success: true,
       message: 'Login successful',
       token,
+      expiresIn: '8h',
       user: {
         id: user._id,
         name: user.name,

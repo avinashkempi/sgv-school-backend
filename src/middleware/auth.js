@@ -1,14 +1,54 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 
-const buildRequestUser = (user, payload = {}) => ({
-  userId: user._id.toString(),
+const allowedUserRoles = User.schema.path('role').enumValues;
+const TOKEN_EXPIRED_OR_INVALID_MESSAGE = 'Invalid or expired token';
+
+const sanitizeUserForRequest = (user) => ({
   id: user._id.toString(),
+  userId: user._id.toString(),
   name: user.name,
-  role: user.role,
-  tokenIat: payload.iat,
-  tokenExp: payload.exp
+  role: user.role
 });
+
+const isTokenIssuedBeforePasswordChange = (payload, user) => {
+  if (!payload.iat || !user.passwordChangedAt) return false;
+
+  const passwordChangedAtSeconds = Math.floor(new Date(user.passwordChangedAt).getTime() / 1000);
+  return payload.iat < passwordChangedAtSeconds;
+};
+
+const loadAndValidateTokenUser = async (payload) => {
+  if (!payload?.userId || payload.tokenVersion === undefined || !payload.role) {
+    return null;
+  }
+
+  const user = await User.findById(payload.userId)
+    .select('name role tokenVersion passwordChangedAt isActive isAdmitted')
+    .lean();
+
+  if (!user) return null;
+
+  const isKnownRole = allowedUserRoles.includes(user.role);
+  const tokenRoleStillMatchesDb = payload.role === user.role;
+  const tokenVersionStillCurrent = payload.tokenVersion === (user.tokenVersion ?? 0);
+  const passwordWasChangedAfterTokenIssue = isTokenIssuedBeforePasswordChange(payload, user);
+  const isInactive = user.isActive === false || user.isAdmitted === false;
+  const isAlumni = user.role === 'alumni';
+
+  if (
+    !isKnownRole ||
+    !tokenRoleStillMatchesDb ||
+    !tokenVersionStillCurrent ||
+    passwordWasChangedAfterTokenIssue ||
+    isInactive ||
+    isAlumni
+  ) {
+    return null;
+  }
+
+  return sanitizeUserForRequest(user);
+};
 
 const verifyToken = (token) => new Promise((resolve, reject) => {
   jwt.verify(token, process.env.JWT_SECRET, (err, payload) => {
@@ -18,60 +58,55 @@ const verifyToken = (token) => new Promise((resolve, reject) => {
 });
 
 const authenticateToken = async (req, res, next) => {
-  try {
-    const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1];
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
 
-    if (!token) {
-      return res.status(401).json({
+  if (!token) {
+    return res.status(401).json({
+      success: false,
+      message: 'Access token required'
+    });
+  }
+
+  try {
+    const payload = await verifyToken(token);
+    const user = await loadAndValidateTokenUser(payload);
+
+    if (!user) {
+      return res.status(403).json({
         success: false,
-        message: 'Access token required'
+        message: TOKEN_EXPIRED_OR_INVALID_MESSAGE
       });
     }
 
-    const payload = await verifyToken(token);
-    const userId = payload.userId || payload.id;
-    if (!userId) {
-      return res.status(403).json({ success: false, message: 'Invalid token payload' });
-    }
-
-    const user = await User.findById(userId).select('name role').lean();
-    if (!user) {
-      return res.status(403).json({ success: false, message: 'User no longer exists or access was revoked' });
-    }
-
-    // Always use the current DB-backed role. This prevents stale long-lived tokens
-    // from retaining privileges after a demotion or role change.
-    req.user = buildRequestUser(user, payload);
-    next();
-  } catch (_err) {
+    req.user = user;
+    return next();
+  } catch (error) {
     return res.status(403).json({
       success: false,
-      message: 'Invalid or expired token'
+      message: TOKEN_EXPIRED_OR_INVALID_MESSAGE
     });
   }
 };
 
-// Optional authentication middleware - sets req.user if token is valid and user still exists, else null
+// Optional authentication middleware - sets req.user if token is valid, else null
 const optionalAuthenticateToken = async (req, res, next) => {
-  try {
-    const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1];
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
 
-    if (!token) {
-      req.user = null;
-      return next();
-    }
-
-    const payload = await verifyToken(token);
-    const userId = payload.userId || payload.id;
-    const user = userId ? await User.findById(userId).select('name role').lean() : null;
-    req.user = user ? buildRequestUser(user, payload) : null;
-    next();
-  } catch (_err) {
+  if (!token) {
     req.user = null;
-    next();
+    return next();
   }
+
+  try {
+    const payload = await verifyToken(token);
+    req.user = await loadAndValidateTokenUser(payload);
+  } catch (error) {
+    req.user = null;
+  }
+
+  return next();
 };
 
 // Middleware to allow only admin or super admin users
