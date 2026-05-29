@@ -1,5 +1,6 @@
 const express = require('express');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
+const { yearContext } = require('../middleware/yearContext');
 const { userCreateValidation, userUpdateValidation } = require('../validations/user');
 const {
   getAllUsers,
@@ -32,7 +33,7 @@ router.get('/me', async (req, res) => {
 });
 
 // Search users by name or phone
-router.get('/search', (req, res, next) => {
+router.get('/search', yearContext, (req, res, next) => {
   if (['admin', 'super admin', 'teacher'].includes(req.user.role)) {
     return next();
   }
@@ -40,7 +41,7 @@ router.get('/search', (req, res, next) => {
 }, searchUsers);
 
 // Get all users (admin only, except teachers can get students)
-router.get('/', (req, res, next) => {
+router.get('/', yearContext, (req, res, next) => {
   // Allow teachers to access if they're filtering by role=student
   if (req.query.role === 'student' && req.user.role === 'teacher') {
     return next();

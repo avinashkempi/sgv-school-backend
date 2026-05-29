@@ -20,14 +20,40 @@ const getAllUsers = async (req, res) => {
       filter.role = role;
     }
 
+    // Apply Academic Year context for students
+    if (filter.role === 'student' || role === 'student') {
+      if (req.academicYearContext) {
+        filter.academicYear = req.academicYearContext;
+      }
+    } else if (!role || role === 'all') {
+      // If returning all roles, only include students from the context year, but keep all other global users
+      if (req.academicYearContext) {
+        filter.$or = [
+          { role: { $ne: 'student' } },
+          { role: 'student', academicYear: req.academicYearContext }
+        ];
+      }
+    }
+
     // Search filter (name, email, phone)
     if (search) {
       const searchRegex = { $regex: search, $options: 'i' };
-      filter.$or = [
+      const searchOr = [
         { name: searchRegex },
         { email: searchRegex },
         { phone: searchRegex }
       ];
+
+      // If $or filter is already constructed for role selection, combine them using $and
+      if (filter.$or) {
+        filter.$and = [
+          { $or: filter.$or },
+          { $or: searchOr }
+        ];
+        delete filter.$or;
+      } else {
+        filter.$or = searchOr;
+      }
     }
 
     // Build sort object
@@ -316,26 +342,47 @@ const searchUsers = async (req, res) => {
     }
 
     // Build search filter
-    const filter = {
-      $or: [
-        { name: { $regex: query, $options: 'i' } }, // Case-insensitive name search
-        { phone: { $regex: query, $options: 'i' } } // Phone search
-      ]
-    };
+    const filter = {};
+
+    const searchOr = [
+      { name: { $regex: query, $options: 'i' } }, // Case-insensitive name search
+      { phone: { $regex: query, $options: 'i' } } // Phone search
+    ];
 
     // Add role filter if provided
     if (role) {
       filter.role = role;
     }
 
+    // Apply Academic Year context
+    const targetYearId = req.query.academicYearId || req.academicYearContext;
+    let yearFilterOr = null;
+
+    if (targetYearId) {
+      if (role === 'student') {
+        filter.academicYear = targetYearId;
+      } else if (!role || role === 'all') {
+        // Only return students of targetYearId, but allow all other roles globally
+        yearFilterOr = [
+          { role: { $ne: 'student' } },
+          { role: 'student', academicYear: targetYearId }
+        ];
+      }
+    }
+
+    // Combine search query and year filter context into $and
+    if (yearFilterOr) {
+      filter.$and = [
+        { $or: searchOr },
+        { $or: yearFilterOr }
+      ];
+    } else {
+      filter.$or = searchOr;
+    }
+
     // Add class filter if provided
     if (req.query.classId) {
       filter.currentClass = req.query.classId;
-    }
-
-    // Add academic year filter if provided
-    if (req.query.academicYearId) {
-      filter.academicYear = req.query.academicYearId;
     }
 
     const page = parseInt(req.query.page) || 1;

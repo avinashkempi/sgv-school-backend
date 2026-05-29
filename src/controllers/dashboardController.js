@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const User = require('../models/User');
 const Attendance = require('../models/Attendance');
 const FeePayment = require('../models/FeePayment');
@@ -58,7 +59,7 @@ const CACHE_TTL = 60 * 1000; // 60 seconds
 exports.getAdminStats = async (req, res) => {
     try {
         const { range = 'thisMonth' } = req.query;
-        const cacheKey = `adminStats_${range}`;
+        const cacheKey = `adminStats_${range}_${req.academicYearContext}`;
 
         const cached = adminStatsCache.get(cacheKey);
         if (cached && Date.now() - cached.ts < CACHE_TTL) {
@@ -94,37 +95,53 @@ exports.getAdminStats = async (req, res) => {
             attendanceTodayTeacher,
             classesMarkedToday
         ] = await Promise.all([
-            User.countDocuments({ role: 'student' }),
+            User.countDocuments({ role: 'student', academicYear: req.academicYearContext }),
             User.countDocuments({ role: 'teacher' }),
             Attendance.find({
                 date: { $gte: today, $lt: tomorrow },
-                role: 'student'
+                role: 'student',
+                academicYear: req.academicYearContext
             }).lean(),
             // Imported fees (StudentFee.payments)
             StudentFee.aggregate([
+                { $match: { academicYear: new mongoose.Types.ObjectId(req.academicYearContext) } },
                 { $unwind: "$payments" },
                 { $match: { "payments.date": { $gte: startDate, $lte: endDate } } },
                 { $group: { _id: null, total: { $sum: "$payments.amount" } } }
             ]),
             // App-recorded fees (FeePayment)
             FeePayment.aggregate([
-                { $match: { status: 'success', paymentDate: { $gte: startDate, $lte: endDate } } },
+                { 
+                    $match: { 
+                        status: 'success', 
+                        paymentDate: { $gte: startDate, $lte: endDate },
+                        academicYear: new mongoose.Types.ObjectId(req.academicYearContext)
+                    } 
+                },
                 { $group: { _id: null, total: { $sum: "$amount" } } }
             ]),
             // Previous period imported fees
             StudentFee.aggregate([
+                { $match: { academicYear: new mongoose.Types.ObjectId(req.academicYearContext) } },
                 { $unwind: "$payments" },
                 { $match: { "payments.date": { $gte: prevStartDate, $lt: prevEndDate } } },
                 { $group: { _id: null, total: { $sum: "$payments.amount" } } }
             ]),
             // Previous period app-recorded fees
             FeePayment.aggregate([
-                { $match: { status: 'success', paymentDate: { $gte: prevStartDate, $lt: prevEndDate } } },
+                { 
+                    $match: { 
+                        status: 'success', 
+                        paymentDate: { $gte: prevStartDate, $lt: prevEndDate },
+                        academicYear: new mongoose.Types.ObjectId(req.academicYearContext)
+                    } 
+                },
                 { $group: { _id: null, total: { $sum: "$amount" } } }
             ]),
             Attendance.find({
                 date: { $gte: prevStartDate, $lt: prevEndDate },
-                role: 'student'
+                role: 'student',
+                academicYear: req.academicYearContext
             }).lean(),
             Complaint.find()
                 .sort({ createdAt: -1 })
@@ -132,7 +149,7 @@ exports.getAdminStats = async (req, res) => {
                 .populate('student', 'name')
                 .select('title status student createdAt')
                 .lean(),
-            Class.countDocuments(),
+            Class.countDocuments({ academicYear: req.academicYearContext }),
             Attendance.find({
                 date: { $gte: today, $lt: tomorrow },
                 role: 'teacher'
@@ -140,7 +157,8 @@ exports.getAdminStats = async (req, res) => {
             Attendance.distinct('class', {
                 date: { $gte: today, $lt: tomorrow },
                 role: 'student',
-                class: { $ne: null }
+                class: { $ne: null },
+                academicYear: req.academicYearContext
             })
         ]);
 
@@ -168,7 +186,7 @@ exports.getAdminStats = async (req, res) => {
             : 0;
 
         // Fee Trend Logic - show all months of academic year
-        const activeYear = await AcademicYear.findOne({ isActive: true }).lean();
+        const activeYear = await AcademicYear.findById(req.academicYearContext).lean();
         let feeTrend = [];
 
         if (activeYear) {
@@ -195,6 +213,7 @@ exports.getAdminStats = async (req, res) => {
             // Query both sources for the full academic year range
             const [importedFeeTrend, appFeeTrend] = await Promise.all([
                 StudentFee.aggregate([
+                    { $match: { academicYear: new mongoose.Types.ObjectId(req.academicYearContext) } },
                     { $unwind: "$payments" },
                     { $match: { "payments.date": { $gte: ayStart, $lte: ayEnd } } },
                     {
@@ -205,7 +224,13 @@ exports.getAdminStats = async (req, res) => {
                     }
                 ]),
                 FeePayment.aggregate([
-                    { $match: { status: 'success', paymentDate: { $gte: ayStart, $lte: ayEnd } } },
+                    { 
+                        $match: { 
+                            status: 'success', 
+                            paymentDate: { $gte: ayStart, $lte: ayEnd },
+                            academicYear: new mongoose.Types.ObjectId(req.academicYearContext)
+                        } 
+                    },
                     {
                         $group: {
                             _id: { year: { $year: "$paymentDate" }, month: { $month: "$paymentDate" } },

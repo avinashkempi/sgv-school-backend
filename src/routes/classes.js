@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const mongoose = require('mongoose');
 const Class = require('../models/Class');
 const Subject = require('../models/Subject');
 const ClassContent = require('../models/ClassContent');
@@ -7,14 +8,15 @@ const User = require('../models/User');
 const AcademicYear = require('../models/AcademicYear');
 const Timetable = require('../models/Timetable');
 const { authenticateToken: auth, checkRole } = require('../middleware/auth');
+const { yearContext } = require('../middleware/yearContext');
 const _notificationService = require('../services/notificationService');
 
 // @route   GET /api/classes
 // @desc    Get all classes
 // @access  Private
-router.get('/', auth, async (req, res) => {
+router.get('/', [auth, yearContext], async (req, res) => {
     try {
-        const classes = await Class.find()
+        const classes = await Class.find({ academicYear: req.academicYearContext })
             .populate('classTeacher', 'name email')
             .sort({ name: 1 });
         res.json(classes);
@@ -27,9 +29,12 @@ router.get('/', auth, async (req, res) => {
 // @route   GET /api/classes/my-classes
 // @desc    Get classes where the logged-in user is the teacher
 // @access  Private (Teacher)
-router.get('/my-classes', auth, async (req, res) => {
+router.get('/my-classes', [auth, yearContext], async (req, res) => {
     try {
-        const classes = await Class.find({ classTeacher: req.user.userId })
+        const classes = await Class.find({ 
+            classTeacher: req.user.userId,
+            academicYear: req.academicYearContext 
+        })
             .populate('classTeacher', 'name email')
             .sort({ name: 1 });
         res.json(classes);
@@ -42,19 +47,25 @@ router.get('/my-classes', auth, async (req, res) => {
 // @route   GET /api/classes/admin/init
 // @desc    Get all data needed for admin classes page
 // @access  Admin/Super Admin
-router.get('/admin/init', [auth, checkRole(['admin', 'super admin'])], async (req, res) => {
+router.get('/admin/init', [auth, checkRole(['admin', 'super admin']), yearContext], async (req, res) => {
     try {
         const [classes, academicYears, teachers, subjects, timetables] = await Promise.all([
-            Class.find().populate('classTeacher', 'name email').sort({ name: 1 }).lean(),
+            Class.find({ academicYear: req.academicYearContext }).populate('classTeacher', 'name email').sort({ name: 1 }).lean(),
             AcademicYear.find().sort({ startDate: -1 }),
             User.find({ role: { $nin: ['student', 'super admin', 'support_staff'] } }).select('name email role'),
-            Subject.find().populate('teachers', 'name email'),
-            Timetable.find()
+            Subject.find({ academicYear: req.academicYearContext }).populate('teachers', 'name email'),
+            Timetable.find({ academicYear: req.academicYearContext })
         ]);
 
-        // Aggregate student counts per class
+        // Aggregate student counts per class for the selected academic year
         const studentCounts = await User.aggregate([
-            { $match: { role: 'student', currentClass: { $exists: true, $ne: null } } },
+            { 
+                $match: { 
+                    role: 'student', 
+                    currentClass: { $exists: true, $ne: null },
+                    academicYear: new mongoose.Types.ObjectId(req.academicYearContext)
+                } 
+            },
             { $group: { _id: '$currentClass', count: { $sum: 1 } } }
         ]);
 
@@ -139,7 +150,7 @@ router.get('/:id/full-details', auth, async (req, res) => {
 // @route   POST /api/classes
 // @desc    Create a new class
 // @access  Super Admin
-router.post('/', [auth, checkRole(['super admin'])], async (req, res) => {
+router.post('/', [auth, checkRole(['super admin']), yearContext], async (req, res) => {
     const { name, section, branch, classTeacher } = req.body;
 
     try {
@@ -147,7 +158,8 @@ router.post('/', [auth, checkRole(['super admin'])], async (req, res) => {
             name,
             section,
             branch,
-            classTeacher
+            classTeacher,
+            academicYear: req.academicYearContext
         });
 
         const savedClass = await newClass.save();
@@ -256,7 +268,7 @@ router.post('/:id/content', auth, async (req, res) => {
 // @route   POST /api/classes/:id/students
 // @desc    Add one or more students to a class
 // @access  Class Teacher (for their class) or Admin/Super Admin
-router.post('/:id/students', auth, async (req, res) => {
+router.post('/:id/students', [auth, yearContext], async (req, res) => {
     const { studentId, studentIds } = req.body;
     const classId = req.params.id;
 
@@ -281,12 +293,12 @@ router.post('/:id/students', auth, async (req, res) => {
             });
         }
 
-        // Find active academic year
-        const activeYear = await AcademicYear.findOne({ isActive: true });
-        if (!activeYear) {
+        // Verify context academic year
+        const academicYearId = req.academicYearContext;
+        if (!academicYearId) {
             return res.status(400).json({
                 success: false,
-                message: 'No active academic year found. Please contact admin.'
+                message: 'No academic year context found.'
             });
         }
 
@@ -332,7 +344,7 @@ router.post('/:id/students', auth, async (req, res) => {
 
                 // Update student
                 student.currentClass = classId;
-                student.academicYear = activeYear._id;
+                student.academicYear = academicYearId;
                 await student.save();
 
                 results.added.push({
@@ -434,7 +446,7 @@ router.get('/:id/subjects', auth, async (req, res) => {
 // @route   POST /api/classes/:id/subjects
 // @desc    Add a subject to a class
 // @access  Class Teacher (for their class) or Admin/Super Admin
-router.post('/:id/subjects', auth, async (req, res) => {
+router.post('/:id/subjects', [auth, yearContext], async (req, res) => {
     const { name, globalSubjectId } = req.body;
     const classId = req.params.id;
 
@@ -472,17 +484,17 @@ router.post('/:id/subjects', auth, async (req, res) => {
             return res.status(400).json({ success: false, message: 'Subject already exists in this class' });
         }
 
-        // Fetch the active academic year (required by Subject schema)
-        const activeYear = await AcademicYear.findOne({ isActive: true });
-        if (!activeYear) {
-            return res.status(400).json({ success: false, message: 'No active academic year found. Please set one first.' });
+        // Verify context academic year
+        const academicYearId = req.academicYearContext;
+        if (!academicYearId) {
+            return res.status(400).json({ success: false, message: 'No academic year context found.' });
         }
 
         const newSubject = new Subject({
             name: subjectName,
             class: classId,
             globalSubject: globalSubjectRef,
-            academicYear: activeYear._id,
+            academicYear: academicYearId,
             teachers: [] // Start with no teachers assigned
         });
 
