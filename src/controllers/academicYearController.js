@@ -14,7 +14,7 @@ const crypto = require('crypto');
 const rollbackStore = new Map();
 
 exports.createYear = async (req, res) => {
-    const { name, startDate, endDate, isActive, description, terms, settings } = req.body;
+    const { name, startDate, endDate, description, terms, settings } = req.body;
 
     try {
         let year = await AcademicYear.findOne({ name });
@@ -36,6 +36,9 @@ exports.createYear = async (req, res) => {
         res.json(year);
     } catch (err) {
         console.error(err.message);
+        if (err.name === 'ValidationError') {
+            return res.status(400).json({ message: err.message, error: err.errors });
+        }
         res.status(500).send('Server Error');
     }
 };

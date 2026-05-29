@@ -1,5 +1,17 @@
 const mongoose = require('mongoose');
 
+const parseDate = (val) => {
+    if (!val) return val;
+    if (val instanceof Date) return val;
+    const cleanStr = val.toString().trim();
+    const match = cleanStr.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+    if (match) {
+        const [_, day, month, year] = match;
+        return new Date(`${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`);
+    }
+    return new Date(cleanStr);
+};
+
 const academicYearSchema = new mongoose.Schema({
     name: {
         type: String,
@@ -15,11 +27,13 @@ const academicYearSchema = new mongoose.Schema({
     },
     startDate: {
         type: Date,
-        required: [true, 'Start date is required']
+        required: [true, 'Start date is required'],
+        set: parseDate
     },
     endDate: {
         type: Date,
-        required: [true, 'End date is required']
+        required: [true, 'End date is required'],
+        set: parseDate
     },
     isActive: {
         type: Boolean,
@@ -50,14 +64,22 @@ const academicYearSchema = new mongoose.Schema({
         },
         startDate: {
             type: Date,
-            required: true
+            required: true,
+            set: parseDate
         },
         endDate: {
             type: Date,
-            required: true
+            required: true,
+            set: parseDate
         },
-        examPeriodStart: Date,
-        examPeriodEnd: Date
+        examPeriodStart: {
+            type: Date,
+            set: parseDate
+        },
+        examPeriodEnd: {
+            type: Date,
+            set: parseDate
+        }
     }],
 
     // Metadata
