@@ -30,7 +30,8 @@ app.use(compression());
 app.use(cors({
   origin: '*',
   credentials: false,
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-academic-year'],
+  exposedHeaders: ['x-active-academic-year'],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
   optionsSuccessStatus: 200
 }));
