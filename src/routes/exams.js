@@ -78,7 +78,7 @@ router.get('/standardized', auth, async (req, res) => {
 // @route   POST /api/exams/standardized
 // @desc    Create/Initialize a standardized exam
 // @access  Private (Teacher)
-router.post('/standardized', [auth, yearContext, requireOpenYear], async (req, res) => {
+router.post('/standardized', auth, async (req, res) => {
     try {
         const { type, classId, subjectId, totalMarks, date, instructions, duration } = req.body;
 
@@ -166,7 +166,7 @@ router.post('/standardized', [auth, yearContext, requireOpenYear], async (req, r
 // @route   POST /api/exams/standardized/bulk
 // @desc    Initialize all missing standardized exams for a class/subject
 // @access  Private (Teacher/Admin)
-router.post('/standardized/bulk', [auth, yearContext, requireOpenYear], async (req, res) => {
+router.post('/standardized/bulk', auth, async (req, res) => {
     try {
         const { classId, subjectId, totalMarks, date, instructions, duration } = req.body;
 
@@ -251,7 +251,7 @@ router.post('/standardized/bulk', [auth, yearContext, requireOpenYear], async (r
 // @route   POST /api/exams/school-wide/init
 // @desc    Initialize a specific standardized exam for ALL classes or SELECTED classes
 // @access  Private (Admin/Super Admin)
-router.post('/school-wide/init', [auth, yearContext, requireOpenYear], async (req, res) => {
+router.post('/school-wide/init', auth, async (req, res) => {
     try {
         const { type, totalMarks, date, instructions, duration, classIds, subjectMarks, excludedSubjectIds } = req.body;
 
@@ -373,7 +373,7 @@ router.post('/school-wide/init', [auth, yearContext, requireOpenYear], async (re
 
 // @route   POST /api/exams
 // @desc    Create new exam (DEPRECATED)
-router.post('/', [auth, yearContext, requireOpenYear], async (req, res) => {
+router.post('/', auth, async (req, res) => {
     try {
         const user = await User.findById(req.user.userId);
         if (user.role !== 'admin' && user.role !== 'super admin') {
@@ -422,7 +422,7 @@ router.get('/:id', auth, async (req, res) => {
 });
 
 // @route   PUT /api/exams/:id
-router.put('/:id', [auth, yearContext, requireOpenYear], async (req, res) => {
+router.put('/:id', auth, async (req, res) => {
     try {
         let exam = await Exam.findById(req.params.id);
         if (!exam) return res.status(404).json({ message: 'Exam not found' });
@@ -444,7 +444,7 @@ router.put('/:id', [auth, yearContext, requireOpenYear], async (req, res) => {
 });
 
 // @route   DELETE /api/exams/:id
-router.delete('/:id', [auth, yearContext, requireOpenYear], async (req, res) => {
+router.delete('/:id', auth, async (req, res) => {
     try {
         const exam = await Exam.findById(req.params.id);
         if (!exam) return res.status(404).json({ message: 'Exam not found' });
@@ -730,7 +730,7 @@ router.get('/performance/school', auth, async (req, res) => {
 });
 
 // @route   DELETE /api/exams/:id/subject/:subjectId
-router.delete('/:id/subject/:subjectId', [auth, yearContext, requireOpenYear], async (req, res) => {
+router.delete('/:id/subject/:subjectId', auth, async (req, res) => {
     try {
         const { id: examId, subjectId } = req.params;
         const exam = await Exam.findById(examId);

@@ -1,7 +1,6 @@
 const express = require('express');
 const router = express.Router();
 const { authenticateToken: auth, checkRole } = require('../middleware/auth');
-const { yearContext, requireOpenYear } = require('../middleware/yearContext');
 const Complaint = require('../models/Complaint');
 const User = require('../models/User');
 const _Class = require('../models/Class');
@@ -9,7 +8,7 @@ const _Class = require('../models/Class');
 // @route   POST /api/complaints
 // @desc    Create a new complaint
 // @access  Private (Student/Teacher)
-router.post('/', [auth, yearContext, requireOpenYear], async (req, res) => {
+router.post('/', auth, async (req, res) => {
     try {
         const { category, title, description, priority, visibility } = req.body;
         const userRole = req.user.role;
@@ -105,7 +104,7 @@ router.get('/inbox', [auth, checkRole(['admin', 'super admin'])], async (req, re
 // @route   PUT /api/complaints/:id/status
 // @desc    Update complaint status
 // @access  Private (Admin/Super Admin)
-router.put('/:id/status', [auth, checkRole(['admin', 'super admin']), yearContext, requireOpenYear], async (req, res) => {
+router.put('/:id/status', [auth, checkRole(['admin', 'super admin'])], async (req, res) => {
     try {
         const { status, adminResponse } = req.body;
         const { role, userId } = req.user;

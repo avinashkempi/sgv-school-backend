@@ -4,7 +4,6 @@ const Class = require('../models/Class');
 const Subject = require('../models/Subject');
 const User = require('../models/User');
 const { authenticateToken: auth, checkRole } = require('../middleware/auth');
-const { yearContext, requireOpenYear } = require('../middleware/yearContext');
 
 // @route   GET /api/teachers/my-subjects
 // @desc    Get all subjects the teacher teaches (across all classes)
@@ -178,7 +177,7 @@ router.get('/subjects/:subjectId/classes', auth, async (req, res) => {
 // @route   POST /api/teachers/subjects/:subjectId/assign
 // @desc    Assign a teacher to a subject (Admin only)
 // @access  Admin/Super Admin
-router.post('/subjects/:subjectId/assign', [auth, checkRole(['admin', 'super admin']), yearContext, requireOpenYear], async (req, res) => {
+router.post('/subjects/:subjectId/assign', [auth, checkRole(['admin', 'super admin'])], async (req, res) => {
     const { teacherId } = req.body;
 
     try {
@@ -230,7 +229,7 @@ router.post('/subjects/:subjectId/assign', [auth, checkRole(['admin', 'super adm
 // @route   DELETE /api/teachers/subjects/:subjectId/teachers/:teacherId
 // @desc    Remove a teacher from a subject (Admin only)
 // @access  Admin/Super Admin
-router.delete('/subjects/:subjectId/teachers/:teacherId', [auth, checkRole(['admin', 'super admin']), yearContext, requireOpenYear], async (req, res) => {
+router.delete('/subjects/:subjectId/teachers/:teacherId', [auth, checkRole(['admin', 'super admin'])], async (req, res) => {
     try {
         const { subjectId, teacherId } = req.params;
 
@@ -263,7 +262,7 @@ router.delete('/subjects/:subjectId/teachers/:teacherId', [auth, checkRole(['adm
 // @route   PUT /api/teachers/subjects/:subjectId/teachers
 // @desc    Bulk update teachers for a subject (Admin only)
 // @access  Admin/Super Admin
-router.put('/subjects/:subjectId/teachers', [auth, checkRole(['admin', 'super admin']), yearContext, requireOpenYear], async (req, res) => {
+router.put('/subjects/:subjectId/teachers', [auth, checkRole(['admin', 'super admin'])], async (req, res) => {
     const { teacherIds } = req.body; // Array of teacher IDs
 
     try {
@@ -321,7 +320,7 @@ router.put('/subjects/:subjectId/teachers', [auth, checkRole(['admin', 'super ad
 // @route   GET /api/teachers/admin/teacher-subject-matrix
 // @desc    Get complete teacher-subject assignment matrix for admin
 // @access  Admin/Super Admin
-router.get('/admin/teacher-subject-matrix', [auth, checkRole(['admin', 'super admin']), yearContext, requireOpenYear], async (req, res) => {
+router.get('/admin/teacher-subject-matrix', [auth, checkRole(['admin', 'super admin'])], async (req, res) => {
     try {
         const teachers = await User.find({
             role: { $nin: ['student', 'super admin', 'support_staff'] }
@@ -370,7 +369,7 @@ router.get('/my-history', auth, async (req, res) => {
 // @route   GET /api/teachers/:id/history
 // @desc    Get a specific teacher's portfolio history (admin view)
 // @access  Admin/Super Admin
-router.get('/:id/history', [auth, checkRole(['admin', 'super admin']), yearContext, requireOpenYear], async (req, res) => {
+router.get('/:id/history', [auth, checkRole(['admin', 'super admin'])], async (req, res) => {
     try {
         const TeacherHistory = require('../models/TeacherHistory');
         const history = await TeacherHistory.find({ teacher: req.params.id })

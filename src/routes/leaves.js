@@ -6,13 +6,12 @@ const Class = require('../models/Class');
 const Attendance = require('../models/Attendance');
 const AcademicYear = require('../models/AcademicYear');
 const { authenticateToken, checkRole } = require('../middleware/auth');
-const { yearContext, requireOpenYear } = require('../middleware/yearContext');
 const notificationController = require('../controllers/notificationController');
 
 // @desc    Apply for leave
 // @route   POST /api/leaves/apply
 // @access  Private (All)
-router.post('/apply', [authenticateToken, yearContext, requireOpenYear], async (req, res) => {
+router.post('/apply', authenticateToken, async (req, res) => {
     try {
         const { startDate, endDate, reason, leaveType, halfDaySlot } = req.body;
 
@@ -174,7 +173,7 @@ router.get('/requests', authenticateToken, checkRole(['teacher', 'admin', 'super
 // @desc    Approve/Reject leave request
 // @route   PUT /api/leaves/:id/action
 // @access  Private (Teacher, Admin, Super Admin)
-router.put('/:id/action', [authenticateToken, checkRole(['teacher', 'admin', 'super admin']), yearContext, requireOpenYear], async (req, res) => {
+router.put('/:id/action', authenticateToken, checkRole(['teacher', 'admin', 'super admin']), async (req, res) => {
     try {
         const { status, reason, rejectionReason, rejectionComments } = req.body; // status: 'approved' or 'rejected'
 
