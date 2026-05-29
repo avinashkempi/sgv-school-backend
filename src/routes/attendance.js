@@ -10,6 +10,18 @@ const Subject = require('../models/Subject');
 const LeaveRequest = require('../models/LeaveRequest');
 const Event = require('../models/Event');
 
+const isAdminRole = (role) => role === 'admin' || role === 'super admin';
+const hasObjectIdMatch = (ids = [], userId) => ids.some((id) => id && id.toString() === userId);
+const canAccessStudentAttendance = (user, studentId) =>
+    isAdminRole(user.role) || user.role === 'teacher' || user.userId === studentId;
+const parsePagination = (queryPage, queryLimit) => {
+    const page = Number.parseInt(queryPage, 10);
+    const limit = Number.parseInt(queryLimit, 10);
+    const safePage = Number.isInteger(page) && page >= 1 ? page : 1;
+    const safeLimit = Number.isInteger(limit) && limit >= 1 && limit <= 100 ? limit : 30;
+    return { page: safePage, limit: safeLimit };
+};
+
 // @route   POST /api/attendance/mark
 // @desc    Mark attendance for students (bulk)
 // @access  Private (Teacher)
@@ -24,7 +36,7 @@ router.post('/mark', [auth, yearContext, requireOpenYear], async (req, res) => {
 
         // Check if teacher
         const classData = await Class.findById(classId);
-        if (req.user.role === 'admin' || req.user.role === 'super admin') {
+        if (isAdminRole(req.user.role)) {
             isAuthorized = true;
         } else if (classData && classData.classTeacher && classData.classTeacher.toString() === req.user.userId) {
             isAuthorized = true;
@@ -33,7 +45,7 @@ router.post('/mark', [auth, yearContext, requireOpenYear], async (req, res) => {
         // Check if subject teacher
         if (subjectId && !isAuthorized) {
             const subjectData = await Subject.findById(subjectId);
-            if (subjectData && subjectData.teachers && subjectData.teachers.includes(req.user.userId)) {
+            if (subjectData && subjectData.teachers && hasObjectIdMatch(subjectData.teachers, req.user.userId)) {
                 isAuthorized = true;
             }
         }
@@ -208,8 +220,7 @@ router.get('/class/:classId/date/:date', [auth, yearContext], async (req, res) =
 router.get('/my-attendance', [auth, yearContext], async (req, res) => {
     try {
         const { startDate, endDate } = req.query;
-        const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 30;
+        const { page, limit } = parsePagination(req.query.page, req.query.limit);
 
         const filter = {
             user: req.user.userId,
@@ -293,6 +304,9 @@ router.get('/student/:studentId/summary', [auth, yearContext], async (req, res) 
     try {
         const { studentId } = req.params;
         const academicYearId = req.academicYearContext;
+        if (!canAccessStudentAttendance(req.user, studentId)) {
+            return res.status(403).json({ message: 'Not authorized to view this student attendance summary' });
+        }
 
         // 1. Overall Stats
         const allAttendance = await Attendance.find({
@@ -381,8 +395,10 @@ router.get('/student/:studentId', [auth, yearContext], async (req, res) => {
     try {
         const { studentId } = req.params;
         const { startDate, endDate, subject } = req.query;
-        const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 30;
+        if (!canAccessStudentAttendance(req.user, studentId)) {
+            return res.status(403).json({ message: 'Not authorized to view this student attendance' });
+        }
+        const { page, limit } = parsePagination(req.query.page, req.query.limit);
         const academicYearId = req.academicYearContext;
 
         const filter = {

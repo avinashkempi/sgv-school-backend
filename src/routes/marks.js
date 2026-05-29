@@ -8,6 +8,8 @@ const GradeConfig = require('../models/GradeConfig');
 const User = require('../models/User');
 const notificationController = require('../controllers/notificationController');
 
+const hasObjectIdMatch = (ids = [], userId) => ids.some((id) => id && id.toString() === userId);
+
 // Helper function to calculate grade
 const calculateGrade = async (percentage, examId) => {
     try {
@@ -68,7 +70,7 @@ router.post('/bulk', auth, async (req, res) => {
 
         const userRole = req.user.role;
         const isAdmin = userRole === 'admin' || userRole === 'super admin';
-        const isSubjectTeacher = subject && subject.teachers.includes(req.user.userId);
+        const isSubjectTeacher = subject && hasObjectIdMatch(subject.teachers, req.user.userId);
         const isClassTeacher = exam.class && exam.class.classTeacher && exam.class.classTeacher.toString() === req.user.userId.toString();
 
         if (!isAdmin && !isSubjectTeacher && !isClassTeacher) {
@@ -176,7 +178,7 @@ router.post('/grid-update', auth, async (req, res) => {
 
         const userRole = req.user.role;
         const isAdmin = userRole === 'admin' || userRole === 'super admin';
-        const isSubjectTeacher = subject && subject.teachers.includes(req.user.userId);
+        const isSubjectTeacher = subject && hasObjectIdMatch(subject.teachers, req.user.userId);
         const isClassTeacher = exam.class && exam.class.classTeacher && exam.class.classTeacher.toString() === req.user.userId.toString();
 
         if (!isAdmin && !isSubjectTeacher && !isClassTeacher) {
@@ -263,7 +265,7 @@ router.post('/', auth, async (req, res) => {
 
         const userRole = req.user.role;
         const isAdmin = userRole === 'admin' || userRole === 'super admin';
-        const isSubjectTeacher = subject && subject.teachers.includes(req.user.userId);
+        const isSubjectTeacher = subject && hasObjectIdMatch(subject.teachers, req.user.userId);
         const isClassTeacher = exam.class && exam.class.classTeacher && exam.class.classTeacher.toString() === req.user.userId.toString();
 
         if (!isAdmin && !isSubjectTeacher && !isClassTeacher) {

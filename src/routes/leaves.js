@@ -249,10 +249,10 @@ router.put('/:id/action', authenticateToken, checkRole(['teacher', 'admin', 'sup
         const startDate = new Date(leaveRequest.startDate);
         const endDate = new Date(leaveRequest.endDate);
 
+        const activeYear = await AcademicYear.findOne({ isActive: true });
+
         // Auto-mark attendance as absent if approved
         if (status === 'approved' && previousStatus !== 'approved') {
-            // Get active academic year for attendance records
-            const activeYear = await AcademicYear.findOne({ isActive: true });
             if (!activeYear) {
                 console.error('No active academic year found for leave attendance marking');
             } else {

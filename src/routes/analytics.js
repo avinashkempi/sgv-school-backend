@@ -112,7 +112,7 @@ router.get('/student/:studentId/report-card', auth, async (req, res) => {
                     overallPercentage: parseFloat(overallPercentage),
                     overallGrade,
                     rank,
-                    totalStudents: classStudents.length
+                    totalStudents: classStudentIds.length
                 },
                 attendance: {
                     totalDays,

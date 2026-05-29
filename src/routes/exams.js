@@ -11,6 +11,8 @@ const Class = require('../models/Class');
 const AcademicYear = require('../models/AcademicYear');
 const { sendTargetedNotification } = require('../services/notificationService');
 
+const hasObjectIdMatch = (ids = [], userId) => ids.some((id) => id && id.toString() === userId);
+
 // @route   GET /api/exams/standardized
 // @desc    Get status of standardized exams for a class/subject
 // @access  Private (Teacher)
@@ -96,7 +98,7 @@ router.post('/standardized', auth, async (req, res) => {
 
         const userRole = req.user.role;
         const isAdmin = userRole === 'admin' || userRole === 'super admin';
-        const isSubjectTeacher = subject.teachers.includes(req.user.userId);
+        const isSubjectTeacher = hasObjectIdMatch(subject.teachers, req.user.userId);
         const isClassTeacher = subject.class && subject.class.classTeacher && subject.class.classTeacher.toString() === req.user.userId.toString();
 
         if (!isAdmin && !isSubjectTeacher && !isClassTeacher) {
@@ -175,7 +177,7 @@ router.post('/standardized/bulk', auth, async (req, res) => {
 
         const userRole = req.user.role;
         const isAdmin = userRole === 'admin' || userRole === 'super admin';
-        const isSubjectTeacher = subject.teachers.includes(req.user.userId);
+        const isSubjectTeacher = hasObjectIdMatch(subject.teachers, req.user.userId);
         const isClassTeacher = subject.class && subject.class.classTeacher && subject.class.classTeacher.toString() === req.user.userId.toString();
 
         if (!isAdmin && !isSubjectTeacher && !isClassTeacher) {
@@ -752,7 +754,7 @@ router.post('/quick-init', [auth, yearContext, requireOpenYear], async (req, res
         const academicYearId = req.academicYearContext;
         const subject = await Subject.findById(subjectId).populate('class');
         const isAdmin = req.user.role === 'admin' || req.user.role === 'super admin';
-        const isSubjectTeacher = subject.teachers.includes(req.user.userId);
+        const isSubjectTeacher = hasObjectIdMatch(subject.teachers, req.user.userId);
         const isClassTeacher = subject.class && subject.class.classTeacher && subject.class.classTeacher.toString() === req.user.userId.toString();
         if (!isAdmin && !isSubjectTeacher && !isClassTeacher) return res.status(403).json({ message: 'Not authorized' });
         const examTypes = (Array.isArray(requestedTypes) && requestedTypes.length > 0) ? requestedTypes : ['FA1', 'FA2', 'SA1', 'FA3', 'FA4', 'SA2'];

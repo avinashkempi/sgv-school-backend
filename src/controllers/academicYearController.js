@@ -2,6 +2,7 @@ const AcademicYear = require('../models/AcademicYear');
 const StudentHistory = require('../models/StudentHistory');
 const User = require('../models/User');
 const Class = require('../models/Class');
+const Subject = require('../models/Subject');
 const Attendance = require('../models/Attendance');
 const Exam = require('../models/Exam');
 const Marks = require('../models/Marks');
@@ -149,13 +150,25 @@ exports.executeTransition = async (req, res) => {
             return res.status(404).json({ msg: 'Academic years not found' });
         }
 
+        let rollbackToken = null;
+        if (createRollback) {
+            const rollbackData = await captureRollbackData(currentYearId, nextYearId);
+            rollbackToken = crypto.randomBytes(20).toString('hex');
+            rollbackStore.set(rollbackToken, {
+                data: rollbackData,
+                expiresAt: Date.now() + 24 * 60 * 60 * 1000 // 24 hours
+            });
+            console.log(`[TRANSITION] Rollback token generated: ${rollbackToken}`);
+        }
+
         // --- ASYNC NON-BLOCKING RESPONSE START ---
         // Instead of keeping the connection open for 60 seconds copying DB collections,
         // we'll respond immediately and do the heavy lifting in the background.
         res.json({
             success: true,
             message: `Transition process started in the background. Generating ${nextYear.name}...`,
-            status: 'processing'
+            status: 'processing',
+            rollbackToken: rollbackToken
         });
 
         // The following code runs asynchronously
@@ -235,13 +248,57 @@ exports.executeTransition = async (req, res) => {
                     academicYear: currentYearId
                 }).populate('currentClass');
 
-                const historyRecords = students.map(student => ({
-                    student: student._id,
-                    class: student.currentClass ? student.currentClass._id : null,
-                    academicYear: currentYear._id,
-                    result: student.promotionStatus === 'detained' ? 'Detained' : 'Promoted',
-                    finalGrade: ''
-                })).filter(record => record.class !== null);
+                // Calculate student attendance percentages for the outgoing year
+                const attendanceStats = await Attendance.aggregate([
+                    {
+                        $match: {
+                            academicYear: currentYear._id,
+                            role: 'student'
+                        }
+                    },
+                    {
+                        $group: {
+                            _id: '$user',
+                            totalDays: { $sum: 1 },
+                            presentDays: {
+                                $sum: {
+                                    $cond: [
+                                        { $in: ['$status', ['present', 'late', 'excused']] },
+                                        1,
+                                        0
+                                    ]
+                                }
+                            }
+                        }
+                    }
+                ]);
+                const attendanceMap = {};
+                attendanceStats.forEach(stat => {
+                    const pct = stat.totalDays > 0 ? parseFloat(((stat.presentDays / stat.totalDays) * 100).toFixed(1)) : 100;
+                    attendanceMap[stat._id.toString()] = pct;
+                });
+
+                const historyRecords = students.map(student => {
+                    const studentPlan = promotionPlan.find(p => p.studentId === student._id.toString());
+                    let result = 'Promoted';
+                    if (student.promotionStatus === 'detained') {
+                        result = 'Detained';
+                    } else if (studentPlan && studentPlan.status === 'graduated') {
+                        result = 'Graduated';
+                    }
+                    const attendancePct = attendanceMap[student._id.toString()] !== undefined
+                        ? attendanceMap[student._id.toString()]
+                        : 100;
+
+                    return {
+                        student: student._id,
+                        class: student.currentClass ? student.currentClass._id : null,
+                        academicYear: currentYear._id,
+                        result,
+                        finalGrade: '',
+                        totalAttendancePercentage: attendancePct
+                    };
+                }).filter(record => record.class !== null);
 
                 if (historyRecords.length > 0) {
                     await StudentHistory.insertMany(historyRecords);
@@ -258,9 +315,9 @@ exports.executeTransition = async (req, res) => {
                     if (!student) continue;
 
                     if (student.promotionStatus === 'detained') {
-                        // They remain in the same class level conceptually
-                        // We map them to the NEW academic year's clone of their existing class
-                        const targetClassId = classIdMap[student.currentClass.toString()];
+                        // Safe mapping utilizing original class ID from populated object
+                        const originalClassId = student.currentClass ? student.currentClass._id.toString() : null;
+                        const targetClassId = originalClassId ? classIdMap[originalClassId] : null;
                         student.currentClass = targetClassId || null;
                         student.promotionStatus = 'promoted'; // Reset flag for new year
                         detainedCount++;
@@ -283,32 +340,49 @@ exports.executeTransition = async (req, res) => {
                 // 4b. TEACHER HISTORY ARCHIVE
                 try {
                     const TeacherHistory = require('../models/TeacherHistory');
-                    const Subject = require('../models/Subject');
 
-                    // Find all teacher-subject assignments for the outgoing year
+                    // Find all teacher-subject assignments and classes for the outgoing year
                     const subjects = await Subject.find({ academicYear: currentYear._id }).lean();
+                    const classes = await Class.find({ academicYear: currentYear._id }).lean();
 
                     // Build a map: teacherId -> [{ class, subject, role }]
                     const teacherMap = new Map();
+
+                    // 1. Archive Subject Teachers
                     for (const subj of subjects) {
-                        if (subj.teacher) {
-                            const tid = subj.teacher.toString();
+                        if (subj.teachers && Array.isArray(subj.teachers)) {
+                            for (const teacherId of subj.teachers) {
+                                const tid = teacherId.toString();
+                                if (!teacherMap.has(tid)) teacherMap.set(tid, []);
+                                teacherMap.get(tid).push({
+                                    class: subj.class,
+                                    subject: subj._id,
+                                    role: 'subject_teacher'
+                                });
+                            }
+                        }
+                    }
+
+                    // 2. Archive Class Teachers
+                    for (const cls of classes) {
+                        if (cls.classTeacher) {
+                            const tid = cls.classTeacher.toString();
                             if (!teacherMap.has(tid)) teacherMap.set(tid, []);
                             teacherMap.get(tid).push({
-                                class: subj.class,
-                                subject: subj._id,
-                                role: 'subject_teacher'
+                                class: cls._id,
+                                subject: null,
+                                role: 'class_teacher'
                             });
                         }
                     }
 
                     // Bulk create TeacherHistory records
                     const historyOps = [];
-                    for (const [teacherId, classes] of teacherMap) {
+                    for (const [teacherId, classesList] of teacherMap) {
                         historyOps.push({
                             updateOne: {
                                 filter: { teacher: teacherId, academicYear: currentYear._id },
-                                update: { $set: { teacher: teacherId, academicYear: currentYear._id, classes } },
+                                update: { $set: { teacher: teacherId, academicYear: currentYear._id, classes: classesList } },
                                 upsert: true
                             }
                         });
@@ -622,7 +696,7 @@ exports.getReports = async (req, res) => {
 };
 
 // Helper functions
-async function captureRollbackData(currentYearId) {
+async function captureRollbackData(currentYearId, nextYearId) {
     const students = await User.find({
         role: 'student',
         academicYear: currentYearId
@@ -633,6 +707,7 @@ async function captureRollbackData(currentYearId) {
     return {
         students,
         currentYear,
+        nextYearId,
         timestamp: new Date()
     };
 }
@@ -643,15 +718,41 @@ async function performRollback(rollbackData) {
         await User.findByIdAndUpdate(student._id, {
             academicYear: student.academicYear,
             currentClass: student.currentClass,
-            isActive: student.isActive
+            isActive: student.isActive,
+            role: student.role
         });
     }
 
     // Restore current year status
     await AcademicYear.findByIdAndUpdate(rollbackData.currentYear._id, {
         isActive: true,
-        status: 'current'
+        status: 'current',
+        promotedTo: null
     });
+
+    // Restore next year status and clean up cloned entities
+    if (rollbackData.nextYearId) {
+        await AcademicYear.findByIdAndUpdate(rollbackData.nextYearId, {
+            isActive: false,
+            status: 'draft',
+            promotedFrom: null,
+            transitionDate: null,
+            transitionBy: null
+        });
+
+        // Delete cloned classes and subjects for the next academic year
+        await Class.deleteMany({ academicYear: rollbackData.nextYearId });
+        await Subject.deleteMany({ academicYear: rollbackData.nextYearId });
+
+        // Delete history records created during transition
+        await StudentHistory.deleteMany({ academicYear: rollbackData.currentYear._id });
+        try {
+            const TeacherHistory = require('../models/TeacherHistory');
+            await TeacherHistory.deleteMany({ academicYear: rollbackData.currentYear._id });
+        } catch (thErr) {
+            console.error('[ROLLBACK] Teacher History delete error:', thErr.message);
+        }
+    }
 
     console.log('Rollback completed successfully');
 }
