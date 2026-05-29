@@ -282,6 +282,9 @@ async function sendTargetedNotification(target, targetId, notificationData, send
         } else if (target === 'staff') {
             const staff = await User.find({ role: { $in: ['staff', 'support_staff'] } }).select('_id');
             userIds = staff.map(s => s._id);
+        } else if (target === 'support_staff') {
+            const supportStaff = await User.find({ role: 'support_staff' }).select('_id');
+            userIds = supportStaff.map(s => s._id);
         } else if (target === 'all') {
             // No user filtering, send to all tokens
             userIds = null;

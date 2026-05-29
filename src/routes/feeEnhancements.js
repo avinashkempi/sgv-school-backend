@@ -5,6 +5,7 @@ const FeePayment = require('../models/FeePayment');
 const FeeStructure = require('../models/FeeStructure');
 const User = require('../models/User');
 const { triggerNotification } = require('../controllers/notificationController');
+const { isAdminRole, requireFeeReceiptAccess } = require('../middleware/accessControl');
 
 // @route   GET /api/fee-enhancements/export-arrears/:academicYearId
 // @desc    Export CSV of students with pending fees from a specific academic year
@@ -332,6 +333,9 @@ router.post('/send-reminders', [auth, checkRole(['admin', 'super admin'])], asyn
 router.get('/installments/:studentId', auth, async (req, res) => {
     try {
         const { studentId } = req.params;
+        if (!isAdminRole(req.user.role) && !(req.user.role === 'student' && req.user.userId === studentId)) {
+            return res.status(403).json({ success: false, message: 'Not authorized' });
+        }
 
         const student = await User.findById(studentId).lean();
         if (!student) {
@@ -410,18 +414,9 @@ router.get('/installments/:studentId', auth, async (req, res) => {
 // @route   GET /api/fee-enhancements/receipt/:paymentId
 // @desc    Get receipt data for PDF generation
 // @access  Private
-router.get('/receipt/:paymentId', auth, async (req, res) => {
+router.get('/receipt/:paymentId', [auth, requireFeeReceiptAccess], async (req, res) => {
     try {
-        const payment = await FeePayment.findById(req.params.paymentId)
-            .populate('student', 'name email phone')
-            .populate('class', 'name section')
-            .populate('academicYear', 'name startDate endDate')
-            .populate('collectedBy', 'name')
-            .lean();
-
-        if (!payment) {
-            return res.status(404).json({ success: false, message: 'Payment not found' });
-        }
+        const payment = req.payment;
 
         res.json({
             success: true,

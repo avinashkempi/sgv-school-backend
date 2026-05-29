@@ -1,14 +1,43 @@
 const { validationResult } = require('express-validator');
 const User = require('../models/User');
 
+const MAX_PAGE_LIMIT = 100;
+const ALLOWED_SORT_FIELDS = new Set(['createdAt', 'name', 'role', 'phone', 'email']);
+
+const parsePagination = (query) => {
+  const page = Math.max(parseInt(query.page, 10) || 1, 1);
+  const requestedLimit = parseInt(query.limit, 10) || 20;
+  const limit = Math.min(Math.max(requestedLimit, 1), MAX_PAGE_LIMIT);
+  return { page, limit, skip: (page - 1) * limit };
+};
+
+const escapeRegex = (value) => value.toString().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const ensureCanAssignRole = async (requestUser, targetRole, existingUser = null) => {
+  if (targetRole === 'super admin' && requestUser.role !== 'super admin') {
+    return 'Only super admins can create or promote super admins';
+  }
+
+  if (existingUser?.role === 'super admin' && requestUser.role !== 'super admin') {
+    return 'Only super admins can modify super admin accounts';
+  }
+
+  if (existingUser?.role === 'super admin' && targetRole && targetRole !== 'super admin') {
+    const superAdminCount = await User.countDocuments({ role: 'super admin' });
+    if (superAdminCount <= 1) {
+      return 'Cannot demote the last super admin';
+    }
+  }
+
+  return null;
+};
+
 // Get all users (admin only)
 // Get all users (admin only)
 // Get all users (admin only)
 const getAllUsers = async (req, res) => {
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20;
-    const skip = (page - 1) * limit;
+    const { page, limit, skip } = parsePagination(req.query);
 
     const { role, search, sortBy, order } = req.query;
 
@@ -37,7 +66,7 @@ const getAllUsers = async (req, res) => {
 
     // Search filter (name, email, phone)
     if (search) {
-      const searchRegex = { $regex: search, $options: 'i' };
+      const searchRegex = { $regex: escapeRegex(search), $options: 'i' };
       const searchOr = [
         { name: searchRegex },
         { email: searchRegex },
@@ -59,6 +88,9 @@ const getAllUsers = async (req, res) => {
     // Build sort object
     let sort = { createdAt: -1 }; // Default sort
     if (sortBy) {
+      if (!ALLOWED_SORT_FIELDS.has(sortBy)) {
+        return res.status(400).json({ success: false, message: 'Invalid sort field' });
+      }
       const sortOrder = order === 'asc' ? 1 : -1;
       sort = { [sortBy]: sortOrder };
     }
@@ -151,6 +183,11 @@ const createUser = async (req, res) => {
       joiningDate, designation, subjects
     } = req.body;
 
+    const roleError = await ensureCanAssignRole(req.user, role);
+    if (roleError) {
+      return res.status(403).json({ success: false, message: roleError });
+    }
+
     // Check if user already exists by phone
     const existingUserByPhone = await User.findOne({ phone });
     if (existingUserByPhone) {
@@ -237,6 +274,11 @@ const updateUser = async (req, res) => {
         success: false,
         message: 'User not found'
       });
+    }
+
+    const roleError = await ensureCanAssignRole(req.user, role, user);
+    if (roleError) {
+      return res.status(403).json({ success: false, message: roleError });
     }
 
     // Check if updating email conflicts with existing users (only if email provided)
@@ -345,8 +387,8 @@ const searchUsers = async (req, res) => {
     const filter = {};
 
     const searchOr = [
-      { name: { $regex: query, $options: 'i' } }, // Case-insensitive name search
-      { phone: { $regex: query, $options: 'i' } } // Phone search
+      { name: { $regex: escapeRegex(query), $options: 'i' } }, // Case-insensitive name search
+      { phone: { $regex: escapeRegex(query), $options: 'i' } } // Phone search
     ];
 
     // Add role filter if provided
@@ -385,9 +427,7 @@ const searchUsers = async (req, res) => {
       filter.currentClass = req.query.classId;
     }
 
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20;
-    const skip = (page - 1) * limit;
+    const { page, limit, skip } = parsePagination(req.query);
 
     const users = await User.find(filter, '-password')
       .populate('currentClass', 'name section')

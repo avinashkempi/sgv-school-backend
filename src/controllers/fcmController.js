@@ -59,7 +59,6 @@ const registerFCMToken = async (req, res) => {
                 message: 'Authenticated user is required',
             });
         }
-
         if (!token || !platform) {
             return res.status(400).json({
                 success: false,

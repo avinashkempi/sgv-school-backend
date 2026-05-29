@@ -6,6 +6,7 @@ const User = require('../models/User');
 const AcademicYear = require('../models/AcademicYear');
 const StudentHistory = require('../models/StudentHistory');
 const { authenticateToken: auth, checkRole } = require('../middleware/auth');
+const { requireStudentAccessParam, requireClassAccessParam } = require('../middleware/accessControl');
 
 // Helper to get grade
 const getGrade = (percentage) => {
@@ -78,7 +79,7 @@ const computeStudentOverall = (exams, marks) => {
 // @route   GET /api/reports/student/:studentId
 // @desc    Get standardized report card (FA1...SA2 structure) with class rank
 // @access  Private (Students can only view their own)
-router.get('/student/:studentId', auth, async (req, res) => {
+router.get('/student/:studentId', [auth, requireStudentAccessParam('studentId')], async (req, res) => {
     try {
         const { academicYearId } = req.query;
         const studentId = req.params.studentId;
@@ -281,7 +282,7 @@ router.get('/student/:studentId', auth, async (req, res) => {
 // @route   GET /api/reports/insights/:studentId
 // @desc    Get performance trends
 // @access  Private (Students can only view their own)
-router.get('/insights/:studentId', auth, async (req, res) => {
+router.get('/insights/:studentId', [auth, requireStudentAccessParam('studentId')], async (req, res) => {
     try {
         const { academicYearId } = req.query;
         const studentId = req.params.studentId;
@@ -361,7 +362,7 @@ router.get('/insights/:studentId', auth, async (req, res) => {
 // @route   GET /api/reports/class-ranking/:classId
 // @desc    Get class ranking — all students ranked by overall percentage
 // @access  Private (Admin/Teacher only — students cannot see other students' data)
-router.get('/class-ranking/:classId', auth, async (req, res) => {
+router.get('/class-ranking/:classId', [auth, requireClassAccessParam('classId')], async (req, res) => {
     try {
         // Only admin, super admin, and teachers can view full class rankings
         if (req.user.role === 'student') {

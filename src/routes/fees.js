@@ -5,30 +5,27 @@ const { authenticateToken: auth, checkRole } = require('../middleware/auth');
 const { yearContext, requireOpenYear } = require('../middleware/yearContext');
 const FeeStructure = require('../models/FeeStructure');
 const FeePayment = require('../models/FeePayment');
+const Counter = require('../models/Counter');
 const StudentFee = require('../models/StudentFee');
 const User = require('../models/User');
 const Class = require('../models/Class');
 const { sendTargetedNotification } = require('../services/notificationService');
+const { isAdminRole } = require('../middleware/accessControl');
 
-// Helper to generate receipt number
+// Helper to generate receipt number atomically.
 const generateReceiptNumber = async () => {
     const date = new Date();
     const year = date.getFullYear().toString().substr(-2);
     const month = (date.getMonth() + 1).toString().padStart(2, '0');
     const prefix = `RCP${year}${month}`;
 
-    // Find last receipt of this month
-    const lastPayment = await FeePayment.findOne({
-        receiptNumber: new RegExp(`^${prefix}`)
-    }).sort({ receiptNumber: -1 });
+    const counter = await Counter.findOneAndUpdate(
+        { key: `receipt:${prefix}` },
+        { $inc: { seq: 1 }, $set: { updatedAt: new Date() } },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
 
-    let sequence = '0001';
-    if (lastPayment) {
-        const lastSeq = parseInt(lastPayment.receiptNumber.slice(-4));
-        sequence = (lastSeq + 1).toString().padStart(4, '0');
-    }
-
-    return `${prefix}${sequence}`;
+    return `${prefix}${counter.seq.toString().padStart(4, '0')}`;
 };
 
 // @route   POST /api/fees/structure
@@ -306,8 +303,8 @@ router.get('/summary', [auth, checkRole(['admin', 'super admin']), yearContext],
 // @access  Private (Admin, or Student for own data)
 router.get('/student/:studentId', [auth, yearContext], async (req, res) => {
     try {
-        // Authorization check
-        if (req.user.role === 'student' && req.user.userId !== req.params.studentId) {
+        // Fee records are sensitive: only admins/super admins or the owning student may read them.
+        if (!isAdminRole(req.user.role) && !(req.user.role === 'student' && req.user.userId === req.params.studentId)) {
             return res.status(403).json({ message: 'Not authorized' });
         }
 

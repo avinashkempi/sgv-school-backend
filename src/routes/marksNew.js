@@ -8,6 +8,7 @@ const Marks = require('../models/Marks');
 const Exam = require('../models/Exam');
 const User = require('../models/User');
 const Subject = require('../models/Subject');
+const { hasObjectIdMatch } = require('../middleware/accessControl');
 
 // @route   POST /api/marks/grid-update
 // @desc    Accept grid/spreadsheet-like data structure for rapid entry
@@ -26,7 +27,7 @@ router.post('/grid-update', [auth, yearContext, requireOpenYear], async (req, re
         const userRole = req.user.role;
         const isAdmin = userRole === 'admin' || userRole === 'super admin';
         
-        const isSubjectTeacher = exam.subject && exam.subject.teachers.includes(req.user.userId);
+        const isSubjectTeacher = exam.subject && hasObjectIdMatch(exam.subject.teachers, req.user.userId);
         const isClassTeacher = exam.class && exam.class.classTeacher && exam.class.classTeacher.toString() === req.user.userId.toString();
 
         if (!isAdmin && !isSubjectTeacher && !isClassTeacher) {
@@ -289,7 +290,7 @@ router.put('/bulk-grade', [auth, yearContext, requireOpenYear], async (req, res)
                 const subject = mark.exam.subject;
                 const examClass = mark.exam.class;
                 
-                const isSubjectTeacher = subject && subject.teachers.includes(req.user.userId);
+                const isSubjectTeacher = subject && hasObjectIdMatch(subject.teachers, req.user.userId);
                 const isClassTeacher = examClass && examClass.classTeacher && examClass.classTeacher.toString() === req.user.userId.toString();
 
                 if (!isSubjectTeacher && !isClassTeacher) {

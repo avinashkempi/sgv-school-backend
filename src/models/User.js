@@ -29,6 +29,10 @@ const userSchema = new mongoose.Schema({
     required: [true, 'Password is required'],
     minlength: [6, 'Password must be at least 6 characters long']
   },
+  mustChangePassword: {
+    type: Boolean,
+    default: false
+  },
   // Role field for access control
   role: {
     type: String,

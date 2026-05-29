@@ -9,19 +9,22 @@ const Class = require('../models/Class');
  * @param {Object} options
  * @param {boolean} options.confirmed - Must be explicitly true to proceed
  */
-const wipeNonAdminData = async ({ confirmed } = {}) => {
+const wipeNonAdminData = async ({ confirmed, academicYearId, global = false } = {}) => {
     // Safety guard: require explicit confirmation
     if (!confirmed) {
         throw new Error('Data wipe requires explicit confirmation. Pass { confirmed: true } to proceed.');
     }
 
+    if (!global && !academicYearId) {
+        throw new Error('Academic year scoped wipe requires academicYearId.');
+    }
+
     try {
         console.log('⚠️ Starting data wipe...');
 
-        // 1. Find only students (preserve teachers, support staff, alumni, etc.)
-        const usersToDelete = await User.find({
-            role: 'student'
-        }).select('_id');
+        // 1. Find only students in the selected academic year (preserve teachers, support staff, alumni, etc.)
+        const studentFilter = global ? { role: 'student' } : { role: 'student', academicYear: academicYearId };
+        const usersToDelete = await User.find(studentFilter).select('_id');
 
         const userIds = usersToDelete.map(u => u._id);
         console.log(`Found ${userIds.length} students to delete.`);

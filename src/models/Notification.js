@@ -38,7 +38,7 @@ const notificationSchema = new mongoose.Schema({
   },
   targetRole: {
     type: String,
-    enum: ['all', 'student', 'teacher', 'staff', 'admin', 'super admin'],
+    enum: ['all', 'student', 'teacher', 'staff', 'support_staff', 'admin', 'super admin'],
     default: 'all'
   },
   sendToPublic: {

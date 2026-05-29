@@ -2,6 +2,8 @@ const express = require('express');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
 const { yearContext } = require('../middleware/yearContext');
 const { userCreateValidation, userUpdateValidation } = require('../validations/user');
+const User = require('../models/User');
+const { isAdminRole, canAccessStudent } = require('../middleware/accessControl');
 const {
   getAllUsers,
   getUserById,
@@ -51,16 +53,26 @@ router.get('/', yearContext, (req, res, next) => {
 }, getAllUsers);
 
 // Get user by ID
-router.get('/:id', (req, res, next) => {
-  // Allow access to own profile
-  if (req.user.userId === req.params.id) {
-    return next();
+router.get('/:id', async (req, res, next) => {
+  try {
+    // Allow access to own profile
+    if (req.user.userId === req.params.id) {
+      return next();
+    }
+    if (isAdminRole(req.user.role)) {
+      return next();
+    }
+    if (req.user.role === 'teacher') {
+      const target = await User.findById(req.params.id).select('role').lean();
+      if (target?.role === 'student' && await canAccessStudent(req.user, req.params.id)) {
+        return next();
+      }
+    }
+    return res.status(403).json({ success: false, message: 'Forbidden: Cannot access other user profiles' });
+  } catch (error) {
+    console.error('User profile access check failed:', error);
+    return res.status(500).json({ success: false, message: 'Authorization check failed' });
   }
-  // Allow admins and teachers to view other profiles
-  if (['admin', 'super admin', 'teacher'].includes(req.user.role)) {
-    return next();
-  }
-  return res.status(403).json({ success: false, message: 'Forbidden: Cannot access other user profiles' });
 }, getUserById);
 
 // Create new user (admin only)
