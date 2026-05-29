@@ -179,6 +179,15 @@ exports.executeTransition = async (req, res) => {
             try {
                 console.log(`[TRANSITION] Starting transition to ${nextYear.name}`);
 
+                // 0. EXAMS & MARKS CLEANUP FOR THE TARGET YEAR
+                const nextYearExams = await Exam.find({ academicYear: nextYearId }).select('_id');
+                const nextYearExamIds = nextYearExams.map(e => e._id);
+                if (nextYearExamIds.length > 0) {
+                    const deletedMarks = await Marks.deleteMany({ exam: { $in: nextYearExamIds } });
+                    const deletedExams = await Exam.deleteMany({ _id: { $in: nextYearExamIds } });
+                    console.log(`[TRANSITION] Cleared ${(deletedExams && deletedExams.deletedCount) || 0} existing exams and ${(deletedMarks && deletedMarks.deletedCount) || 0} marks from target year ${nextYear.name}.`);
+                }
+
                 // 1. CLASS DEPENDENCY RESOLUTION & CLONING
                 const oldClasses = await Class.find({ academicYear: currentYearId }).lean();
                 const newClassesExist = await Class.find({ academicYear: nextYearId }).lean();
@@ -555,6 +564,15 @@ exports.incrementYear = async (req, res) => {
             return res.json({ msg: `Academic year activated: ${nextYear.name}` });
         }
 
+        // Clear any pre-existing exams in the next year
+        const nextYearExams = await Exam.find({ academicYear: nextYear._id }).select('_id');
+        const nextYearExamIds = nextYearExams.map(e => e._id);
+        if (nextYearExamIds.length > 0) {
+            await Marks.deleteMany({ exam: { $in: nextYearExamIds } });
+            await Exam.deleteMany({ _id: { $in: nextYearExamIds } });
+            console.log(`[LEGACY TRANSITION] Cleared ${nextYearExamIds.length} existing exams and their marks from target year ${nextYear.name}.`);
+        }
+
         const students = await User.find({ role: 'student', academicYear: currentYear._id })
             .populate('currentClass');
 
@@ -746,6 +764,15 @@ async function performRollback(rollbackData) {
         // Delete cloned classes and subjects for the next academic year
         await Class.deleteMany({ academicYear: rollbackData.nextYearId });
         await Subject.deleteMany({ academicYear: rollbackData.nextYearId });
+
+        // Delete exams and marks created in the next academic year during the transition
+        const nextYearExams = await Exam.find({ academicYear: rollbackData.nextYearId }).select('_id');
+        const nextYearExamIds = nextYearExams.map(e => e._id);
+        if (nextYearExamIds.length > 0) {
+            await Marks.deleteMany({ exam: { $in: nextYearExamIds } });
+            await Exam.deleteMany({ _id: { $in: nextYearExamIds } });
+            console.log(`[ROLLBACK] Cleared ${nextYearExamIds.length} exams and their marks from the next academic year.`);
+        }
 
         // Delete history records created during transition
         await StudentHistory.deleteMany({ academicYear: rollbackData.currentYear._id });

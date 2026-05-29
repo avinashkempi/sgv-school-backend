@@ -45,7 +45,7 @@ const getYearImpactAnalysis = async (currentYearId, nextYearId) => {
         const dataArchival = await countArchivalData(currentYearId);
 
         // Generate warnings
-        const warnings = generateWarnings(classCapacity, promotionAnalysis);
+        const warnings = await generateWarnings(classCapacity, promotionAnalysis, currentYearId);
 
         return {
             impact: {
@@ -246,7 +246,7 @@ async function countAffectedTeachers(yearId) {
 /**
  * Generate warnings
  */
-function generateWarnings(classCapacity, promotionAnalysis) {
+async function generateWarnings(classCapacity, promotionAnalysis, currentYearId) {
     const warnings = [];
 
     // Class capacity warnings
@@ -265,6 +265,21 @@ function generateWarnings(classCapacity, promotionAnalysis) {
             severity: 'medium',
             message: `${promotionAnalysis.manualReviewCount} students require manual review`
         });
+    }
+
+    // Unfinished exams warning
+    if (currentYearId) {
+        const activeExamsCount = await Exam.countDocuments({
+            academicYear: currentYearId,
+            status: { $in: ['draft', 'scheduled', 'ongoing'] }
+        });
+        if (activeExamsCount > 0) {
+            warnings.push({
+                type: 'active_exams',
+                severity: 'medium',
+                message: `${activeExamsCount} exams are still active (draft, scheduled, or ongoing). Please complete or cancel them before transitioning.`
+            });
+        }
     }
 
     return warnings;
@@ -435,6 +450,20 @@ const generateValidationReport = async (currentYearId) => {
                 type: 'missing_final_marks',
                 severity: 'high',
                 message: `${examsMissingMarks} 'SA2' (Final) exams have absolutely zero marks entered. Proceeding may result in blank report cards.`
+            });
+        }
+
+        // 4. Unfinished Exams Check
+        const activeExamsCount = await Exam.countDocuments({
+            academicYear: currentYearId,
+            status: { $in: ['draft', 'scheduled', 'ongoing'] }
+        });
+
+        if (activeExamsCount > 0) {
+            warnings.push({
+                type: 'active_exams',
+                severity: 'medium',
+                message: `${activeExamsCount} exams are still active (draft, scheduled, or ongoing). Please complete or cancel them before transitioning.`
             });
         }
 
