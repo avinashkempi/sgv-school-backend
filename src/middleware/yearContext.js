@@ -6,12 +6,22 @@ const AcademicYear = require('../models/AcademicYear');
  */
 const yearContext = async (req, res, next) => {
     try {
+        // Fetch active year to attach to all responses for synchronization
+        const activeYear = await AcademicYear.findOne({ isActive: true });
+        if (activeYear) {
+            res.setHeader('X-Active-Academic-Year', JSON.stringify({
+                _id: activeYear._id.toString(),
+                name: activeYear.name,
+                isActive: true,
+                status: activeYear.status
+            }));
+        }
+
         const requestedYearId = req.headers['x-academic-year'];
         const isSuperAdmin = req.user && req.user.role === 'super admin';
 
         if (!requestedYearId || !isSuperAdmin) {
             // Default to the current active year if no travel requested or user is not Super Admin
-            const activeYear = await AcademicYear.findOne({ isActive: true });
             if (!activeYear) {
                 return res.status(500).json({ success: false, message: 'No active academic year found in system.' });
             }
