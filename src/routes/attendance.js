@@ -12,8 +12,27 @@ const Event = require('../models/Event');
 
 const isAdminRole = (role) => role === 'admin' || role === 'super admin';
 const hasObjectIdMatch = (ids = [], userId) => ids.some((id) => id && id.toString() === userId);
-const canAccessStudentAttendance = (user, studentId) =>
-    isAdminRole(user.role) || user.role === 'teacher' || user.userId === studentId;
+
+// Teachers must belong to the student's class (as classTeacher or subject teacher) to view attendance
+const canAccessStudentAttendance = async (user, studentId) => {
+    if (isAdminRole(user.role)) return true;
+    if (user.role === 'student') return user.userId === studentId;
+    if (user.role !== 'teacher') return false;
+
+    // Load student's class
+    const student = await User.findById(studentId).select('currentClass role').lean();
+    if (!student || student.role !== 'student' || !student.currentClass) return false;
+
+    const classId = student.currentClass.toString();
+
+    // Check if teacher is the class teacher
+    const classDoc = await Class.findById(classId).select('classTeacher').lean();
+    if (classDoc && classDoc.classTeacher && classDoc.classTeacher.toString() === user.userId) return true;
+
+    // Check if teacher teaches a subject in that class
+    const subject = await Subject.findOne({ class: classId, teachers: user.userId }).select('_id').lean();
+    return Boolean(subject);
+};
 const parsePagination = (queryPage, queryLimit) => {
     const page = Number.parseInt(queryPage, 10);
     const limit = Number.parseInt(queryLimit, 10);
@@ -240,8 +259,10 @@ router.get('/my-attendance', [auth, yearContext], async (req, res) => {
             .lean();
 
         // Calculate summary over all records
+        // Count late, excused, half-day as present to match the monthly breakdown calculation
         const totalRecords = allAttendance.length;
-        const presentCount = allAttendance.filter(a => a.status === 'present').length;
+        const PRESENT_STATUSES = ['present', 'late', 'excused', 'half-day'];
+        const presentCount = allAttendance.filter(a => PRESENT_STATUSES.includes(a.status)).length;
         const percentage = totalRecords > 0 ? ((presentCount / totalRecords) * 100).toFixed(2) : 0;
 
         // Calculate Monthly Breakdown
@@ -304,7 +325,7 @@ router.get('/student/:studentId/summary', [auth, yearContext], async (req, res) 
     try {
         const { studentId } = req.params;
         const academicYearId = req.academicYearContext;
-        if (!canAccessStudentAttendance(req.user, studentId)) {
+        if (!(await canAccessStudentAttendance(req.user, studentId))) {
             return res.status(403).json({ message: 'Not authorized to view this student attendance summary' });
         }
 
@@ -395,7 +416,7 @@ router.get('/student/:studentId', [auth, yearContext], async (req, res) => {
     try {
         const { studentId } = req.params;
         const { startDate, endDate, subject } = req.query;
-        if (!canAccessStudentAttendance(req.user, studentId)) {
+        if (!(await canAccessStudentAttendance(req.user, studentId))) {
             return res.status(403).json({ message: 'Not authorized to view this student attendance' });
         }
         const { page, limit } = parsePagination(req.query.page, req.query.limit);
@@ -423,7 +444,8 @@ router.get('/student/:studentId', [auth, yearContext], async (req, res) => {
             .lean();
 
         const totalRecords = allAttendance.length;
-        const presentCount = allAttendance.filter(a => a.status === 'present').length;
+        const PRESENT_STATUSES = ['present', 'late', 'excused', 'half-day'];
+        const presentCount = allAttendance.filter(a => PRESENT_STATUSES.includes(a.status)).length;
         const percentage = totalRecords > 0 ? ((presentCount / totalRecords) * 100).toFixed(2) : 0;
 
         // Paginate
@@ -468,13 +490,13 @@ router.get('/staff-list', [auth, yearContext], async (req, res) => {
         const targetDate = date ? new Date(date).setHours(0, 0, 0, 0) : new Date().setHours(0, 0, 0, 0);
         const academicYearId = req.academicYearContext;
 
-        // Get all teachers
-        const teachers = await User.find({ role: 'teacher' }).select('name email phone');
+        // Get all staff (teachers, staff, support_staff) — consistent with mark-staff endpoint
+        const teachers = await User.find({ role: { $in: ['teacher', 'staff', 'support_staff'] } }).select('name email phone role');
 
         // Get attendance for this date
         const attendance = await Attendance.find({
             date: targetDate,
-            role: 'teacher',
+            role: { $in: ['teacher', 'staff', 'support_staff'] },
             academicYear: academicYearId
         });
 

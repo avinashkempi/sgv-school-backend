@@ -136,6 +136,13 @@ const academicYearSchema = new mongoose.Schema({
             type: Boolean,
             default: true
         }
+    },
+
+    // Rollback data — persisted in DB so it survives server restarts (replaces in-memory Map)
+    rollbackData: {
+        token: String,
+        expiresAt: Date,
+        snapshot: mongoose.Schema.Types.Mixed  // Stores student/class snapshots for rollback
     }
 });
 

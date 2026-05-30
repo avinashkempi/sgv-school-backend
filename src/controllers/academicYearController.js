@@ -9,9 +9,8 @@ const Marks = require('../models/Marks');
 const LeaveRequest = require('../models/LeaveRequest');
 const yearAnalytics = require('../services/yearAnalytics');
 const crypto = require('crypto');
-
-// Store rollback data temporarily (in production, use Redis or database)
-const rollbackStore = new Map();
+// NOTE: Rollback data is now persisted on the AcademicYear document (nextYear.rollbackData)
+// instead of an in-memory Map, so it survives server restarts.
 
 exports.createYear = async (req, res) => {
     const { name, startDate, endDate, description, terms, settings } = req.body;
@@ -72,7 +71,7 @@ exports.activateYear = async (req, res) => {
         year.status = 'current';
         await year.save();
 
-        // Move all active students into the new academic year
+        // Move active students (not alumni) into the new academic year
         const studentResult = await User.updateMany(
             { role: 'student', isActive: { $ne: false } },
             { $set: { academicYear: year._id } }
@@ -157,11 +156,15 @@ exports.executeTransition = async (req, res) => {
         if (createRollback) {
             const rollbackData = await captureRollbackData(currentYearId, nextYearId);
             rollbackToken = crypto.randomBytes(20).toString('hex');
-            rollbackStore.set(rollbackToken, {
-                data: rollbackData,
-                expiresAt: Date.now() + 24 * 60 * 60 * 1000 // 24 hours
+            // Persist to DB on the next year document so it survives server restarts
+            await AcademicYear.findByIdAndUpdate(nextYearId, {
+                rollbackData: {
+                    token: rollbackToken,
+                    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours
+                    snapshot: rollbackData
+                }
             });
-            console.log(`[TRANSITION] Rollback token generated: ${rollbackToken}`);
+            console.log(`[TRANSITION] Rollback token generated and persisted to DB: ${rollbackToken}`);
         }
 
         // --- ASYNC NON-BLOCKING RESPONSE START ---
@@ -445,22 +448,26 @@ exports.rollbackTransition = async (req, res) => {
     }
 
     try {
-        const rollbackEntry = rollbackStore.get(rollbackToken);
+        // Find the academic year that holds this rollback token in DB
+        const yearWithRollback = await AcademicYear.findOne({ 'rollbackData.token': rollbackToken });
 
-        if (!rollbackEntry) {
+        if (!yearWithRollback || !yearWithRollback.rollbackData) {
             return res.status(404).json({ message: 'Rollback token not found or expired' });
         }
 
-        if (Date.now() > rollbackEntry.expiresAt) {
-            rollbackStore.delete(rollbackToken);
+        if (new Date() > yearWithRollback.rollbackData.expiresAt) {
+            // Clear the expired rollback data
+            yearWithRollback.rollbackData = undefined;
+            await yearWithRollback.save();
             return res.status(410).json({ message: 'Rollback window expired (24 hours)' });
         }
 
         // Perform rollback
-        await performRollback(rollbackEntry.data);
+        await performRollback(yearWithRollback.rollbackData.snapshot);
 
-        // Remove rollback token
-        rollbackStore.delete(rollbackToken);
+        // Clear rollback data from DB after use
+        yearWithRollback.rollbackData = undefined;
+        await yearWithRollback.save();
 
         res.json({
             success: true,

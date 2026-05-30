@@ -397,10 +397,13 @@ router.post('/', auth, async (req, res) => {
 });
 
 // @route   GET /api/exams/subject/:subjectId
-router.get('/subject/:subjectId', auth, async (req, res) => {
+router.get('/subject/:subjectId', [auth, yearContext], async (req, res) => {
     try {
-        const exams = await Exam.find({ subject: req.params.subjectId, isStandardized: true })
-            .populate('class subject createdBy').sort({ date: -1 }).lean();
+        const exams = await Exam.find({
+            subject: req.params.subjectId,
+            academicYear: req.academicYearContext,
+            isStandardized: true
+        }).populate('class subject createdBy').sort({ date: -1 }).lean();
         res.json(exams);
     } catch (err) {
         console.error(err.message);
@@ -408,18 +411,8 @@ router.get('/subject/:subjectId', auth, async (req, res) => {
     }
 });
 
-// @route   GET /api/exams/:id
-router.get('/:id', auth, async (req, res) => {
-    try {
-        if (!req.params.id.match(/^[0-9a-fA-F]{24}$/)) return res.status(404).json({ msg: 'Invalid exam ID format' });
-        const exam = await Exam.findById(req.params.id).populate('class subject createdBy academicYear').lean();
-        if (!exam) return res.status(404).json({ message: 'Exam not found' });
-        res.json(exam);
-    } catch (err) {
-        console.error(err.message);
-        res.status(500).send('Server Error');
-    }
-});
+// NOTE: GET /:id is intentionally placed AFTER all named GET routes at the bottom of this file
+// to prevent it from shadowing /schedule/student, /history, /performance/*, etc.
 
 // @route   PUT /api/exams/:id
 router.put('/:id', auth, async (req, res) => {
@@ -462,13 +455,17 @@ router.delete('/:id', auth, async (req, res) => {
 });
 
 // @route   GET /api/exams/schedule/student
-router.get('/schedule/student', auth, async (req, res) => {
+router.get('/schedule/student', [auth, yearContext], async (req, res) => {
     try {
         const user = await User.findById(req.user.userId);
         if (!user || user.role !== 'student') return res.status(403).json({ message: 'Not authorized' });
         const today = new Date(); today.setHours(0, 0, 0, 0);
-        const exams = await Exam.find({ class: user.currentClass, date: { $gte: today }, isStandardized: true })
-            .populate('subject class').sort({ date: 1 }).lean();
+        const exams = await Exam.find({
+            class: user.currentClass,
+            academicYear: req.academicYearContext,
+            date: { $gte: today },
+            isStandardized: true
+        }).populate('subject class').sort({ date: 1 }).lean();
         res.json(exams);
     } catch (err) {
         console.error(err.message);
@@ -477,10 +474,13 @@ router.get('/schedule/student', auth, async (req, res) => {
 });
 
 // @route   GET /api/exams/schedule/class/:classId
-router.get('/schedule/class/:classId', auth, async (req, res) => {
+router.get('/schedule/class/:classId', [auth, yearContext], async (req, res) => {
     try {
-        const exams = await Exam.find({ class: req.params.classId, isStandardized: true })
-            .populate('subject createdBy').sort({ date: 1 }).lean();
+        const exams = await Exam.find({
+            class: req.params.classId,
+            academicYear: req.academicYearContext,
+            isStandardized: true
+        }).populate('subject createdBy').sort({ date: 1 }).lean();
         res.json(exams);
     } catch (err) {
         console.error(err.message);
@@ -489,11 +489,11 @@ router.get('/schedule/class/:classId', auth, async (req, res) => {
 });
 
 // @route   GET /api/exams/history
-router.get('/history', auth, async (req, res) => {
+router.get('/history', [auth, yearContext], async (req, res) => {
     try {
         const user = await User.findById(req.user.userId);
         const today = new Date(); today.setHours(0, 0, 0, 0);
-        let query = { date: { $lt: today }, isStandardized: true };
+        let query = { date: { $lt: today }, academicYear: req.academicYearContext, isStandardized: true };
         if (user.role === 'teacher' || user.role === 'staff') query.createdBy = req.user.userId;
         const exams = await Exam.find(query).populate('class subject createdBy').sort({ date: -1 }).lean();
         res.json(exams);
@@ -867,11 +867,50 @@ router.get('/status-summary', [auth, yearContext], async (req, res) => {
     }
 });
 
+// @route   GET /api/exams/:id
+// IMPORTANT: Must stay AFTER all named GET routes to avoid shadowing them
+router.get('/:id', auth, async (req, res) => {
+    try {
+        if (!req.params.id.match(/^[0-9a-fA-F]{24}$/)) return res.status(404).json({ msg: 'Invalid exam ID format' });
+        const exam = await Exam.findById(req.params.id).populate('class subject createdBy academicYear').lean();
+        if (!exam) return res.status(404).json({ message: 'Exam not found' });
+        res.json(exam);
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).send('Server Error');
+    }
+});
+
 // @route   PUT /api/exams/bulk-update
+// @access  Private (Admin/Super Admin only)
 router.put('/bulk-update', [auth, yearContext, requireOpenYear], async (req, res) => {
     try {
+        // Require admin role — any authenticated user could otherwise bulk-edit exams
+        const userRole = req.user.role;
+        if (userRole !== 'admin' && userRole !== 'super admin') {
+            return res.status(403).json({ message: 'Not authorized. Only admins can perform bulk updates.' });
+        }
+
         const { examIds, updates } = req.body;
-        const result = await Exam.updateMany({ _id: { $in: examIds } }, { $set: updates });
+
+        if (!Array.isArray(examIds) || examIds.length === 0) {
+            return res.status(400).json({ message: 'examIds must be a non-empty array.' });
+        }
+
+        // Allowlist safe fields — prevent injection of arbitrary operators or fields like academicYear, class
+        const ALLOWED_UPDATE_FIELDS = ['totalMarks', 'date', 'instructions', 'duration', 'status'];
+        const sanitizedUpdates = {};
+        for (const key of ALLOWED_UPDATE_FIELDS) {
+            if (updates[key] !== undefined) {
+                sanitizedUpdates[key] = updates[key];
+            }
+        }
+
+        if (Object.keys(sanitizedUpdates).length === 0) {
+            return res.status(400).json({ message: 'No valid fields to update. Allowed: totalMarks, date, instructions, duration, status.' });
+        }
+
+        const result = await Exam.updateMany({ _id: { $in: examIds } }, { $set: sanitizedUpdates });
         res.json({ message: 'Bulk update completed', modifiedCount: result.modifiedCount });
     } catch (err) {
         console.error(err.message);
@@ -880,11 +919,30 @@ router.put('/bulk-update', [auth, yearContext, requireOpenYear], async (req, res
 });
 
 // @route   POST /api/exams/:id/publish-marks
+// @access  Private (Exam creator, Subject Teacher, Class Teacher, or Admin)
 router.post('/:id/publish-marks', [auth, yearContext, requireOpenYear], async (req, res) => {
     try {
-        const exam = await Exam.findById(req.params.id);
+        const exam = await Exam.findById(req.params.id).populate('class', 'classTeacher');
         if (!exam) return res.status(404).json({ message: 'Exam not found' });
-        exam.marksPublished = true; await exam.save();
+
+        const userRole = req.user.role;
+        const isAdmin = userRole === 'admin' || userRole === 'super admin';
+        const isCreator = exam.createdBy && exam.createdBy.toString() === req.user.userId;
+        const isClassTeacher = exam.class && exam.class.classTeacher &&
+            exam.class.classTeacher.toString() === req.user.userId;
+
+        let isSubjectTeacher = false;
+        if (exam.subject) {
+            const subject = await Subject.findById(exam.subject).select('teachers').lean();
+            isSubjectTeacher = subject && hasObjectIdMatch(subject.teachers, req.user.userId);
+        }
+
+        if (!isAdmin && !isCreator && !isClassTeacher && !isSubjectTeacher) {
+            return res.status(403).json({ message: 'Not authorized to publish marks for this exam' });
+        }
+
+        exam.marksPublished = true;
+        await exam.save();
         res.json({ message: 'Marks published successfully' });
     } catch (err) {
         console.error(err.message);

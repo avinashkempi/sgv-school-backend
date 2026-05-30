@@ -454,6 +454,20 @@ router.get('/student/:studentId/report-card', [auth, requireStudentAccessParam('
             })
             .lean();
 
+        // Load GradeConfig for this academic year (if provided) so grades are consistent with individual exam marks
+        let gradeConfig = null;
+        if (academicYearId) {
+            gradeConfig = await GradeConfig.findOne({ academicYear: academicYearId }).lean();
+        }
+        const resolveGrade = (pct) => {
+            if (gradeConfig && gradeConfig.grades && Array.isArray(gradeConfig.grades)) {
+                const sorted = [...gradeConfig.grades].sort((a, b) => b.minPercentage - a.minPercentage);
+                const match = sorted.find(g => pct >= g.minPercentage);
+                return match ? match.grade : 'F';
+            }
+            return getDefaultGrade(pct);
+        };
+
         // Group by subject
         const subjectWise = {};
         let totalMarksObtained = 0;
@@ -499,7 +513,7 @@ router.get('/student/:studentId/report-card', [auth, requireStudentAccessParam('
             subject.percentage = subject.totalMax > 0
                 ? ((subject.totalObtained / subject.totalMax) * 100).toFixed(2)
                 : 0;
-            subject.grade = getDefaultGrade(parseFloat(subject.percentage));
+            subject.grade = resolveGrade(parseFloat(subject.percentage));
         });
 
         // Overall percentage
@@ -564,7 +578,7 @@ router.get('/student/:studentId/report-card', [auth, requireStudentAccessParam('
                 totalMarksObtained,
                 totalMaxMarks,
                 percentage: parseFloat(overallPercentage),
-                grade: getDefaultGrade(parseFloat(overallPercentage)),
+                grade: resolveGrade(parseFloat(overallPercentage)),
                 rank
             }
         });

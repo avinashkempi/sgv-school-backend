@@ -33,8 +33,6 @@ const ensureCanAssignRole = async (requestUser, targetRole, existingUser = null)
 };
 
 // Get all users (admin only)
-// Get all users (admin only)
-// Get all users (admin only)
 const getAllUsers = async (req, res) => {
   try {
     const { page, limit, skip } = parsePagination(req.query);
@@ -292,37 +290,36 @@ const updateUser = async (req, res) => {
       }
     }
 
-    // Update fields
-    if (name) user.name = name;
-    if (email) user.email = email;
-    if (role) user.role = role;
+    // Update fields — use !== undefined so optional fields can be cleared (e.g. set email to '')
+    if (name !== undefined) user.name = name;
+    if (email !== undefined) user.email = email;
+    if (role !== undefined) user.role = role;
 
     // Update student fields
-    if (admissionDate) user.admissionDate = admissionDate;
-    if (guardianName) user.guardianName = guardianName;
-    if (guardianPhone) user.guardianPhone = guardianPhone;
-    if (currentClass) user.currentClass = currentClass;
-    if (academicYear) user.academicYear = academicYear;
+    if (admissionDate !== undefined) user.admissionDate = admissionDate;
+    if (guardianName !== undefined) user.guardianName = guardianName;
+    if (guardianPhone !== undefined) user.guardianPhone = guardianPhone;
+    if (currentClass !== undefined) user.currentClass = currentClass;
+    if (academicYear !== undefined) user.academicYear = academicYear;
 
     // New Student Fields
-    if (req.body.gender) user.gender = req.body.gender;
-    if (req.body.bloodGroup) user.bloodGroup = req.body.bloodGroup;
-    if (req.body.dateOfBirth) user.dateOfBirth = req.body.dateOfBirth;
-    if (req.body.address) user.address = req.body.address;
-    if (req.body.phone2) user.phone2 = req.body.phone2;
+    if (req.body.gender !== undefined) user.gender = req.body.gender;
+    if (req.body.bloodGroup !== undefined) user.bloodGroup = req.body.bloodGroup;
+    if (req.body.dateOfBirth !== undefined) user.dateOfBirth = req.body.dateOfBirth;
+    if (req.body.address !== undefined) user.address = req.body.address;
+    if (req.body.phone2 !== undefined) user.phone2 = req.body.phone2;
     // IDs
-    if (req.body.regNo) user.regNo = req.body.regNo;
-    if (req.body.satsNumber) user.satsNumber = req.body.satsNumber;
-    if (req.body.penNumber) user.penNumber = req.body.penNumber;
-    if (req.body.apaarId) user.apaarId = req.body.apaarId;
+    if (req.body.regNo !== undefined) user.regNo = req.body.regNo;
+    if (req.body.satsNumber !== undefined) user.satsNumber = req.body.satsNumber;
+    if (req.body.penNumber !== undefined) user.penNumber = req.body.penNumber;
+    if (req.body.apaarId !== undefined) user.apaarId = req.body.apaarId;
     // Status
     if (req.body.isAdmitted !== undefined) user.isAdmitted = req.body.isAdmitted;
 
-
     // Update teacher fields
-    if (joiningDate) user.joiningDate = joiningDate;
-    if (designation) user.designation = designation;
-    if (subjects) user.subjects = subjects;
+    if (joiningDate !== undefined) user.joiningDate = joiningDate;
+    if (designation !== undefined) user.designation = designation;
+    if (subjects !== undefined) user.subjects = subjects;
 
     await user.save();
 
