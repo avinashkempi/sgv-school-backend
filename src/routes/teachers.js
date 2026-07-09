@@ -4,16 +4,17 @@ const Class = require('../models/Class');
 const Subject = require('../models/Subject');
 const User = require('../models/User');
 const { authenticateToken: auth, checkRole } = require('../middleware/auth');
+const { yearContext } = require('../middleware/yearContext');
 
 // @route   GET /api/teachers/my-subjects
 // @desc    Get all subjects the teacher teaches (across all classes)
 // @access  Private (Teacher)
-router.get('/my-subjects', auth, async (req, res) => {
+router.get('/my-subjects', [auth, yearContext], async (req, res) => {
     try {
         const userId = req.user.userId;
 
-        // Find all subjects where this teacher is assigned
-        let subjects = await Subject.find({ teachers: userId })
+        // Find all subjects where this teacher is assigned for the active academic year
+        let subjects = await Subject.find({ teachers: userId, academicYear: req.academicYearContext })
             .populate('class', 'name section branch')
             .populate('teachers', 'name email')
             .sort({ 'class.name': 1, name: 1 });
@@ -21,8 +22,8 @@ router.get('/my-subjects', auth, async (req, res) => {
         // Filter out subjects where class population failed
         subjects = subjects.filter(s => s.class);
 
-        // Get classes where user is teacher
-        const classTeacherClasses = await Class.find({ classTeacher: userId }).select('_id');
+        // Get classes where user is teacher in the active academic year
+        const classTeacherClasses = await Class.find({ classTeacher: userId, academicYear: req.academicYearContext }).select('_id');
         const classTeacherIds = classTeacherClasses.map(c => c._id.toString());
 
         // Add flag to indicate if teacher is teacher of that class
@@ -47,21 +48,21 @@ router.get('/my-subjects', auth, async (req, res) => {
 // @route   GET /api/teachers/my-classes-and-subjects
 // @desc    Get unified data for teacher dashboard (classes as teacher + subjects)
 // @access  Private (Teacher)
-router.get('/my-classes-and-subjects', auth, async (req, res) => {
+router.get('/my-classes-and-subjects', [auth, yearContext], async (req, res) => {
     try {
         const userId = req.user.userId;
 
-        // Get classes where user is teacher
-        const asClassTeacher = await Class.find({ classTeacher: userId })
+        // Get classes where user is teacher in the active academic year
+        const asClassTeacher = await Class.find({ classTeacher: userId, academicYear: req.academicYearContext })
             .populate('classTeacher', 'name email')
             .sort({ name: 1 });
 
-        // For each class, get student count and subjects this teacher teaches
+        // For each class, get student count and subjects this teacher teaches in the active academic year
         const classesWithDetails = await Promise.all(
             asClassTeacher.map(async (cls) => {
                 const [studentCount, mySubjectsInClass] = await Promise.all([
-                    User.countDocuments({ currentClass: cls._id, role: 'student' }),
-                    Subject.find({ class: cls._id, teachers: userId }).select('name')
+                    User.countDocuments({ currentClass: cls._id, role: 'student', academicYear: req.academicYearContext }),
+                    Subject.find({ class: cls._id, teachers: userId, academicYear: req.academicYearContext }).select('name')
                 ]);
 
                 return {
@@ -76,8 +77,8 @@ router.get('/my-classes-and-subjects', auth, async (req, res) => {
             })
         );
 
-        // Get all subjects teacher teaches (including in other classes)
-        let subjects = await Subject.find({ teachers: userId })
+        // Get all subjects teacher teaches in the active academic year (including in other classes)
+        let subjects = await Subject.find({ teachers: userId, academicYear: req.academicYearContext })
             .populate('class', 'name section branch')
             .sort({ name: 1 });
 
@@ -320,19 +321,20 @@ router.put('/subjects/:subjectId/teachers', [auth, checkRole(['admin', 'super ad
 // @route   GET /api/teachers/admin/teacher-subject-matrix
 // @desc    Get complete teacher-subject assignment matrix for admin
 // @access  Admin/Super Admin
-router.get('/admin/teacher-subject-matrix', [auth, checkRole(['admin', 'super admin'])], async (req, res) => {
+router.get('/admin/teacher-subject-matrix', [auth, checkRole(['admin', 'super admin']), yearContext], async (req, res) => {
     try {
         const teachers = await User.find({
             role: { $nin: ['student', 'super admin', 'support_staff'] }
         })
             .populate({
                 path: 'subjects',
+                match: { academicYear: req.academicYearContext },
                 populate: { path: 'class', select: 'name section' }
             })
             .select('name email role subjects')
             .sort({ name: 1 });
 
-        const allSubjects = await Subject.find()
+        const allSubjects = await Subject.find({ academicYear: req.academicYearContext })
             .populate('class', 'name section')
             .populate('teachers', 'name email')
             .sort({ 'class.name': 1, name: 1 });
