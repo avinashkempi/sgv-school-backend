@@ -73,7 +73,7 @@ const authenticateToken = async (req, res, next) => {
     const user = await loadAndValidateTokenUser(payload);
 
     if (!user) {
-      return res.status(403).json({
+      return res.status(401).json({
         success: false,
         message: TOKEN_EXPIRED_OR_INVALID_MESSAGE
       });
@@ -82,7 +82,7 @@ const authenticateToken = async (req, res, next) => {
     req.user = user;
     return next();
   } catch (error) {
-    return res.status(403).json({
+    return res.status(401).json({
       success: false,
       message: TOKEN_EXPIRED_OR_INVALID_MESSAGE
     });
