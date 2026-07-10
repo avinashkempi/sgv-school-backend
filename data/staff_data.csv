@@ -1,22 +1,25 @@
-S. No,Name,Phone,Date of Birth,Blood Group,Designation,Address
-1,Ishwar Patgar,7760325292,7/20/1980,O+,Headmaster,Kumta (U.K.)
-2,Surekha Madar,9731179106,4/18/1985,A+,Assistant Teacher,Kusnal
-3,Rajeshwari Patgar,9902870713,5/31/1985,A+,Assistant Teacher,Kumta (U.K.)
-4,Renuka Jadhav,9611607904,1/6/1987,AB+,Assistant Teacher,Ugar KH
-6,Komal Sanadi,9901331712,2/28/1995,B+,Assistant Teacher,Ugar BK
-7,Anil Kempi,7353171463,11/29/1993,O+,Clerk,Hulagabali
-8,Raziya Nadaf,8123631324,4/24/1982,A+,Assistant Teacher,Ugar KH
-9,Snehal Shinde,9741340155,7/30/1998,B+,Assistant Teacher,Shedbhal
-10,Jayashri Badiger,7411430662,7/22/1980,B+,Assistant Teacher,Mangasuli
-11,Shruti Taradale,9902842013,6/6/1999,A+,Computer Instructor,Ugar BK
-12,Nitin Khatave,7975922252,5/12/1994,B+,Assistant Teacher,Ugar Khurd
-13,Shailaja Kumbar,7259677684,8/15/2001,A+,Assistant Teacher,Shedbhal
-14,Padmashree chougale,6366349579,6/3/1998,A+,Assistant Teacher,Ugar BK
-15,Nazima Patel,7204691915,3/23/1983,A+,Assistant Teacher,Ugar KH
-16,Sadhana Kamble,7975516061,6/1/1991,O+,Assistant Teacher,Ugar KH
-17,Vidhya Kamble,9663275118,7/11/1983,O+,Assistant Teacher,Kusnal
-18,Gouravi Gudashi,9561373702,9/27/1994,A+,Assistant Teacher,Mangasuli
-19,Ramesh Waghmore,9880442704,5/15/1967,A+,Peon,Ugar KH
-20,Sunita Kamble,8884647464,6/1/1972,B+,Janitor,Ugar KH
-21,Anita Kamble,8951667093,1/1/1988,B+,Janitor,Ugar KH
-22,Vijay Sunadholi,7406996219,8/10/1980,O+,Member,Ugar KH
+S. No,Name,Phone,Date of Birth,Blood Group,Designation,Address,Email,,
+1,Ishwar Patgar,7760325292,7/20/1980,O+,Headmaster,Kumta (U.K.),,,
+2,Surekha Madar,9731179106,4/18/1985,A+,Assistant Teacher,Kusnal,,,
+3,Rajeshwari Patgar,7619305292,5/31/1985,A+,Assistant Teacher,Kumta (U.K.),,,
+4,Renuka Jadhav,9611607904,1/6/1987,AB+,Assistant Teacher,Ugar KH,,,
+5,Komal Sanadi,9901331712,2/28/1995,B+,Assistant Teacher,Ugar BK,,,
+6,Anil Kempi,7353171463,11/29/1993,O+,Clerk,Hulagabali,,,
+7,Raziya Nadaf,8123631324,4/24/1982,A+,Assistant Teacher,Ugar KH,,,
+8,Snehal Shinde,9741340155,7/30/1998,B+,Assistant Teacher,Shedbhal,,,
+9,Anil Sajane,9902665931,2/1/1989,O+,Clerk,Ugar BK,,,
+10,Asha Patil,9980648746,5/1/1990,B+,Assistant Teacher,Ugar KH,,,
+11,Nitin Khatave,7975922252,5/12/1994,B+,Assistant Teacher,Ugar Khurd,,, 
+12,Jyotshana Kamate,9035717890,11/10/1973,B+,Assistant Teacher,Ugar KH,,,
+13,Vijaykumar Mane,9535451607,5/10/1984,O+,Assistant Teacher,Shiraguppi,,,
+14,Sambhaji Ingale,9019276887,6/8/1991,B+,Assistant Teacher,Arag,,,
+15,Sadhana Kamble,7975516061,6/1/1991,O+,Assistant Teacher,Ugar KH,,,
+16,Padmashree Burshi,8618294865,11/10/1986,O+,Assistant Teacher,Kusanal,,,
+17,Deepa Gurav,7349613443,5/1/2001,A+,Assistant Teacher,Mangasuli,,,
+18,Savita Kumbar,8050623408,8/20/1999,B+,Assistant Teacher,Ugar BK,,,
+19,Ramesh Waghmore,9880442704,5/15/1967,A+,Peon,Ugar KH,,,
+20,Sunita Kamble,8884647464,6/1/1972,B+,Janitor,Ugar KH,,,
+21,Anita Kamble,8951667093,1/1/1988,B+,Janitor,Ugar KH,,,
+22,Vijay Sunadholi,7406996219,8/10/1980,O+,Member,Ugar KH,,,
+23,Vishal Korbu,8431469114,6/2/2001,O+,Physical Instructor,Ainapur,,,
+24,Sandeep Patil,8951966122,,,Wushu Coach,Jugul,,,
