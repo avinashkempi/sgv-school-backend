@@ -124,7 +124,11 @@ router.get('/:id/full-details', auth, async (req, res) => {
         const [classData, subjects, students] = await Promise.all([
             Class.findById(req.params.id).populate('classTeacher', 'name email'),
             Subject.find({ class: req.params.id }).populate('teachers', 'name email').sort({ name: 1 }),
-            User.find({ currentClass: req.params.id, role: 'student' }).select('name phone email admissionDate guardianName guardianPhone').sort({ name: 1 })
+            User.find({ currentClass: req.params.id, role: 'student' })
+                .select('-password')
+                .populate('currentClass', 'name')
+                .populate('academicYear', 'name')
+                .sort({ name: 1 })
         ]);
 
         if (!classData) {
