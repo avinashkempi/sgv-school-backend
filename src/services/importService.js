@@ -31,7 +31,7 @@ const parseDate = (dateStr) => {
     }
 };
 
-const generateTemporaryPassword = () => crypto.randomBytes(9).toString('base64url') + 'A1!';
+const generateTemporaryPassword = (phone) => `${phone}@123`;
 
 const getRowValue = (row, key) => {
     const normalizedKey = key.toLowerCase().trim();
@@ -169,7 +169,7 @@ const processImport = async (csvData, options = { wipe: false }) => {
                     name: getRowValue(row, 'Student Name'),
                     phone: loginPhone, // Unique Key
                     guardianPhone: backupPhone, // Backup contact
-                    password: generateTemporaryPassword(),
+                    password: generateTemporaryPassword(loginPhone),
                     mustChangePassword: true,
                     role: 'student',
                     currentClass: classId,
@@ -371,7 +371,7 @@ const processStaffImport = async (csvData) => {
             const userData = {
                 name: name,
                 phone: phone,
-                password: generateTemporaryPassword(),
+                password: generateTemporaryPassword(phone),
                 mustChangePassword: true,
                 role: role,
                 designation: designation, // Store exact designation

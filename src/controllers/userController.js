@@ -195,11 +195,15 @@ const createUser = async (req, res) => {
       });
     }
 
+    const loginPhone = phone || req.body.phone2;
+    const defaultPassword = loginPhone ? `${loginPhone}@123` : password;
+
     // Create new user
     const user = new User({
-      name, phone, email, password, role,
+      name, phone, email, password: defaultPassword, role,
       admissionDate, guardianName, guardianPhone, currentClass, academicYear,
-      joiningDate, designation, subjects
+      joiningDate, designation, subjects,
+      mustChangePassword: true
     });
     await user.save();
 
@@ -523,6 +527,27 @@ const revertStudentPromotion = async (req, res) => {
   }
 };
 
+const resetUserPassword = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const user = await User.findById(id);
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+    const loginPhone = user.phone || user.phone2;
+    if (!loginPhone) {
+      return res.status(400).json({ success: false, message: 'User does not have a phone number to reset password' });
+    }
+    user.password = `${loginPhone}@123`;
+    user.mustChangePassword = true;
+    await user.save();
+    res.json({ success: true, message: 'Password reset successfully', defaultPassword: user.password });
+  } catch (error) {
+    console.error('Reset password error:', error);
+    res.status(500).json({ success: false, message: 'Server error resetting password' });
+  }
+};
+
 module.exports = {
   getAllUsers,
   getUserById,
@@ -530,5 +555,7 @@ module.exports = {
   updateUser,
   deleteUser,
   searchUsers,
-  revertStudentPromotion
+  revertStudentPromotion,
+  resetUserPassword
 };
+

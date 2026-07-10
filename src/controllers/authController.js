@@ -17,8 +17,8 @@ const login = async (req, res) => {
 
     const { phone, password } = req.body;
 
-    // Find user by phone
-    const user = await User.findOne({ phone });
+    // Find user by phone or phone2
+    const user = await User.findOne({ $or: [{ phone }, { phone2: phone }] });
     if (!user) {
       return res.status(401).json({
         success: false,
@@ -171,7 +171,7 @@ const changePassword = async (req, res) => {
       }
     }
 
-    const samePassword = await bcrypt.compare(newPassword, user.password);
+    const samePassword = newPassword === user.password;
     if (samePassword) {
       return res.status(400).json({ success: false, message: 'New password must be different from the current password' });
     }
