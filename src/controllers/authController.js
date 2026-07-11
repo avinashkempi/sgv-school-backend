@@ -161,16 +161,6 @@ const changePassword = async (req, res) => {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
 
-    if (!user.mustChangePassword) {
-      if (!currentPassword) {
-        return res.status(400).json({ success: false, message: 'Current password is required' });
-      }
-      const isCurrentValid = await user.comparePassword(currentPassword);
-      if (!isCurrentValid) {
-        return res.status(401).json({ success: false, message: 'Current password is incorrect' });
-      }
-    }
-
     const samePassword = newPassword === user.password;
     if (samePassword) {
       return res.status(400).json({ success: false, message: 'New password must be different from the current password' });
