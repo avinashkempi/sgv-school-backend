@@ -85,7 +85,7 @@ router.post('/mark', [auth, yearContext, requireOpenYear], async (req, res) => {
                         class: classId,
                         date: attendanceDate,
                         academicYear: academicYearId,
-                        subject: null,
+                        subject: subjectId || null,
                         period: null
                     },
                     update: {
@@ -93,7 +93,8 @@ router.post('/mark', [auth, yearContext, requireOpenYear], async (req, res) => {
                             status,
                             remarks: remarks || '',
                             markedBy: req.user.userId,
-                            role: 'student'
+                            role: 'student',
+                            subject: subjectId || null
                         }
                     },
                     upsert: true

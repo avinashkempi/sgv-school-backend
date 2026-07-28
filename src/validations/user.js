@@ -37,7 +37,11 @@ const userCreateValidation = [
   body('joiningDate')
     .optional({ checkFalsy: true })
     .isISO8601()
-    .withMessage('Joining date must be a valid date')
+    .withMessage('Joining date must be a valid date'),
+  body('gender')
+    .optional({ checkFalsy: true })
+    .isIn(['Boy', 'Girl', 'Other'])
+    .withMessage('Gender must be Boy, Girl, or Other')
 ];
 
 // Validation for user update (PUT)
@@ -49,7 +53,7 @@ const userUpdateValidation = [
     .matches(/^[a-zA-Z\s]+$/)
     .withMessage('Name must contain only letters and spaces'),
   body('phone')
-    .optional()
+    .optional({ checkFalsy: true })
     .matches(/^[6-9]\d{9}$/)
     .withMessage('Please provide a valid 10-digit Indian phone number'),
   body('email')
@@ -75,7 +79,11 @@ const userUpdateValidation = [
   body('joiningDate')
     .optional({ checkFalsy: true })
     .isISO8601()
-    .withMessage('Joining date must be a valid date')
+    .withMessage('Joining date must be a valid date'),
+  body('gender')
+    .optional({ checkFalsy: true })
+    .isIn(['Boy', 'Girl', 'Other'])
+    .withMessage('Gender must be Boy, Girl, or Other')
 ];
 
 module.exports = {

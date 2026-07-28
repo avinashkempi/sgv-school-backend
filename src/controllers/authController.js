@@ -152,6 +152,10 @@ const changePassword = async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
 
+    if (!currentPassword) {
+      return res.status(400).json({ success: false, message: 'Current password is required' });
+    }
+
     if (!newPassword || newPassword.length < 8) {
       return res.status(400).json({ success: false, message: 'New password must be at least 8 characters long' });
     }
@@ -161,16 +165,23 @@ const changePassword = async (req, res) => {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
 
-    const samePassword = newPassword === user.password;
-    if (samePassword) {
+    const isCurrentPasswordValid = await user.comparePassword(currentPassword);
+    if (!isCurrentPasswordValid) {
+      return res.status(400).json({ success: false, message: 'Incorrect current password' });
+    }
+
+    const isSamePassword = await user.comparePassword(newPassword);
+    if (isSamePassword) {
       return res.status(400).json({ success: false, message: 'New password must be different from the current password' });
     }
 
     user.password = newPassword;
     user.mustChangePassword = false;
+    user.passwordChangedAt = new Date();
+    user.tokenVersion = (user.tokenVersion || 0) + 1;
     await user.save();
 
-    res.json({ success: true, message: 'Password changed successfully' });
+    res.json({ success: true, message: 'Password changed successfully. Please log in again if required.' });
   } catch (error) {
     console.error('Change password error:', error);
     res.status(500).json({ success: false, message: 'Server error changing password' });

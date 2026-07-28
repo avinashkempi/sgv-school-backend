@@ -358,7 +358,7 @@ const processStaffImport = async (csvData) => {
                 role = 'admin';
             } else if (lowerDesig.includes('assistant teacher') || lowerDesig === 'teacher') {
                 role = 'teacher';
-            } else if (lowerDesig === 'clerk' || lowerDesig === 'computer instructor') {
+            } else if (lowerDesig === 'clerk' || lowerDesig.includes('instructor') || lowerDesig.includes('physical instructor')) {
                 role = 'staff';
             } else {
                 role = 'support_staff';

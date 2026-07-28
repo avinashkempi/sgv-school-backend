@@ -54,7 +54,8 @@ const userSchema = new mongoose.Schema({
 
   // Student specific fields
   admissionDate: {
-    type: Date
+    type: Date,
+    set: v => (v === '' || v === null) ? undefined : v
   },
   guardianName: {
     type: String,
@@ -63,15 +64,18 @@ const userSchema = new mongoose.Schema({
   guardianPhone: {
     type: String,
     trim: true,
-    match: [/^[6-9]\d{9}$/, 'Please enter a valid 10-digit Indian phone number']
+    match: [/^[6-9]\d{9}$/, 'Please enter a valid 10-digit Indian phone number'],
+    set: v => (typeof v === 'string' && !v.trim()) ? undefined : v
   },
   currentClass: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Class'
+    ref: 'Class',
+    set: v => (v === '' || v === null) ? undefined : v
   },
   academicYear: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'AcademicYear'
+    ref: 'AcademicYear',
+    set: v => (v === '' || v === null) ? undefined : v
   },
   promotionStatus: {
     type: String,
@@ -83,14 +87,28 @@ const userSchema = new mongoose.Schema({
   gender: {
     type: String,
     enum: ['Boy', 'Girl', 'Other'],
-    trim: true
+    trim: true,
+    set: function(v) {
+      if (v === null || v === undefined) return undefined;
+      if (typeof v === 'string') {
+        const trimmed = v.trim();
+        if (!trimmed) return undefined;
+        const lower = trimmed.toLowerCase();
+        if (lower === 'boy' || lower === 'male' || lower === 'm') return 'Boy';
+        if (lower === 'girl' || lower === 'female' || lower === 'f') return 'Girl';
+        if (lower === 'other') return 'Other';
+        return trimmed;
+      }
+      return v;
+    }
   },
   bloodGroup: {
     type: String,
     trim: true
   },
   dateOfBirth: {
-    type: Date
+    type: Date,
+    set: v => (v === '' || v === null) ? undefined : v
   },
   address: {
     type: String,
@@ -99,7 +117,8 @@ const userSchema = new mongoose.Schema({
   phone2: {
     type: String,
     trim: true,
-    match: [/^[6-9]\d{9}$/, 'Please enter a valid 10-digit Indian phone number']
+    match: [/^[6-9]\d{9}$/, 'Please enter a valid 10-digit Indian phone number'],
+    set: v => (typeof v === 'string' && !v.trim()) ? undefined : v
   },
   remarks: {
     type: String,
@@ -132,7 +151,8 @@ const userSchema = new mongoose.Schema({
 
   // Teacher specific fields
   joiningDate: {
-    type: Date
+    type: Date,
+    set: v => (v === '' || v === null) ? undefined : v
   },
   designation: {
     type: String,

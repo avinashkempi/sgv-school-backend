@@ -198,11 +198,33 @@ const createUser = async (req, res) => {
     const loginPhone = phone || req.body.phone2;
     const defaultPassword = loginPhone ? `${loginPhone}@123` : password;
 
+    const sanitizeOptional = (val) => (typeof val === 'string' && val.trim() === '') ? undefined : val;
+
     // Create new user
     const user = new User({
-      name, phone, email, password: defaultPassword, role,
-      admissionDate, guardianName, guardianPhone, currentClass, academicYear,
-      joiningDate, designation, subjects,
+      name,
+      phone: sanitizeOptional(phone),
+      email: sanitizeOptional(email),
+      password: defaultPassword,
+      role,
+      admissionDate: sanitizeOptional(admissionDate),
+      guardianName,
+      guardianPhone: sanitizeOptional(guardianPhone),
+      currentClass: sanitizeOptional(currentClass),
+      academicYear: sanitizeOptional(academicYear),
+      gender: sanitizeOptional(req.body.gender),
+      bloodGroup: sanitizeOptional(req.body.bloodGroup),
+      dateOfBirth: sanitizeOptional(req.body.dateOfBirth),
+      address: sanitizeOptional(req.body.address),
+      phone2: sanitizeOptional(req.body.phone2),
+      regNo: sanitizeOptional(req.body.regNo),
+      satsNumber: sanitizeOptional(req.body.satsNumber),
+      penNumber: sanitizeOptional(req.body.penNumber),
+      apaarId: sanitizeOptional(req.body.apaarId),
+      remarks: sanitizeOptional(req.body.remarks),
+      joiningDate: sanitizeOptional(joiningDate),
+      designation: sanitizeOptional(designation),
+      subjects,
       mustChangePassword: true
     });
     await user.save();
@@ -294,35 +316,38 @@ const updateUser = async (req, res) => {
       }
     }
 
-    // Update fields — use !== undefined so optional fields can be cleared (e.g. set email to '')
+    const sanitizeOptional = (val) => (typeof val === 'string' && val.trim() === '') ? undefined : val;
+
+    // Update fields
     if (name !== undefined) user.name = name;
-    if (email !== undefined) user.email = email;
+    if (email !== undefined) user.email = sanitizeOptional(email);
     if (role !== undefined) user.role = role;
 
     // Update student fields
-    if (admissionDate !== undefined) user.admissionDate = admissionDate;
+    if (admissionDate !== undefined) user.admissionDate = sanitizeOptional(admissionDate);
     if (guardianName !== undefined) user.guardianName = guardianName;
-    if (guardianPhone !== undefined) user.guardianPhone = guardianPhone;
-    if (currentClass !== undefined) user.currentClass = currentClass;
-    if (academicYear !== undefined) user.academicYear = academicYear;
+    if (guardianPhone !== undefined) user.guardianPhone = sanitizeOptional(guardianPhone);
+    if (currentClass !== undefined) user.currentClass = sanitizeOptional(currentClass);
+    if (academicYear !== undefined) user.academicYear = sanitizeOptional(academicYear);
 
     // New Student Fields
-    if (req.body.gender !== undefined) user.gender = req.body.gender;
-    if (req.body.bloodGroup !== undefined) user.bloodGroup = req.body.bloodGroup;
-    if (req.body.dateOfBirth !== undefined) user.dateOfBirth = req.body.dateOfBirth;
-    if (req.body.address !== undefined) user.address = req.body.address;
-    if (req.body.phone2 !== undefined) user.phone2 = req.body.phone2;
+    if (req.body.gender !== undefined) user.gender = sanitizeOptional(req.body.gender);
+    if (req.body.bloodGroup !== undefined) user.bloodGroup = sanitizeOptional(req.body.bloodGroup);
+    if (req.body.dateOfBirth !== undefined) user.dateOfBirth = sanitizeOptional(req.body.dateOfBirth);
+    if (req.body.address !== undefined) user.address = sanitizeOptional(req.body.address);
+    if (req.body.phone2 !== undefined) user.phone2 = sanitizeOptional(req.body.phone2);
+    if (req.body.remarks !== undefined) user.remarks = sanitizeOptional(req.body.remarks);
     // IDs
-    if (req.body.regNo !== undefined) user.regNo = req.body.regNo;
-    if (req.body.satsNumber !== undefined) user.satsNumber = req.body.satsNumber;
-    if (req.body.penNumber !== undefined) user.penNumber = req.body.penNumber;
-    if (req.body.apaarId !== undefined) user.apaarId = req.body.apaarId;
+    if (req.body.regNo !== undefined) user.regNo = sanitizeOptional(req.body.regNo);
+    if (req.body.satsNumber !== undefined) user.satsNumber = sanitizeOptional(req.body.satsNumber);
+    if (req.body.penNumber !== undefined) user.penNumber = sanitizeOptional(req.body.penNumber);
+    if (req.body.apaarId !== undefined) user.apaarId = sanitizeOptional(req.body.apaarId);
     // Status
     if (req.body.isAdmitted !== undefined) user.isAdmitted = req.body.isAdmitted;
 
     // Update teacher fields
-    if (joiningDate !== undefined) user.joiningDate = joiningDate;
-    if (designation !== undefined) user.designation = designation;
+    if (joiningDate !== undefined) user.joiningDate = sanitizeOptional(joiningDate);
+    if (designation !== undefined) user.designation = sanitizeOptional(designation);
     if (subjects !== undefined) user.subjects = subjects;
 
     await user.save();
