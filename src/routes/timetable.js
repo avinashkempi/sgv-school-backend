@@ -98,37 +98,55 @@ router.get('/class/:classId', auth, async (req, res) => {
 });
 
 // @route   GET /api/timetable/my-timetable
-// @desc    Get student's timetable
-// @access  Private (Student)
+// @desc    Get current user's timetable (Student, or Admin/Teacher preview)
+// @access  Private
 router.get('/my-timetable', auth, async (req, res) => {
     try {
         const user = await User.findById(req.user.userId);
-        if (user.role !== 'student') {
-            return res.status(403).json({ message: 'Not authorized' });
+        if (!user) {
+            return res.status(404).json({ message: 'User not found' });
         }
 
-        if (!user.currentClass) {
+        // Handle assigned currentClass for student or any role
+        if (user.currentClass) {
+            const classId = user.currentClass._id || user.currentClass;
+            const timetable = await Timetable.findOne({ class: classId })
+                .populate({
+                    path: 'schedule.periods.subject',
+                    select: 'name'
+                })
+                .populate({
+                    path: 'schedule.periods.teacher',
+                    select: 'name'
+                });
+
+            if (timetable) {
+                return res.json(timetable);
+            }
+        }
+
+        // Fallback for non-student roles (admin, super admin, teacher, staff) viewing timetable
+        if (['admin', 'super admin', 'staff', 'support_staff', 'teacher'].includes(user.role)) {
+            const timetable = await Timetable.findOne({})
+                .populate({
+                    path: 'schedule.periods.subject',
+                    select: 'name'
+                })
+                .populate({
+                    path: 'schedule.periods.teacher',
+                    select: 'name'
+                });
+
+            if (timetable) {
+                return res.json(timetable);
+            }
+        }
+
+        if (user.role === 'student' && !user.currentClass) {
             return res.status(400).json({ message: 'Student not assigned to a class' });
         }
 
-        // Handle both populated and unpopulated currentClass
-        const classId = user.currentClass._id || user.currentClass;
-
-        const timetable = await Timetable.findOne({ class: classId })
-            .populate({
-                path: 'schedule.periods.subject',
-                select: 'name'
-            })
-            .populate({
-                path: 'schedule.periods.teacher',
-                select: 'name'
-            });
-
-        if (!timetable) {
-            return res.status(404).json({ message: 'Timetable not found' });
-        }
-
-        res.json(timetable);
+        return res.status(404).json({ message: 'Timetable not found' });
     } catch (err) {
         console.error(err.message);
         res.status(500).send('Server Error');

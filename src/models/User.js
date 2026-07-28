@@ -143,11 +143,6 @@ const userSchema = new mongoose.Schema({
     trim: true
   },
 
-  // NEW: Admission Status
-  isAdmitted: {
-    type: Boolean,
-    default: true
-  },
 
   // Teacher specific fields
   joiningDate: {
@@ -184,8 +179,7 @@ userSchema.pre('save', function (next) {
   const shouldRevokeSessions = !this.isNew && (
     this.isModified('password') ||
     this.isModified('role') ||
-    this.isModified('isActive') ||
-    this.isModified('isAdmitted')
+    this.isModified('isActive')
   );
 
   if (shouldRevokeSessions) {

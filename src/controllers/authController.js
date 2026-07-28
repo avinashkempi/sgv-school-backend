@@ -35,7 +35,7 @@ const login = async (req, res) => {
       });
     }
 
-    if (user.isActive === false || user.isAdmitted === false || user.role === 'alumni') {
+    if (user.isActive === false || user.role === 'alumni') {
       return res.status(403).json({
         success: false,
         message: 'Account is inactive'

@@ -342,8 +342,6 @@ const updateUser = async (req, res) => {
     if (req.body.satsNumber !== undefined) user.satsNumber = sanitizeOptional(req.body.satsNumber);
     if (req.body.penNumber !== undefined) user.penNumber = sanitizeOptional(req.body.penNumber);
     if (req.body.apaarId !== undefined) user.apaarId = sanitizeOptional(req.body.apaarId);
-    // Status
-    if (req.body.isAdmitted !== undefined) user.isAdmitted = req.body.isAdmitted;
 
     // Update teacher fields
     if (joiningDate !== undefined) user.joiningDate = sanitizeOptional(joiningDate);

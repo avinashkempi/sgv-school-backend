@@ -25,7 +25,7 @@ const loadAndValidateTokenUser = async (payload) => {
   }
 
   const user = await User.findById(payload.userId)
-    .select('name role tokenVersion passwordChangedAt isActive isAdmitted')
+    .select('name role tokenVersion passwordChangedAt isActive')
     .lean();
 
   if (!user) return null;
@@ -34,7 +34,7 @@ const loadAndValidateTokenUser = async (payload) => {
   const tokenRoleStillMatchesDb = payload.role === user.role;
   const tokenVersionStillCurrent = payload.tokenVersion === (user.tokenVersion ?? 0);
   const passwordWasChangedAfterTokenIssue = isTokenIssuedBeforePasswordChange(payload, user);
-  const isInactive = user.isActive === false || user.isAdmitted === false;
+  const isInactive = user.isActive === false;
   const isAlumni = user.role === 'alumni';
 
   if (

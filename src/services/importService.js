@@ -179,7 +179,6 @@ const processImport = async (csvData, options = { wipe: false }) => {
                     gender: getRowValue(row, 'Gender'),
                     dateOfBirth: parseDate(getRowValue(row, 'Date of Birth')),
                     address: getRowValue(row, 'Address'),
-                    isAdmitted: getRowValue(row, 'Admission') === 'TRUE' || getRowValue(row, 'Admission') === true || getRowValue(row, 'Admission') === 'True',
                     remarks: getRowValue(row, 'Remarks'),
 
                     // IDs
