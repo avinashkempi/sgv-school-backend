@@ -42,11 +42,11 @@ const login = async (req, res) => {
       });
     }
 
-    // Generate a short-lived JWT token tied to the current DB-backed session version
+    // Generate a long-lived JWT token tied to the current DB-backed session version
     const token = jwt.sign(
       { userId: user._id, role: user.role, tokenVersion: user.tokenVersion ?? 0 },
       process.env.JWT_SECRET,
-      { expiresIn: '8h' }
+      { expiresIn: '365d' }
     );
 
     // Update last active
@@ -59,7 +59,7 @@ const login = async (req, res) => {
       success: true,
       message: 'Login successful',
       token,
-      expiresIn: '8h',
+      expiresIn: '365d',
       user: {
         id: user._id,
         name: user.name,

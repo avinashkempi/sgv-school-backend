@@ -2,7 +2,8 @@ const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 
 const allowedUserRoles = User.schema.path('role').enumValues;
-const TOKEN_EXPIRED_OR_INVALID_MESSAGE = 'Invalid or expired token';
+const TOKEN_EXPIRED_OR_INVALID_MESSAGE = 'Invalid or expired token. Please log in again.';
+const TOKEN_REQUIRED_MESSAGE = 'Access token required. Please log in.';
 
 const sanitizeUserForRequest = (user) => ({
   id: user._id.toString(),
@@ -64,7 +65,7 @@ const authenticateToken = async (req, res, next) => {
   if (!token) {
     return res.status(401).json({
       success: false,
-      message: 'Access token required'
+      message: TOKEN_REQUIRED_MESSAGE
     });
   }
 
@@ -113,7 +114,7 @@ const optionalAuthenticateToken = async (req, res, next) => {
 const requireAdmin = (req, res, next) => {
   // Ensure token was verified and req.user exists
   if (!req.user) {
-    return res.status(401).json({ success: false, message: 'Access token required' });
+    return res.status(401).json({ success: false, message: TOKEN_REQUIRED_MESSAGE });
   }
 
   const { role } = req.user;
@@ -126,7 +127,7 @@ const requireAdmin = (req, res, next) => {
 const checkRole = (roles) => {
   return (req, res, next) => {
     if (!req.user) {
-      return res.status(401).json({ success: false, message: 'Access token required' });
+      return res.status(401).json({ success: false, message: TOKEN_REQUIRED_MESSAGE });
     }
     if (roles.includes(req.user.role)) {
       return next();
@@ -140,7 +141,7 @@ const checkRole = (roles) => {
 // Teachers: NO access
 // Students: Own data only (must be handled by controller logic using req.user.id)
 const requireFinanceAccess = (req, res, next) => {
-  if (!req.user) return res.status(401).json({ message: 'Unauthorized' });
+  if (!req.user) return res.status(401).json({ success: false, message: TOKEN_REQUIRED_MESSAGE });
 
   const allowedRoles = ['admin', 'super admin', 'student'];
   if (allowedRoles.includes(req.user.role)) {
