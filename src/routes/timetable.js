@@ -18,17 +18,23 @@ router.post('/', auth, async (req, res) => {
             return res.status(403).json({ message: 'Not authorized' });
         }
 
+        const classObj = await _Class.findById(classId);
+
         let timetable = await Timetable.findOne({ class: classId });
 
         if (timetable) {
             // Update
             timetable.schedule = schedule;
             timetable.breaks = breaks;
+            if (classObj?.academicYear) {
+                timetable.academicYear = classObj.academicYear;
+            }
             timetable.updatedAt = Date.now();
         } else {
             // Create
             timetable = new Timetable({
                 class: classId,
+                academicYear: classObj?.academicYear,
                 schedule,
                 breaks
             });

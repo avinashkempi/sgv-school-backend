@@ -54,7 +54,15 @@ router.get('/admin/init', [auth, checkRole(['admin', 'super admin']), yearContex
             AcademicYear.find().sort({ startDate: -1 }),
             User.find({ role: { $nin: ['student', 'super admin', 'support_staff'] } }).select('name email role'),
             Subject.find({ academicYear: req.academicYearContext }).populate('teachers', 'name email'),
-            Timetable.find({ academicYear: req.academicYearContext })
+            Timetable.find({
+                $or: [
+                    { academicYear: req.academicYearContext },
+                    { academicYear: { $exists: false } },
+                    { academicYear: null }
+                ]
+            })
+                .populate({ path: 'schedule.periods.subject', select: 'name code' })
+                .populate({ path: 'schedule.periods.teacher', select: 'name' })
         ]);
 
         // Aggregate student counts per class for the selected academic year
