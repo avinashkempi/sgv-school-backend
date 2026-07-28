@@ -6,9 +6,23 @@ const connectDB = require('./src/config/database');
 const { startBirthdayCron } = require('./src/services/cronService');
 const Event = require('./src/models/Event');
 const Notification = require('./src/models/Notification');
+const logger = require('./src/utils/logger');
+const requestId = require('./src/middleware/requestId');
+const requestLogger = require('./src/middleware/requestLogger');
+const errorHandler = require('./src/middleware/errorHandler');
+
 const app = express();
 const PORT = process.env.PORT || 10000;
-require('dotenv').config()
+require('dotenv').config();
+
+// Process-level unhandled error monitoring
+process.on('uncaughtException', (err) => {
+  logger.error('CRITICAL: Uncaught Exception detected in Node process', err);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  logger.error('CRITICAL: Unhandled Promise Rejection detected', reason instanceof Error ? reason : { reason });
+});
 
 // Trust the first proxy hop (Render's load balancer) so that
 // express-rate-limit can correctly identify client IPs from X-Forwarded-For.
@@ -20,6 +34,10 @@ app.set('etag', 'strong');
 // Connect to MongoDB
 connectDB();
 
+// Request Tracking & Logging Middleware
+app.use(requestId);
+app.use(requestLogger);
+
 // Middleware
 // Enable compression
 app.use(compression());
@@ -30,8 +48,8 @@ app.use(compression());
 app.use(cors({
   origin: '*',
   credentials: false,
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-academic-year'],
-  exposedHeaders: ['x-active-academic-year'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-academic-year', 'x-request-id'],
+  exposedHeaders: ['x-active-academic-year', 'x-request-id'],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
   optionsSuccessStatus: 200
 }));
@@ -93,20 +111,14 @@ app.get('/', (req, res) => {
   res.send('Hello from Express Backend!');
 });
 
-// Global Error Handler
-app.use((err, req, res, next) => {
-  console.error('❌ Unhandled API Error:', err);
-  res.status(err.status || 500).json({
-    success: false,
-    message: err.message || 'Internal Server Error'
-  });
-});
+// Global Central Error Handler Middleware
+app.use(errorHandler);
 
 // Webhook routes handle tasks like cron previously handled locally
 
 // Start the server
 app.listen(PORT, () => {
-  console.log(`✅ Server running on http://localhost:${PORT}`);
+  logger.info(`✅ Server running on http://localhost:${PORT}`);
   // Start background cron jobs
   startBirthdayCron();
 });
