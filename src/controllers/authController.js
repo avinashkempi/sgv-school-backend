@@ -181,7 +181,19 @@ const changePassword = async (req, res) => {
     user.tokenVersion = (user.tokenVersion || 0) + 1;
     await user.save();
 
-    res.json({ success: true, message: 'Password changed successfully. Please log in again if required.' });
+    // Issue a new token with updated tokenVersion so user stays logged in
+    const newToken = jwt.sign(
+      { userId: user._id, role: user.role, tokenVersion: user.tokenVersion },
+      process.env.JWT_SECRET,
+      { expiresIn: '365d' }
+    );
+
+    res.json({
+      success: true,
+      message: 'Password changed successfully.',
+      token: newToken,
+      expiresIn: '365d'
+    });
   } catch (error) {
     console.error('Change password error:', error);
     res.status(500).json({ success: false, message: 'Server error changing password' });

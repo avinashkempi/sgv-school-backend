@@ -16,7 +16,7 @@ const isTokenIssuedBeforePasswordChange = (payload, user) => {
   if (!payload.iat || !user.passwordChangedAt) return false;
 
   const passwordChangedAtSeconds = Math.floor(new Date(user.passwordChangedAt).getTime() / 1000);
-  return payload.iat < passwordChangedAtSeconds;
+  return payload.iat < (passwordChangedAtSeconds - 1);
 };
 
 const loadAndValidateTokenUser = async (payload) => {

@@ -2,6 +2,7 @@ const logger = require('../utils/logger');
 
 /**
  * Middleware to log HTTP request metadata and execution duration upon completion.
+ * By default, only logs error responses (status >= 400) to keep server logs clean.
  */
 const requestLogger = (req, res, next) => {
   const start = process.hrtime.bigint();
@@ -11,6 +12,15 @@ const requestLogger = (req, res, next) => {
     const durationMs = Number(end - start) / 1e6;
 
     const statusCode = res.statusCode;
+
+    // Only log error responses (4xx/5xx) unless LOG_ALL_REQUESTS or LOG_LEVEL=info/debug is enabled
+    const logAll = process.env.LOG_ALL_REQUESTS === 'true' ||
+                   ['info', 'debug'].includes(process.env.LOG_LEVEL?.toLowerCase());
+
+    if (statusCode < 400 && !logAll) {
+      return;
+    }
+
     const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || req.ip;
     const userAgent = req.headers['user-agent'] || 'Unknown';
     const userId = req.user?.id || req.user?.userId || 'Anonymous';
@@ -41,3 +51,4 @@ const requestLogger = (req, res, next) => {
 };
 
 module.exports = requestLogger;
+

@@ -66,18 +66,28 @@ const formatMeta = (meta) => {
 
 const getTimestamp = () => new Date().toISOString();
 
+const LOG_LEVELS = { error: 0, warn: 1, info: 2, debug: 3 };
+
+const getCurrentLogLevel = () => {
+  const level = (process.env.LOG_LEVEL || 'warn').toLowerCase();
+  return LOG_LEVELS[level] !== undefined ? LOG_LEVELS[level] : LOG_LEVELS.warn;
+};
+
 const logger = {
   info: (message, meta) => {
+    if (getCurrentLogLevel() < LOG_LEVELS.info) return;
     const metaStr = formatMeta(meta);
     console.log(`[${getTimestamp()}] ℹ️  INFO: ${message} ${metaStr}`.trim());
   },
 
   warn: (message, meta) => {
+    if (getCurrentLogLevel() < LOG_LEVELS.warn) return;
     const metaStr = formatMeta(meta);
     console.warn(`[${getTimestamp()}] ⚠️  WARN: ${message} ${metaStr}`.trim());
   },
 
   error: (message, errorOrMeta, extraMeta) => {
+    if (getCurrentLogLevel() < LOG_LEVELS.error) return;
     let errObj = null;
     let meta = extraMeta || {};
 
@@ -102,7 +112,7 @@ const logger = {
   },
 
   debug: (message, meta) => {
-    if (process.env.NODE_ENV === 'production' && !process.env.DEBUG) return;
+    if (getCurrentLogLevel() < LOG_LEVELS.debug) return;
     const metaStr = formatMeta(meta);
     console.log(`[${getTimestamp()}] 🔍 DEBUG: ${message} ${metaStr}`.trim());
   },
