@@ -78,7 +78,8 @@ const apiLimiter = rateLimit({
 // Routes
 // Apply global api rate limiter to all api routes, auth will also get its own stricter limit
 app.use('/api', apiLimiter);
-app.use('/api/auth', authLimiter, require('./src/routes/auth'));
+app.use('/api/auth/login', authLimiter);
+app.use('/api/auth', require('./src/routes/auth'));
 app.use('/api/webhooks', require('./src/routes/webhooks')); // Added decoupled Webhooks
 app.use('/api/events', require('./src/routes/events'));
 
@@ -89,7 +90,7 @@ app.use('/api/academic-year', require('./src/routes/academicYear'));
 app.use('/api/classes', require('./src/routes/classes'));
 app.use('/api/teachers', require('./src/routes/teachers'));
 app.use('/api/attendance', require('./src/routes/attendance'));
- // Mount examsNew before exams to prevent /:id shadowing
+// Mount examsNew before exams to prevent /:id shadowing
 app.use('/api/exams', require('./src/routes/exams'));
 app.use('/api/marks', require('./src/routes/marks'));
 app.use('/api/timetable', require('./src/routes/timetable'));
