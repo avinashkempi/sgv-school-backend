@@ -112,15 +112,13 @@ router.post('/grid-update', [auth, yearContext, requireOpenYear], async (req, re
     }
 });
 
-// Helper function
+// Helper function: 90-100 A+, 70-89 A, 50-69 B+, 30-49 B, Below 30 C
 function getDefaultGrade(percentage) {
     if (percentage >= 90) return 'A+';
-    if (percentage >= 80) return 'A';
-    if (percentage >= 70) return 'B+';
-    if (percentage >= 60) return 'B';
-    if (percentage >= 50) return 'C';
-    if (percentage >= 40) return 'D';
-    return 'F';
+    if (percentage >= 70) return 'A';
+    if (percentage >= 50) return 'B+';
+    if (percentage >= 30) return 'B';
+    return 'C';
 }
 
 // @route   GET /api/marks/exam/:examId/status
@@ -402,9 +400,7 @@ router.get('/analytics/class/:classId', [auth, yearContext], async (req, res) =>
             'A': 0,
             'B+': 0,
             'B': 0,
-            'C': 0,
-            'D': 0,
-            'F': 0
+            'C': 0
         };
 
         studentPerformance.forEach(student => {

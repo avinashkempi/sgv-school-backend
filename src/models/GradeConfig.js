@@ -8,7 +8,7 @@ const GradeConfigSchema = new mongoose.Schema({
     gradeRanges: [{
         grade: {
             type: String,
-            required: true  // "A+", "A", "B+", "B", "C", "D", "F"
+            required: true  // "A+", "A", "B+", "B", "C"
         },
         minPercentage: {
             type: Number,
@@ -45,7 +45,7 @@ GradeConfigSchema.methods.getGrade = function (percentage) {
             };
         }
     }
-    return { grade: 'F', description: 'Fail' };  // Default if no match
+    return { grade: 'C', description: 'Below 30' };  // Default if no match
 };
 
 module.exports = mongoose.model('GradeConfig', GradeConfigSchema);

@@ -32,15 +32,13 @@ const calculateGrade = async (percentage, examId) => {
     }
 };
 
-// Default grading system
+// Default grading system: 90-100 A+, 70-89 A, 50-69 B+, 30-49 B, Below 30 C
 const getDefaultGrade = (percentage) => {
     if (percentage >= 90) return 'A+';
-    if (percentage >= 80) return 'A';
-    if (percentage >= 70) return 'B+';
-    if (percentage >= 60) return 'B';
-    if (percentage >= 50) return 'C';
-    if (percentage >= 40) return 'D';
-    return 'F';
+    if (percentage >= 70) return 'A';
+    if (percentage >= 50) return 'B+';
+    if (percentage >= 30) return 'B';
+    return 'C';
 };
 
 // @route   POST /api/marks/bulk
@@ -463,7 +461,7 @@ router.get('/student/:studentId/report-card', [auth, requireStudentAccessParam('
             if (gradeConfig && gradeConfig.grades && Array.isArray(gradeConfig.grades)) {
                 const sorted = [...gradeConfig.grades].sort((a, b) => b.minPercentage - a.minPercentage);
                 const match = sorted.find(g => pct >= g.minPercentage);
-                return match ? match.grade : 'F';
+                return match ? match.grade : 'C';
             }
             return getDefaultGrade(pct);
         };
@@ -760,9 +758,7 @@ router.get('/analytics/class/:classId', [auth, requireClassAccessParam('classId'
             'A': 0,
             'B+': 0,
             'B': 0,
-            'C': 0,
-            'D': 0,
-            'F': 0
+            'C': 0
         };
 
         studentPerformance.forEach(student => {

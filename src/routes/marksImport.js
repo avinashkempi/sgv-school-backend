@@ -137,17 +137,13 @@ router.post('/import/csv', [auth, yearContext, requireOpenYear], async (req, res
     }
 });
 
-/**
- * Helper function to calculate grade
- */
+// Helper function to calculate grade: 90-100 A+, 70-89 A, 50-69 B+, 30-49 B, Below 30 C
 function calculateGrade(percentage) {
     if (percentage >= 90) return 'A+';
-    if (percentage >= 80) return 'A';
-    if (percentage >= 70) return 'B+';
-    if (percentage >= 60) return 'B';
-    if (percentage >= 50) return 'C';
-    if (percentage >= 40) return 'D';
-    return 'F';
+    if (percentage >= 70) return 'A';
+    if (percentage >= 50) return 'B+';
+    if (percentage >= 30) return 'B';
+    return 'C';
 }
 
 /**
