@@ -46,6 +46,13 @@ const normalizeBranch = (branch) => {
 
 const classMapKey = (academicYearId, branch, className) => `${academicYearId || 'none'}:${branch}:${className.toUpperCase()}`;
 
+const executeInBatches = async (Model, ops, batchSize = 500) => {
+    for (let i = 0; i < ops.length; i += batchSize) {
+        const batch = ops.slice(i, i + batchSize);
+        await Model.bulkWrite(batch);
+    }
+};
+
 const processImport = async (csvData, options = { wipe: false }) => {
     const results = {
         total: csvData.length,
@@ -54,185 +61,209 @@ const processImport = async (csvData, options = { wipe: false }) => {
         failed: 0,
         errors: [],
         classCounts: {},
-        updatedStudents: []
+        updatedStudents: [],
+        createdStudents: []
     };
 
     // 1. Resolve Academic Year FIRST (needed for class creation and scoped wipes)
-        let academicYear;
-        if (options.academicYearId) {
-            academicYear = await AcademicYear.findById(options.academicYearId);
-        }
-        if (!academicYear) {
-            academicYear = await AcademicYear.findOne({ isActive: true });
-        }
-        if (!academicYear) {
-            academicYear = await AcademicYear.findOne({});
-        }
+    let academicYear;
+    if (options.academicYearId) {
+        academicYear = await AcademicYear.findById(options.academicYearId);
+    }
+    if (!academicYear) {
+        academicYear = await AcademicYear.findOne({ isActive: true });
+    }
+    if (!academicYear) {
+        academicYear = await AcademicYear.findOne({});
+    }
 
-        // 2. Optional Wipe, scoped to the selected or active academic year.
-        if (options.wipe) {
-            await wipeNonAdminData({ confirmed: true, academicYearId: academicYear?._id });
-        }
+    // 2. Optional Wipe, scoped to the selected or active academic year.
+    if (options.wipe) {
+        await wipeNonAdminData({ confirmed: true, academicYearId: academicYear?._id });
+    }
 
-        // 3. Extract and Create Classes from CSV, scoped by branch and academic year.
-        const uniqueClassEntries = new Map();
-        for (const row of csvData) {
+    // 3. Extract and Create Classes from CSV, scoped by branch and academic year.
+    const uniqueClassEntries = new Map();
+    for (const row of csvData) {
+        const className = row['Class'] ? row['Class'].toString().toUpperCase().trim() : '';
+        if (!className) continue;
+        const branch = normalizeBranch(row['Branch']);
+        uniqueClassEntries.set(classMapKey(academicYear?._id, branch, className), { className, branch });
+    }
+    console.log(`Found ${uniqueClassEntries.size} unique class/branch entries in CSV`);
+
+    for (const { className, branch } of uniqueClassEntries.values()) {
+        const classValue = className.toLowerCase().replace(/\s+/g, '_');
+        const existingClass = await Class.findOne({ name: className, branch, academicYear: academicYear?._id });
+        if (!existingClass) {
+            await Class.create({
+                name: className,
+                value: classValue,
+                label: className,
+                branch,
+                academicYear: academicYear ? academicYear._id : undefined
+            });
+        }
+    }
+
+    // 4. Cache Classes for the target academic year only.
+    const classes = await Class.find(academicYear ? { academicYear: academicYear._id } : {});
+    const classMap = new Map(classes.map(c => [classMapKey(c.academicYear, c.branch, c.name), c._id]));
+
+    // 5. Pre-fetch existing users in one query
+    const phoneNumbers = [];
+    for (const row of csvData) {
+        let phone = row['Phone 2'] ? row['Phone 2'].toString().replace(/\D/g, '') : '';
+        if (!phone && row['Phone']) {
+            phone = row['Phone'].toString().replace(/\D/g, '');
+        }
+        if (phone) phoneNumbers.push(phone);
+    }
+
+    const existingUsers = await User.find({ phone: { $in: phoneNumbers } }).lean();
+    const userMap = new Map(existingUsers.map(u => [u.phone, u]));
+
+    const processedFeeStructures = new Set();
+    const userBulkOps = [];
+    const feeBulkOps = [];
+
+    // 6. Process Rows
+    for (let i = 0; i < csvData.length; i++) {
+        const row = csvData[i];
+        const rowNumber = i + 2; // +1 for 0-index, +1 for header
+
+        try {
+            // Determine Login/Unique Phone
+            let loginPhone = row['Phone 2'] ? row['Phone 2'].toString().replace(/\D/g, '') : '';
+            const backupPhone = row['Phone'] ? row['Phone'].toString().replace(/\D/g, '') : '';
+
+            if (!loginPhone) {
+                loginPhone = backupPhone;
+            }
+
+            if (!loginPhone) {
+                throw new Error('No phone number found for student identity');
+            }
+
+            // Resolve Class
             const className = row['Class'] ? row['Class'].toString().toUpperCase().trim() : '';
-            if (!className) continue;
             const branch = normalizeBranch(row['Branch']);
-            uniqueClassEntries.set(classMapKey(academicYear?._id, branch, className), { className, branch });
-        }
-        console.log(`Found ${uniqueClassEntries.size} unique class/branch entries in CSV`);
+            const classId = classMap.get(classMapKey(academicYear?._id, branch, className));
 
-        for (const { className, branch } of uniqueClassEntries.values()) {
-            const classValue = className.toLowerCase().replace(/\s+/g, '_');
-            const existingClass = await Class.findOne({ name: className, branch, academicYear: academicYear?._id });
-            if (!existingClass) {
-                await Class.create({
-                    name: className,
-                    value: classValue,
-                    label: className,
-                    branch,
-                    academicYear: academicYear ? academicYear._id : undefined
-                });
+            if (!classId && className) {
+                console.warn(`Class ${className} not found in map for student ${row['Student Name']}`);
             }
-        }
 
-        // 4. Cache Classes for the target academic year only.
-        const classes = await Class.find(academicYear ? { academicYear: academicYear._id } : {});
-        const classMap = new Map(classes.map(c => [classMapKey(c.academicYear, c.branch, c.name), c._id]));
+            // Increment Class Count
+            if (className) {
+                results.classCounts[className] = (results.classCounts[className] || 0) + 1;
+            }
 
-
-        // Track processed classes for fee structure to avoid redundant DB calls per row
-        const processedFeeStructures = new Set();
-
-        // 4. Process Rows
-        for (let i = 0; i < csvData.length; i++) {
-            const row = csvData[i];
-            const rowNumber = i + 2; // +1 for 0-index, +1 for header
-
-            try {
-                // Determine Login/Unique Phone
-                // Logic: Phone 2 is primary. If empty, use Phone.
-                let loginPhone = row['Phone 2'] ? row['Phone 2'].toString().replace(/\D/g, '') : '';
-                const backupPhone = row['Phone'] ? row['Phone'].toString().replace(/\D/g, '') : '';
-
-                if (!loginPhone) {
-                    loginPhone = backupPhone;
-                }
-
-                if (!loginPhone) {
-                    throw new Error('No phone number found for student identity');
-                }
-
-                // Resolve Class
-                const className = row['Class'] ? row['Class'].toString().toUpperCase().trim() : '';
-                const branch = normalizeBranch(row['Branch']);
-                const classId = classMap.get(classMapKey(academicYear?._id, branch, className));
-
-                if (!classId && className) {
-                    console.warn(`Class ${className} not found in map for student ${row['Student Name']}`);
-                }
-
-                // Increment Class Count
-                if (className) {
-                    results.classCounts[className] = (results.classCounts[className] || 0) + 1;
-                }
-
-                // --- FEES ONLY MODE ---
-                if (options.feesOnly) {
-                    // Just find the student and update their fees — don't touch profile
-                    const student = await User.findOne({ phone: loginPhone });
-                    if (!student) {
-                        throw new Error(`Student not found with phone ${loginPhone} (Fees-Only mode skips student creation)`);
-                    }
-                    await processFees(student, row, academicYear, classId, branch);
-                    results.updated++;
-                    results.updatedStudents.push({
-                        name: student.name,
-                        phone: student.phone,
-                        class: className
-                    });
-                    continue; // Skip to next row
-                }
-
-                // --- FULL IMPORT MODE ---
-
-                // Process Fee Structure for Class (First record wins)
-                if (classId && academicYear && !processedFeeStructures.has(classId.toString())) {
-                    await processFeeStructure(classId, academicYear, row);
-                    processedFeeStructures.add(classId.toString());
-                }
-
-                // Construct Student Data
-                const studentData = {
-                    name: getRowValue(row, 'Student Name'),
-                    phone: loginPhone, // Unique Key
-                    guardianPhone: backupPhone, // Backup contact
-                    password: generateTemporaryPassword(loginPhone),
-                    mustChangePassword: true,
-                    role: 'student',
-                    currentClass: classId,
-                    academicYear: academicYear ? academicYear._id : null,
-
-                    // Profile Fields
-                    gender: getRowValue(row, 'Gender'),
-                    dateOfBirth: parseDate(getRowValue(row, 'Date of Birth')),
-                    address: getRowValue(row, 'Address'),
-                    remarks: getRowValue(row, 'Remarks'),
-
-                    // IDs
-                    regNo: getRowValue(row, 'Reg No'),
-                    satsNumber: getRowValue(row, 'SATS Number'),
-                    penNumber: getRowValue(row, 'PEN Number'),
-                    apaarId: getRowValue(row, 'APAAR ID')
-                };
-
-                // Upsert Student
-                let student = await User.findOne({ phone: loginPhone });
-                let isNew = false;
-
+            // --- FEES ONLY MODE ---
+            if (options.feesOnly) {
+                const student = userMap.get(loginPhone);
                 if (!student) {
-                    // Create new
-                    student = new User(studentData);
-                    isNew = true;
-                } else {
-                    // Update existing — exclude password so pre-save hook
-                    // doesn't double-hash an already-hashed password.
-                    const { password: _pw, mustChangePassword: _mcp, ...studentUpdateData } = studentData;
-                    Object.assign(student, studentUpdateData);
-                    // Add to updated list
-                    results.updatedStudents.push({
-                        name: student.name,
-                        phone: student.phone,
-                        class: className
-                    });
+                    throw new Error(`Student not found with phone ${loginPhone} (Fees-Only mode skips student creation)`);
                 }
+                const feeData = buildFeeData(student._id, row, academicYear, classId, branch);
+                feeBulkOps.push({
+                    updateOne: {
+                        filter: { student: student._id, academicYear: academicYear ? academicYear._id : null },
+                        update: { $set: feeData },
+                        upsert: true
+                    }
+                });
+                results.updated++;
+                results.updatedStudents.push({
+                    name: student.name,
+                    phone: student.phone,
+                    class: className
+                });
+                continue; // Skip to next row
+            }
 
-                await student.save();
-                if (isNew) {
-                    results.created++;
-                    if (!results.createdStudents) results.createdStudents = [];
-                    results.createdStudents.push({
-                        name: student.name,
-                        phone: student.phone,
-                        class: className,
-                        temporaryPassword: studentData.password
-                    });
-                } else results.updated++;
+            // --- FULL IMPORT MODE ---
+            if (classId && academicYear && !processedFeeStructures.has(classId.toString())) {
+                await processFeeStructure(classId, academicYear, row);
+                processedFeeStructures.add(classId.toString());
+            }
 
-                // Process Fees
-                await processFees(student, row, academicYear, classId, branch);
+            const studentData = {
+                name: getRowValue(row, 'Student Name'),
+                phone: loginPhone,
+                guardianPhone: backupPhone,
+                password: generateTemporaryPassword(loginPhone),
+                mustChangePassword: true,
+                role: 'student',
+                currentClass: classId,
+                academicYear: academicYear ? academicYear._id : null,
+                gender: getRowValue(row, 'Gender'),
+                dateOfBirth: parseDate(getRowValue(row, 'Date of Birth')),
+                address: getRowValue(row, 'Address'),
+                remarks: getRowValue(row, 'Remarks'),
+                regNo: getRowValue(row, 'Reg No'),
+                satsNumber: getRowValue(row, 'SATS Number'),
+                penNumber: getRowValue(row, 'PEN Number'),
+                apaarId: getRowValue(row, 'APAAR ID')
+            };
 
-            } catch (error) {
-                results.failed++;
-                results.errors.push({
-                    row: rowNumber,
-                    name: row['Student Name'],
-                    error: error.message
+            let student = userMap.get(loginPhone);
+            if (!student) {
+                const newId = new mongoose.Types.ObjectId();
+                studentData._id = newId;
+                userBulkOps.push({ insertOne: { document: studentData } });
+                userMap.set(loginPhone, studentData);
+                student = studentData;
+                results.created++;
+                if (!results.createdStudents) results.createdStudents = [];
+                results.createdStudents.push({
+                    name: studentData.name,
+                    phone: studentData.phone,
+                    class: className,
+                    temporaryPassword: studentData.password
+                });
+            } else {
+                const { password: _pw, mustChangePassword: _mcp, ...studentUpdateData } = studentData;
+                userBulkOps.push({
+                    updateOne: {
+                        filter: { _id: student._id },
+                        update: { $set: studentUpdateData }
+                    }
+                });
+                Object.assign(student, studentUpdateData);
+                results.updated++;
+                results.updatedStudents.push({
+                    name: student.name,
+                    phone: student.phone,
+                    class: className
                 });
             }
+
+            const feeData = buildFeeData(student._id, row, academicYear, classId, branch);
+            feeBulkOps.push({
+                updateOne: {
+                    filter: { student: student._id, academicYear: academicYear ? academicYear._id : null },
+                    update: { $set: feeData },
+                    upsert: true
+                }
+            });
+
+        } catch (error) {
+            results.failed++;
+            results.errors.push({
+                row: rowNumber,
+                name: row['Student Name'],
+                error: error.message
+            });
         }
+    }
+
+    if (userBulkOps.length > 0) {
+        await executeInBatches(User, userBulkOps);
+    }
+    if (feeBulkOps.length > 0) {
+        await executeInBatches(StudentFee, feeBulkOps);
+    }
 
     return results;
 };
@@ -240,20 +271,13 @@ const processImport = async (csvData, options = { wipe: false }) => {
 // Helper to create Fee Structure from CSV Row
 const processFeeStructure = async (classId, academicYear, row) => {
     try {
-        // Check if exists for this class/year/default type
         const existing = await FeeStructure.findOne({
             class: classId,
             academicYear: academicYear._id,
             type: 'class_default'
         });
 
-        // Use the Total Fees from the row as the Tuition Fee
         const totalFees = parseCurrency(row['Total Fees']);
-
-        // NOTE: The CSV ("Inst 1 Date", etc.) contains ACTUAL PAYMENT dates/amounts, not a planned schedule.
-        // Therefore, we cannot infer a strict "Due Date" schedule for the whole class from one student's payment history.
-        // We will create the structure with the Total Amount and Component, leaving the schedule empty for now.
-        // Admins can manually add a schedule in the detailed settings if needed.
 
         const structureData = {
             class: classId,
@@ -265,44 +289,40 @@ const processFeeStructure = async (classId, academicYear, row) => {
                 amount: totalFees,
                 mandatory: true
             }],
-            paymentSchedule: [], // No schedule from CSV
+            paymentSchedule: [],
             updatedAt: Date.now()
         };
 
         if (existing) {
-            // Update existing structure to match CSV (Source of Truth)
             Object.assign(existing, structureData);
             await existing.save();
         } else {
-            // Create new
             await FeeStructure.create(structureData);
         }
 
     } catch (error) {
         console.error(`Error processing fee structure for class ${classId}:`, error);
-        // We log but don't fail the entire import, as individual student fees are processed separately
     }
 };
 
-const processFees = async (student, row, academicYear, classId, branch) => {
-    // Construct Fee Record
+const buildFeeData = (studentId, row, academicYear, classId, branch) => {
     const feeData = {
-        student: student._id,
+        student: studentId,
         academicYear: academicYear ? academicYear._id : null,
         class: classId,
         branch: branch,
 
         totalFees: parseCurrency(row['Total Fees']),
         arrears: parseCurrency(row['Arrears / Previous Dues'] || row['Previous Dues'] || row['Arrears']),
-        toPay: parseCurrency(row['To pay']), // Ensure this is accurate from CSV
+        toPay: parseCurrency(row['To pay']),
         totalPaid: parseCurrency(row['Total Paid']),
         pendingAmount: parseCurrency(row['Pending']),
         concession: parseCurrency(row['Concession']),
 
-        payments: []
+        payments: [],
+        updatedAt: new Date()
     };
 
-    // Parse 6 Installments
     for (let k = 1; k <= 6; k++) {
         const amount = parseCurrency(row[`Inst ${k} Amount`]);
         if (amount > 0) {
@@ -311,15 +331,19 @@ const processFees = async (student, row, academicYear, classId, branch) => {
                 amount: amount,
                 date: parseDate(row[`Inst ${k} Date`]),
                 invoiceNumber: row[`Inst ${k} Invoice`],
-                paymentMode: row[`Inst ${k} Mode`] || 'Cash' // Use mode from CSV if available, else Cash
+                paymentMode: row[`Inst ${k} Mode`] || 'Cash'
             });
         }
     }
 
-    // Upsert Fee Record - Using $set to overwrite all fields with CSV data
+    return feeData;
+};
+
+const processFees = async (student, row, academicYear, classId, branch) => {
+    const feeData = buildFeeData(student._id, row, academicYear, classId, branch);
     await StudentFee.findOneAndUpdate(
         { student: student._id, academicYear: academicYear ? academicYear._id : null },
-        { $set: feeData }, // Explicitly set all fields to match CSV
+        { $set: feeData },
         { upsert: true, new: true }
     );
 };
@@ -336,6 +360,17 @@ const processStaffImport = async (csvData) => {
         updatedStaff: []
     };
 
+    const phoneNumbers = [];
+    for (const row of csvData) {
+        const phone = row['Phone'] ? row['Phone'].toString().replace(/\D/g, '') : '';
+        if (phone) phoneNumbers.push(phone);
+    }
+
+    const existingStaff = await User.find({ phone: { $in: phoneNumbers } }).lean();
+    const staffMap = new Map(existingStaff.map(u => [u.phone, u]));
+
+    const userBulkOps = [];
+
     for (let i = 0; i < csvData.length; i++) {
         const row = csvData[i];
         const rowNumber = i + 2;
@@ -349,8 +384,7 @@ const processStaffImport = async (csvData) => {
                 throw new Error('Name and Contact are required');
             }
 
-            // Determine Role
-            let role = 'support_staff'; // Default
+            let role = 'support_staff';
             const lowerDesig = designation.toLowerCase();
 
             if (lowerDesig === 'headmaster' || lowerDesig === 'principal') {
@@ -363,59 +397,46 @@ const processStaffImport = async (csvData) => {
                 role = 'support_staff';
             }
 
-            // Count Designations
             results.designationCounts[designation] = (results.designationCounts[designation] || 0) + 1;
 
-            // Construct User Data
             const userData = {
                 name: name,
                 phone: phone,
                 password: generateTemporaryPassword(phone),
                 mustChangePassword: true,
                 role: role,
-                designation: designation, // Store exact designation
+                designation: designation,
 
-                // Profile Fields
                 dateOfBirth: parseDate(row['Date of Birth']),
                 bloodGroup: row['Blood Group'],
                 address: row['Address'],
 
-                // Ensure no student-specific fields interfere
                 currentClass: null,
                 academicYear: null
             };
 
-            // Upsert User
-            let user = await User.findOne({ phone: phone });
-            let isNew = false;
-
+            let user = staffMap.get(phone);
             if (!user) {
-                user = new User(userData);
-                isNew = true;
-            } else {
-                // Update existing — exclude password so pre-save hook
-                // doesn't double-hash an already-hashed password.
-                const { password: _pw, mustChangePassword: _mcp, ...userUpdateData } = userData;
-                // Only update if role is not super admin (safety)
-                if (user.role !== 'super admin') {
-                    Object.assign(user, userUpdateData);
-                } else {
-                    // If super admin, update profile details but NOT role
-                    const { role, ...safeUpdates } = userUpdateData;
-                    Object.assign(user, safeUpdates);
-                }
-            }
-
-            await user.save();
-            if (isNew) {
+                const newId = new mongoose.Types.ObjectId();
+                userData._id = newId;
+                userBulkOps.push({ insertOne: { document: userData } });
+                staffMap.set(phone, userData);
                 results.created++;
                 results.createdStaff.push({
-                    name: user.name,
-                    designation: user.designation,
-                    phone: user.phone,
+                    name: userData.name,
+                    designation: userData.designation,
+                    phone: userData.phone,
                     temporaryPassword: userData.password
                 });
             } else {
+                const { password: _pw, mustChangePassword: _mcp, ...userUpdateData } = userData;
+                if (user.role !== 'super admin') {
+                    userBulkOps.push({ updateOne: { filter: { _id: user._id }, update: { $set: userUpdateData } } });
+                } else {
+                    const { role: _r, ...safeUpdates } = userUpdateData;
+                    userBulkOps.push({ updateOne: { filter: { _id: user._id }, update: { $set: safeUpdates } } });
+                }
+                Object.assign(user, userUpdateData);
                 results.updated++;
                 results.updatedStaff.push({
                     name: user.name,
@@ -432,6 +453,10 @@ const processStaffImport = async (csvData) => {
                 error: error.message
             });
         }
+    }
+
+    if (userBulkOps.length > 0) {
+        await executeInBatches(User, userBulkOps);
     }
 
     return results;
