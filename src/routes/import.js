@@ -107,7 +107,7 @@ router.get('/template', authenticateToken, checkRole(['admin', 'super admin']), 
  * @desc Import students from local data folder (Direct Sync)
  * @access Private (Admin)
  */
-router.post('/students/local', authenticateToken, checkRole(['super admin']), ensureImportAllowed, validateWipeRequest, async (req, res) => {
+router.post('/students/local', authenticateToken, checkRole(['admin', 'super admin']), ensureImportAllowed, validateWipeRequest, async (req, res) => {
     const filePath = './data/student_data.csv';
     const wipeData = req.body.wipe === 'true';
     const academicYearId = req.body.academicYearId;
@@ -151,7 +151,7 @@ router.post('/students/local', authenticateToken, checkRole(['super admin']), en
  * @desc Import staff from local data folder (Direct Sync)
  * @access Private (Admin)
  */
-router.post('/staff/local', authenticateToken, checkRole(['super admin']), ensureImportAllowed, async (req, res) => {
+router.post('/staff/local', authenticateToken, checkRole(['admin', 'super admin']), ensureImportAllowed, async (req, res) => {
     const filePath = './data/staff_data.csv';
     const results = [];
 
