@@ -652,7 +652,6 @@ exports.getStudentStats = async (req, res) => {
                 { $unwind: '$examDetails' },
                 {
                     $match: {
-                        'examDetails.marksPublished': true,
                         'examDetails.standardizedType': { $exists: true, $ne: null }
                     }
                 },
