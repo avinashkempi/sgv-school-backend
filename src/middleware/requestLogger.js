@@ -13,11 +13,11 @@ const requestLogger = (req, res, next) => {
 
     const statusCode = res.statusCode;
 
-    // Only log error responses (4xx/5xx) unless LOG_ALL_REQUESTS or LOG_LEVEL=info/debug is enabled
+    // Only log server error responses (5xx) unless LOG_ALL_REQUESTS or LOG_LEVEL=info/debug is enabled
     const logAll = process.env.LOG_ALL_REQUESTS === 'true' ||
                    ['info', 'debug'].includes(process.env.LOG_LEVEL?.toLowerCase());
 
-    if (statusCode < 400 && !logAll) {
+    if (statusCode < 500 && !logAll) {
       return;
     }
 
