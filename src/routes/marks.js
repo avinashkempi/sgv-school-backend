@@ -740,7 +740,8 @@ router.get('/analytics/class/:classId', [auth, requireClassAccessParam('classId'
                 totalMax,
                 percentage: parseFloat(percentage),
                 grade: getDefaultGrade(parseFloat(percentage)),
-                examsAttempted: studentMarks.length
+                examsAttempted: studentMarks.length,
+                totalExams: exams.length
             };
         });
 
