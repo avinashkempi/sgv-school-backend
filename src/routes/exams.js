@@ -459,11 +459,9 @@ router.get('/schedule/student', [auth, yearContext], async (req, res) => {
     try {
         const user = await User.findById(req.user.userId);
         if (!user || user.role !== 'student') return res.status(403).json({ message: 'Not authorized' });
-        const today = new Date(); today.setHours(0, 0, 0, 0);
         const exams = await Exam.find({
             class: user.currentClass,
             academicYear: req.academicYearContext,
-            date: { $gte: today },
             isStandardized: true
         }).populate('subject class').sort({ date: 1 }).lean();
         res.json(exams);
