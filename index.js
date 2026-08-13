@@ -34,6 +34,9 @@ app.set('etag', 'strong');
 // Connect to MongoDB
 connectDB();
 
+// Initialize Redis (optional with graceful fallback)
+require('./src/config/redis');
+
 // Request Tracking & Logging Middleware
 app.use(requestId);
 app.use(requestLogger);

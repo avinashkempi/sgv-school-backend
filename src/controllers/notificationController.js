@@ -3,6 +3,7 @@ const Notification = require('../models/Notification');
 const NotificationPreference = require('../models/NotificationPreference');
 const User = require('../models/User');
 const { sendTargetedNotification } = require('../services/notificationService');
+const { cacheGet, cacheSet, cacheDel, cacheInvalidatePattern } = require('../config/redis');
 
 /**
  * Get notifications for current user with filtering
@@ -37,11 +38,11 @@ exports.getNotifications = async (req, res) => {
         }
 
         if (req.user.role === 'student') {
-            const user = await User.findById(req.user.userId);
-            if (user && user.currentClass) {
+            const currentClass = req.user.currentClass || (await User.findById(req.user.userId).select('currentClass').lean())?.currentClass;
+            if (currentClass) {
                 query.$or.push({
                     recipient: null,
-                    targetClass: user.currentClass,
+                    targetClass: currentClass,
                     isArchived: isArchived === 'true'
                 });
             }
@@ -59,15 +60,30 @@ exports.getNotifications = async (req, res) => {
             if (isRead !== undefined) query.isRead = isRead === 'true';
         }
 
-        const notifications = await Notification.find(query)
-            .select('-actionData -metadata')
-            .sort({ createdAt: -1 })
-            .skip(skip)
-            .limit(limit)
-            .lean();
+        // Fetch paginated notifications and counts in parallel using aggregate
+        const [notifications, countStats] = await Promise.all([
+            Notification.find(query)
+                .select('-actionData -metadata')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limit)
+                .lean(),
+            Notification.aggregate([
+                { $match: query },
+                {
+                    $group: {
+                        _id: null,
+                        total: { $sum: 1 },
+                        unread: {
+                            $sum: { $cond: [{ $eq: ['$isRead', false] }, 1, 0] }
+                        }
+                    }
+                }
+            ])
+        ]);
 
-        const total = await Notification.countDocuments(query);
-        const unreadCount = await Notification.countDocuments({ ...query, isRead: false });
+        const total = countStats[0]?.total || 0;
+        const unreadCount = countStats[0]?.unread || 0;
 
         res.json({
             success: true,
@@ -88,6 +104,16 @@ exports.getNotifications = async (req, res) => {
  */
 exports.getUnreadCount = async (req, res) => {
     try {
+        const cacheKey = `unreadCount:${req.user.userId}`;
+
+        // 1. Check Redis cache (30s TTL)
+        try {
+            const cachedCount = await cacheGet(cacheKey);
+            if (cachedCount !== null && typeof cachedCount.unreadCount === 'number') {
+                return res.json({ success: true, unreadCount: cachedCount.unreadCount });
+            }
+        } catch (_) {}
+
         const orClauses = [
             { recipient: req.user.userId },
             {
@@ -99,11 +125,11 @@ exports.getUnreadCount = async (req, res) => {
 
         // Students also receive class-broadcast notifications
         if (req.user.role === 'student') {
-            const user = await User.findById(req.user.userId).select('currentClass').lean();
-            if (user?.currentClass) {
+            const currentClass = req.user.currentClass || (await User.findById(req.user.userId).select('currentClass').lean())?.currentClass;
+            if (currentClass) {
                 orClauses.push({
                     recipient: null,
-                    targetClass: user.currentClass,
+                    targetClass: currentClass,
                     isArchived: false
                 });
             }
@@ -111,6 +137,9 @@ exports.getUnreadCount = async (req, res) => {
 
         const query = { isRead: false, isArchived: false, $or: orClauses };
         const count = await Notification.countDocuments(query);
+
+        // Store in Redis with 30s TTL
+        cacheSet(cacheKey, { unreadCount: count }, 30).catch(() => {});
 
         res.json({ success: true, unreadCount: count });
     } catch (err) {
@@ -153,6 +182,9 @@ exports.markAsRead = async (req, res) => {
         notification.readAt = isRead ? new Date() : null;
         await notification.save();
 
+        // Invalidate unread count cache for requesting user
+        cacheDel(`unreadCount:${req.user.userId}`).catch(() => {});
+
         res.json({ success: true, notification });
     } catch (err) {
         console.error('[Notification Controller] Mark Read Error:', err.message);
@@ -182,6 +214,9 @@ exports.markAllAsRead = async (req, res) => {
             },
             { $set: { isRead: true, readAt: new Date() } }
         );
+
+        // Invalidate unread count cache
+        cacheDel(`unreadCount:${req.user.userId}`).catch(() => {});
 
         res.json({
             success: true,
@@ -224,6 +259,9 @@ exports.archiveNotification = async (req, res) => {
         notification.archivedAt = isArchived ? new Date() : null;
         await notification.save();
 
+        // Invalidate unread count cache
+        cacheDel(`unreadCount:${req.user.userId}`).catch(() => {});
+
         res.json({ success: true, notification });
     } catch (err) {
         console.error('[Notification Controller] Archive Error:', err.message);
@@ -246,6 +284,9 @@ exports.deleteNotification = async (req, res) => {
         if (!notification) {
             return res.status(404).json({ success: false, message: 'Notification not found' });
         }
+
+        // Invalidate unread counts across all users
+        cacheInvalidatePattern('unreadCount:*').catch(() => {});
 
         res.json({ success: true, message: 'Notification deleted' });
     } catch (err) {
@@ -296,6 +337,13 @@ exports.sendNotification = async (req, res) => {
         });
 
         await notification.save();
+
+        // Invalidate unread counts
+        if (recipient) {
+            cacheDel(`unreadCount:${recipient}`).catch(() => {});
+        } else {
+            cacheInvalidatePattern('unreadCount:*').catch(() => {});
+        }
 
         // Send Push Notification
         await sendTargetedNotification(target, targetId, {

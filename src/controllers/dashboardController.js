@@ -9,6 +9,17 @@ const Class = require('../models/Class');
 const Subject = require('../models/Subject');
 const Exam = require('../models/Exam');
 const AcademicYear = require('../models/AcademicYear');
+const { cacheGet, cacheSet, cacheInvalidatePattern } = require('../config/redis');
+
+// In-memory fallback caches
+const adminStatsCache = new Map();
+const teacherStatsCache = new Map();
+const studentStatsCache = new Map();
+
+const MEMORY_CACHE_TTL = 60 * 1000; // 60 seconds local fallback
+const ADMIN_STATS_REDIS_TTL = 120; // 2 minutes
+const TEACHER_STATS_REDIS_TTL = 120; // 2 minutes
+const STUDENT_STATS_REDIS_TTL = 300; // 5 minutes
 
 // Helper to calculate date range
 const getDateRange = (range) => {
@@ -52,19 +63,27 @@ const getDateRange = (range) => {
     return { startDate, endDate };
 };
 
-const adminStatsCache = new Map();
-const CACHE_TTL = 60 * 1000; // 60 seconds
-
 // Admin Stats
 exports.getAdminStats = async (req, res) => {
     try {
         const { range = 'thisMonth' } = req.query;
-        const cacheKey = `adminStats_${range}_${req.academicYearContext}`;
+        const yearCtx = req.academicYearContext || (req.activeYear ? req.activeYear._id.toString() : 'default');
+        const cacheKey = `adminStats:${range}:${yearCtx}`;
 
-        const cached = adminStatsCache.get(cacheKey);
-        if (cached && Date.now() - cached.ts < CACHE_TTL) {
-            return res.json(cached.data);
+        // 1. Fast local memory cache check
+        const memCached = adminStatsCache.get(cacheKey);
+        if (memCached && Date.now() - memCached.ts < MEMORY_CACHE_TTL) {
+            return res.json(memCached.data);
         }
+
+        // 2. Redis cache check
+        try {
+            const redisData = await cacheGet(cacheKey);
+            if (redisData) {
+                adminStatsCache.set(cacheKey, { data: redisData, ts: Date.now() });
+                return res.json(redisData);
+            }
+        } catch (_) {}
 
         const { startDate, endDate } = getDateRange(range);
 
@@ -80,15 +99,13 @@ exports.getAdminStats = async (req, res) => {
 
         const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-        // Parallel Execution - query both StudentFee.payments (imported) and FeePayment (app-recorded)
+        // Parallel Execution - query both StudentFee.payments (imported) and FeePayment (app-recorded) using $facet
         const [
             totalStudents,
             totalTeachers,
             attendanceToday,
-            importedFees,
-            appFees,
-            prevImportedFees,
-            prevAppFees,
+            combinedImportedFees,
+            combinedAppFees,
             prevAttendance,
             recentComplaints,
             totalClasses,
@@ -102,41 +119,43 @@ exports.getAdminStats = async (req, res) => {
                 role: 'student',
                 academicYear: req.academicYearContext
             }).lean(),
-            // Imported fees (StudentFee.payments)
+            // Imported fees current + previous combined via $facet
             StudentFee.aggregate([
                 { $match: { academicYear: new mongoose.Types.ObjectId(req.academicYearContext) } },
                 { $unwind: "$payments" },
-                { $match: { "payments.date": { $gte: startDate, $lte: endDate } } },
-                { $group: { _id: null, total: { $sum: "$payments.amount" } } }
+                {
+                    $facet: {
+                        current: [
+                            { $match: { "payments.date": { $gte: startDate, $lte: endDate } } },
+                            { $group: { _id: null, total: { $sum: "$payments.amount" } } }
+                        ],
+                        previous: [
+                            { $match: { "payments.date": { $gte: prevStartDate, $lt: prevEndDate } } },
+                            { $group: { _id: null, total: { $sum: "$payments.amount" } } }
+                        ]
+                    }
+                }
             ]),
-            // App-recorded fees (FeePayment)
+            // App-recorded fees current + previous combined via $facet
             FeePayment.aggregate([
                 { 
                     $match: { 
                         status: 'success', 
-                        paymentDate: { $gte: startDate, $lte: endDate },
                         academicYear: new mongoose.Types.ObjectId(req.academicYearContext)
                     } 
                 },
-                { $group: { _id: null, total: { $sum: "$amount" } } }
-            ]),
-            // Previous period imported fees
-            StudentFee.aggregate([
-                { $match: { academicYear: new mongoose.Types.ObjectId(req.academicYearContext) } },
-                { $unwind: "$payments" },
-                { $match: { "payments.date": { $gte: prevStartDate, $lt: prevEndDate } } },
-                { $group: { _id: null, total: { $sum: "$payments.amount" } } }
-            ]),
-            // Previous period app-recorded fees
-            FeePayment.aggregate([
-                { 
-                    $match: { 
-                        status: 'success', 
-                        paymentDate: { $gte: prevStartDate, $lt: prevEndDate },
-                        academicYear: new mongoose.Types.ObjectId(req.academicYearContext)
-                    } 
-                },
-                { $group: { _id: null, total: { $sum: "$amount" } } }
+                {
+                    $facet: {
+                        current: [
+                            { $match: { paymentDate: { $gte: startDate, $lte: endDate } } },
+                            { $group: { _id: null, total: { $sum: "$amount" } } }
+                        ],
+                        previous: [
+                            { $match: { paymentDate: { $gte: prevStartDate, $lt: prevEndDate } } },
+                            { $group: { _id: null, total: { $sum: "$amount" } } }
+                        ]
+                    }
+                }
             ]),
             Attendance.find({
                 date: { $gte: prevStartDate, $lt: prevEndDate },
@@ -178,15 +197,20 @@ exports.getAdminStats = async (req, res) => {
             : 0;
         const attendanceTrend = (attendancePercentage - prevAttendancePercentage).toFixed(1);
 
-        // Combine imported + app-recorded fees
-        const totalCollected = (importedFees[0]?.total || 0) + (appFees[0]?.total || 0);
-        const prevTotalCollected = (prevImportedFees[0]?.total || 0) + (prevAppFees[0]?.total || 0);
+        // Combine imported + app-recorded fees from facet results
+        const currentImported = combinedImportedFees[0]?.current[0]?.total || 0;
+        const prevImported = combinedImportedFees[0]?.previous[0]?.total || 0;
+        const currentApp = combinedAppFees[0]?.current[0]?.total || 0;
+        const prevApp = combinedAppFees[0]?.previous[0]?.total || 0;
+
+        const totalCollected = currentImported + currentApp;
+        const prevTotalCollected = prevImported + prevApp;
         const feeCollectionTrend = prevTotalCollected > 0
             ? (((totalCollected - prevTotalCollected) / prevTotalCollected) * 100).toFixed(1)
             : 0;
 
         // Fee Trend Logic - show all months of academic year
-        const activeYear = await AcademicYear.findById(req.academicYearContext).lean();
+        const activeYear = req.activeYear || await AcademicYear.findById(req.academicYearContext).lean();
         let feeTrend = [];
 
         if (activeYear) {
@@ -290,6 +314,7 @@ exports.getAdminStats = async (req, res) => {
         };
 
         adminStatsCache.set(cacheKey, { data: responseData, ts: Date.now() });
+        cacheSet(cacheKey, responseData, ADMIN_STATS_REDIS_TTL).catch(() => {});
         res.json(responseData);
 
     } catch (error) {
@@ -303,38 +328,52 @@ exports.getTeacherStats = async (req, res) => {
     try {
         const teacherId = req.user.userId;
         const range = req.query.range || 'thisWeek';
+        const yearCtx = req.academicYearContext || (req.activeYear ? req.activeYear._id.toString() : 'default');
+        const cacheKey = `teacherStats:${teacherId}:${range}:${yearCtx}`;
+
+        // 1. Fast local memory cache check
+        const memCached = teacherStatsCache.get(cacheKey);
+        if (memCached && Date.now() - memCached.ts < MEMORY_CACHE_TTL) {
+            return res.json(memCached.data);
+        }
+
+        // 2. Redis cache check
+        try {
+            const redisData = await cacheGet(cacheKey);
+            if (redisData) {
+                teacherStatsCache.set(cacheKey, { data: redisData, ts: Date.now() });
+                return res.json(redisData);
+            }
+        } catch (_) {}
+
         const today = new Date();
         today.setHours(0, 0, 0, 0);
         const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
         const currentDay = days[today.getDay()];
 
-        // 1. Classes Today (from Timetable)
+        // 1. Fetch My Class (as class teacher) & all timetables in parallel
         const Timetable = require('../models/Timetable');
-        const timetables = await Timetable.find({
-            "schedule.day": currentDay,
-            "schedule.periods.teacher": teacherId
-        }).lean();
+        const [myClass, allTeacherTimetables] = await Promise.all([
+            Class.findOne({ classTeacher: teacherId }).lean(),
+            Timetable.find({
+                "schedule.periods.teacher": teacherId
+            }).populate('class', 'name section').lean()
+        ]);
 
+        const activeYear = req.activeYear;
+
+        // Calculate classes today & total distinct classes from single query result
         let classesTodayCount = 0;
-        timetables.forEach(tt => {
-            const daySchedule = tt.schedule.find(s => s.day === currentDay);
-            if (daySchedule) {
+        const teacherClassIds = new Set();
+
+        allTeacherTimetables.forEach(tt => {
+            if (tt.class) teacherClassIds.add(tt.class._id.toString());
+            const daySchedule = tt.schedule?.find(s => s.day === currentDay);
+            if (daySchedule && daySchedule.periods) {
                 classesTodayCount += daySchedule.periods.filter(p => p.teacher && p.teacher.toString() === teacherId).length;
             }
         });
 
-        // 2. My Class (as class teacher)
-        const myClass = await Class.findOne({ classTeacher: teacherId }).lean();
-        const activeYear = await AcademicYear.findOne({ isActive: true }).lean();
-
-        // Count total distinct classes teacher teaches (from timetable)
-        const allTeacherTimetables = await Timetable.find({
-            "schedule.periods.teacher": teacherId
-        }).populate('class', 'name section').lean();
-        const teacherClassIds = new Set();
-        allTeacherTimetables.forEach(tt => {
-            if (tt.class) teacherClassIds.add(tt.class._id.toString());
-        });
         const totalClassesTaught = teacherClassIds.size;
 
         let myStudentCount = 0;
@@ -541,7 +580,7 @@ exports.getTeacherStats = async (req, res) => {
             });
         }
 
-        res.json({
+        const responseData = {
             overview: {
                 classesToday: classesTodayCount,
                 totalClassesTaught: totalClassesTaught,
@@ -560,7 +599,11 @@ exports.getTeacherStats = async (req, res) => {
                     data: attendanceTrendData
                 }
             }
-        });
+        };
+
+        teacherStatsCache.set(cacheKey, { data: responseData, ts: Date.now() });
+        cacheSet(cacheKey, responseData, TEACHER_STATS_REDIS_TTL).catch(() => {});
+        res.json(responseData);
 
     } catch (error) {
         console.error('Teacher Stats Error:', error);
@@ -572,12 +615,27 @@ exports.getTeacherStats = async (req, res) => {
 exports.getStudentStats = async (req, res) => {
     try {
         const studentId = req.user.userId;
+        const activeYear = req.activeYear;
+        const yearCtx = req.academicYearContext || (activeYear ? activeYear._id.toString() : 'default');
+        const cacheKey = `studentStats:${studentId}:${yearCtx}`;
 
-        const activeYear = await AcademicYear.findOne({ isActive: true }).lean();
+        // 1. Fast local memory cache check
+        const memCached = studentStatsCache.get(cacheKey);
+        if (memCached && Date.now() - memCached.ts < MEMORY_CACHE_TTL) {
+            return res.json(memCached.data);
+        }
+
+        // 2. Redis cache check
+        try {
+            const redisData = await cacheGet(cacheKey);
+            if (redisData) {
+                studentStatsCache.set(cacheKey, { data: redisData, ts: Date.now() });
+                return res.json(redisData);
+            }
+        } catch (_) {}
 
         // Get student info (class)
-        const student = await User.findById(studentId).select('currentClass').lean();
-        const classId = student?.currentClass;
+        const classId = req.user.currentClass || (await User.findById(studentId).select('currentClass').lean())?.currentClass;
 
         // Academic year date range for attendance
         let ayStart = null, ayEnd = new Date();
@@ -714,7 +772,7 @@ exports.getStudentStats = async (req, res) => {
             ? new Date(nextExam.examDate).toISOString().split('T')[0]
             : null;
 
-        res.json({
+        const responseData = {
             overview: {
                 attendancePercentage: parseFloat(attendancePercentage),
                 attendanceTrend: parseFloat(attendanceTrend),
@@ -727,10 +785,50 @@ exports.getStudentStats = async (req, res) => {
             charts: {
                 performanceTrend
             }
-        });
+        };
+
+        studentStatsCache.set(cacheKey, { data: responseData, ts: Date.now() });
+        cacheSet(cacheKey, responseData, STUDENT_STATS_REDIS_TTL).catch(() => {});
+        res.json(responseData);
 
     } catch (error) {
         console.error('Student Dashboard Error:', error);
         res.status(500).json({ message: 'Server Error', error: error.message });
     }
+};
+
+/**
+ * Invalidate all dashboard caches across in-memory and Redis
+ */
+exports.invalidateDashboardCaches = async () => {
+    adminStatsCache.clear();
+    teacherStatsCache.clear();
+    studentStatsCache.clear();
+    try {
+        await Promise.all([
+            cacheInvalidatePattern('adminStats:*'),
+            cacheInvalidatePattern('teacherStats:*'),
+            cacheInvalidatePattern('studentStats:*')
+        ]);
+    } catch (_) {}
+};
+
+/**
+ * Invalidate specific teacher dashboard cache
+ */
+exports.invalidateTeacherDashboard = async (teacherId) => {
+    teacherStatsCache.clear();
+    try {
+        await cacheInvalidatePattern(`teacherStats:${teacherId}:*`);
+    } catch (_) {}
+};
+
+/**
+ * Invalidate specific student dashboard cache
+ */
+exports.invalidateStudentDashboard = async (studentId) => {
+    studentStatsCache.clear();
+    try {
+        await cacheInvalidatePattern(`studentStats:${studentId}:*`);
+    } catch (_) {}
 };

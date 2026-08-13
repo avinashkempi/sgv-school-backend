@@ -9,6 +9,8 @@ const Marks = require('../models/Marks');
 const LeaveRequest = require('../models/LeaveRequest');
 const yearAnalytics = require('../services/yearAnalytics');
 const crypto = require('crypto');
+const { invalidateYearCache } = require('../middleware/yearContext');
+const { invalidateDashboardCaches } = require('./dashboardController');
 // NOTE: Rollback data is now persisted on the AcademicYear document (nextYear.rollbackData)
 // instead of an in-memory Map, so it survives server restarts.
 
@@ -87,6 +89,10 @@ exports.activateYear = async (req, res) => {
         );
 
         console.log(`[ACTIVATE] Year: ${year.name} | Students moved: ${studentResult.modifiedCount} | Classes linked: ${classResult.modifiedCount}`);
+
+        // Invalidate active year cache & dashboard stats
+        invalidateYearCache();
+        invalidateDashboardCaches().catch(() => {});
 
         res.json({
             success: true,
@@ -424,6 +430,10 @@ exports.executeTransition = async (req, res) => {
                 nextYear.transitionBy = req.user.id;
                 await nextYear.save();
 
+                // Invalidate active year cache & dashboard stats
+                invalidateYearCache();
+                invalidateDashboardCaches().catch(() => {});
+
                 console.log(`[TRANSITION] COMPLETE. Welcome to ${nextYear.name}.`);
 
             } catch (bgErr) {
@@ -464,6 +474,10 @@ exports.rollbackTransition = async (req, res) => {
 
         // Perform rollback
         await performRollback(yearWithRollback.rollbackData.snapshot);
+
+        // Invalidate active year cache & dashboard stats
+        invalidateYearCache();
+        invalidateDashboardCaches().catch(() => {});
 
         // Clear rollback data from DB after use
         yearWithRollback.rollbackData = undefined;
@@ -639,6 +653,9 @@ exports.incrementYear = async (req, res) => {
         nextYear.isActive = true;
         nextYear.status = 'current';
         await nextYear.save();
+
+        // Invalidate active year cache
+        invalidateYearCache();
 
         res.json({ msg: `Academic year incremented to ${nextYear.name}. Students promoted.` });
 

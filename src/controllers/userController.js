@@ -1,5 +1,6 @@
 const { validationResult } = require('express-validator');
 const User = require('../models/User');
+const { invalidateUserCache } = require('../middleware/auth');
 
 const MAX_PAGE_LIMIT = 100;
 const ALLOWED_SORT_FIELDS = new Set(['createdAt', 'name', 'role', 'phone', 'email']);
@@ -350,6 +351,9 @@ const updateUser = async (req, res) => {
 
     await user.save();
 
+    // Clear auth cache for this user so changes take effect immediately
+    invalidateUserCache(user._id);
+
     res.json({
       success: true,
       message: 'User updated successfully',
@@ -381,6 +385,9 @@ const deleteUser = async (req, res) => {
         message: 'User not found'
       });
     }
+
+    // Clear auth cache for deleted user
+    invalidateUserCache(id);
 
     res.json({
       success: true,

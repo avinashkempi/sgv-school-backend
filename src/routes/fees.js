@@ -11,6 +11,7 @@ const User = require('../models/User');
 const Class = require('../models/Class');
 const { sendTargetedNotification } = require('../services/notificationService');
 const { isAdminRole } = require('../middleware/accessControl');
+const { invalidateDashboardCaches } = require('../controllers/dashboardController');
 
 // Helper to generate receipt number atomically.
 const generateReceiptNumber = async () => {
@@ -90,6 +91,9 @@ router.post('/structure', [auth, checkRole(['admin', 'super admin']), yearContex
         }
 
         await feeStructure.save();
+
+        // Invalidate dashboard caches
+        invalidateDashboardCaches().catch(() => {});
 
         // Notify relevant users
         if (type === 'class_default') {
@@ -215,6 +219,9 @@ router.post('/payment', [auth, checkRole(['admin', 'super admin']), yearContext,
             message: `Payment of ${amount} received. Receipt: ${receiptNumber}`,
             type: 'Fee'
         });
+
+        // Invalidate dashboard caches so fee stats update immediately
+        invalidateDashboardCaches().catch(() => {});
 
         res.json(payment);
     } catch (err) {

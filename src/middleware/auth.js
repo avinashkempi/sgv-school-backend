@@ -5,11 +5,25 @@ const allowedUserRoles = User.schema.path('role').enumValues;
 const TOKEN_EXPIRED_OR_INVALID_MESSAGE = 'Invalid or expired token. Please log in again.';
 const TOKEN_REQUIRED_MESSAGE = 'Access token required. Please log in.';
 
+// In-memory cache for validated users (reduces per-request DB queries)
+const userValidationCache = new Map();
+const USER_CACHE_TTL_MS = 2 * 60 * 1000; // 2 minutes
+const MAX_USER_CACHE_SIZE = 1000;
+
+const invalidateUserCache = (userId) => {
+  if (userId) {
+    userValidationCache.delete(userId.toString());
+  } else {
+    userValidationCache.clear();
+  }
+};
+
 const sanitizeUserForRequest = (user) => ({
   id: user._id.toString(),
   userId: user._id.toString(),
   name: user.name,
-  role: user.role
+  role: user.role,
+  currentClass: user.currentClass ? user.currentClass.toString() : null
 });
 
 const isTokenIssuedBeforePasswordChange = (payload, user) => {
@@ -24,11 +38,27 @@ const loadAndValidateTokenUser = async (payload) => {
     return null;
   }
 
+  const userIdStr = payload.userId.toString();
+
+  // Check in-memory cache first
+  const cached = userValidationCache.get(userIdStr);
+  if (
+    cached &&
+    (Date.now() - cached.ts < USER_CACHE_TTL_MS) &&
+    cached.tokenVersion === payload.tokenVersion &&
+    cached.role === payload.role
+  ) {
+    return cached.sanitizedUser;
+  }
+
   const user = await User.findById(payload.userId)
-    .select('name role tokenVersion passwordChangedAt isActive')
+    .select('name role tokenVersion passwordChangedAt isActive currentClass')
     .lean();
 
-  if (!user) return null;
+  if (!user) {
+    userValidationCache.delete(userIdStr);
+    return null;
+  }
 
   const isKnownRole = allowedUserRoles.includes(user.role);
   const tokenRoleStillMatchesDb = payload.role === user.role;
@@ -45,10 +75,25 @@ const loadAndValidateTokenUser = async (payload) => {
     isInactive ||
     isAlumni
   ) {
+    userValidationCache.delete(userIdStr);
     return null;
   }
 
-  return sanitizeUserForRequest(user);
+  const sanitizedUser = sanitizeUserForRequest(user);
+
+  // Store in cache
+  if (userValidationCache.size >= MAX_USER_CACHE_SIZE) {
+    const oldestKey = userValidationCache.keys().next().value;
+    userValidationCache.delete(oldestKey);
+  }
+  userValidationCache.set(userIdStr, {
+    sanitizedUser,
+    tokenVersion: user.tokenVersion ?? 0,
+    role: user.role,
+    ts: Date.now()
+  });
+
+  return sanitizedUser;
 };
 
 const verifyToken = (token) => new Promise((resolve, reject) => {
@@ -158,5 +203,6 @@ module.exports = {
   optionalAuthenticateToken,
   requireAdmin,
   checkRole,
-  requireFinanceAccess
+  requireFinanceAccess,
+  invalidateUserCache
 };

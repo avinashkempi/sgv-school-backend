@@ -5,7 +5,8 @@ const { authenticateToken, checkRole } = require('../middleware/auth');
 const { yearContext } = require('../middleware/yearContext');
 
 router.get('/admin', [authenticateToken, checkRole(['admin', 'super admin']), yearContext], dashboardController.getAdminStats);
-router.get('/teacher', authenticateToken, checkRole(['teacher']), dashboardController.getTeacherStats);
-router.get('/student', authenticateToken, checkRole(['student']), dashboardController.getStudentStats);
+router.get('/teacher', [authenticateToken, checkRole(['teacher']), yearContext], dashboardController.getTeacherStats);
+router.get('/student', [authenticateToken, checkRole(['student']), yearContext], dashboardController.getStudentStats);
 
 module.exports = router;
+

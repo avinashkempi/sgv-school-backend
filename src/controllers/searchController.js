@@ -7,7 +7,7 @@ const Event = require('../models/Event');
 const FeePayment = require('../models/FeePayment');
 const Attendance = require('../models/Attendance');
 
-// Global search across multiple entities
+// Global search across multiple entities (executed in parallel via Promise.all)
 exports.globalSearch = async (req, res) => {
     try {
         const { q, entities = 'all', limit = 10 } = req.query;
@@ -18,84 +18,109 @@ exports.globalSearch = async (req, res) => {
 
         const searchRegex = new RegExp(q, 'i');
         const results = {};
+        const parsedLimit = parseInt(limit) || 10;
 
         // Determine which entities to search
         const searchEntities = entities === 'all'
             ? ['users', 'classes', 'subjects', 'exams', 'complaints', 'events']
             : entities.split(',');
 
+        const searchTasks = [];
+
         // Search Users (students, teachers, staff)
         if (searchEntities.includes('users')) {
-            results.users = await User.find({
-                $or: [
-                    { name: searchRegex },
-                    { email: searchRegex },
-                    { phone: searchRegex }
-                ]
-            })
-                .select('name email phone role')
-                .limit(parseInt(limit))
-                .lean();
+            searchTasks.push(
+                User.find({
+                    $or: [
+                        { name: searchRegex },
+                        { email: searchRegex },
+                        { phone: searchRegex }
+                    ]
+                })
+                    .select('name email phone role currentClass')
+                    .populate('currentClass', 'name section')
+                    .limit(parsedLimit)
+                    .lean()
+                    .then(docs => { results.users = docs; })
+            );
         }
 
         // Search Classes
         if (searchEntities.includes('classes')) {
-            results.classes = await Class.find({
-                $or: [
-                    { name: searchRegex },
-                    { section: searchRegex }
-                ]
-            })
-                .populate('classTeacher', 'name')
-                .limit(parseInt(limit))
-                .lean();
+            searchTasks.push(
+                Class.find({
+                    $or: [
+                        { name: searchRegex },
+                        { section: searchRegex }
+                    ]
+                })
+                    .populate('classTeacher', 'name')
+                    .limit(parsedLimit)
+                    .lean()
+                    .then(docs => { results.classes = docs; })
+            );
         }
 
         // Search Subjects
         if (searchEntities.includes('subjects')) {
-            results.subjects = await Subject.find({
-                name: searchRegex
-            })
-                .populate('class', 'name section')
-                .limit(parseInt(limit))
-                .lean();
+            searchTasks.push(
+                Subject.find({
+                    name: searchRegex
+                })
+                    .populate('class', 'name section')
+                    .limit(parsedLimit)
+                    .lean()
+                    .then(docs => { results.subjects = docs; })
+            );
         }
 
         // Search Exams
         if (searchEntities.includes('exams')) {
-            results.exams = await Exam.find({
-                name: searchRegex
-            })
-                .populate('class', 'name section')
-                .populate('subject', 'name')
-                .limit(parseInt(limit))
-                .lean();
+            searchTasks.push(
+                Exam.find({
+                    name: searchRegex
+                })
+                    .populate('class', 'name section')
+                    .populate('subject', 'name')
+                    .limit(parsedLimit)
+                    .lean()
+                    .then(docs => { results.exams = docs; })
+            );
         }
 
         // Search Complaints
         if (searchEntities.includes('complaints')) {
-            results.complaints = await Complaint.find({
-                $or: [
-                    { title: searchRegex },
-                    { description: searchRegex }
-                ]
-            })
-                .populate('student', 'name')
-                .limit(parseInt(limit))
-                .lean();
+            searchTasks.push(
+                Complaint.find({
+                    $or: [
+                        { title: searchRegex },
+                        { description: searchRegex }
+                    ]
+                })
+                    .populate('student', 'name')
+                    .limit(parsedLimit)
+                    .lean()
+                    .then(docs => { results.complaints = docs; })
+            );
         }
 
         // Search Events
         if (searchEntities.includes('events')) {
-            results.events = await Event.find({
-                $or: [
-                    { title: searchRegex },
-                    { description: searchRegex }
-                ]
-            })
-                .limit(parseInt(limit))
-                .lean();
+            searchTasks.push(
+                Event.find({
+                    $or: [
+                        { title: searchRegex },
+                        { description: searchRegex }
+                    ]
+                })
+                    .limit(parsedLimit)
+                    .lean()
+                    .then(docs => { results.events = docs; })
+            );
         }
+
+        // Execute all queries in parallel
+        await Promise.all(searchTasks);
 
         // Calculate total results
         const totalResults = Object.values(results).reduce((sum, arr) => sum + arr.length, 0);
@@ -130,6 +155,17 @@ exports.filterStudents = async (req, res) => {
 
         const query = { role: 'student' };
 
+        // Filter by class/section if specified (in MongoDB query level)
+        if (className || section) {
+            const classQuery = {};
+            if (className) classQuery.name = className;
+            if (section) classQuery.section = section;
+
+            const matchingClasses = await Class.find(classQuery).select('_id').lean();
+            const classIds = matchingClasses.map(c => c._id);
+            query.currentClass = { $in: classIds };
+        }
+
         // Text search
         if (search) {
             const searchRegex = new RegExp(search, 'i');
@@ -140,24 +176,15 @@ exports.filterStudents = async (req, res) => {
             ];
         }
 
+        const parsedPage = parseInt(page) || 1;
+        const parsedLimit = parseInt(limit) || 20;
+
         let students = await User.find(query)
-            .populate('class', 'name section')
+            .populate('currentClass', 'name section')
             .sort({ [sortBy]: order === 'asc' ? 1 : -1 })
-            .skip((page - 1) * limit)
-            .limit(parseInt(limit))
+            .skip((parsedPage - 1) * parsedLimit)
+            .limit(parsedLimit)
             .lean();
-
-        // Filter by class/section if specified
-        if (className || section) {
-            const classQuery = {};
-            if (className) classQuery.name = className;
-            if (section) classQuery.section = section;
-
-            const matchingClasses = await Class.find(classQuery).select('_id').lean();
-            const classIds = matchingClasses.map(c => c._id.toString());
-
-            students = students.filter(s => s.class && classIds.includes(s.class._id.toString()));
-        }
 
         // Calculate attendance for each student (if filtering by attendance)
         if (minAttendance || maxAttendance) {
@@ -222,9 +249,9 @@ exports.filterStudents = async (req, res) => {
             data: students,
             pagination: {
                 total,
-                page: parseInt(page),
-                limit: parseInt(limit),
-                pages: Math.ceil(total / limit)
+                page: parsedPage,
+                limit: parsedLimit,
+                pages: Math.ceil(total / parsedLimit)
             }
         });
 
@@ -252,6 +279,21 @@ exports.filterExams = async (req, res) => {
 
         const query = {};
 
+        // Class / Section filter
+        if (className || section) {
+            const classQuery = {};
+            if (className) classQuery.name = className;
+            if (section) classQuery.section = section;
+            const matchingClasses = await Class.find(classQuery).select('_id').lean();
+            query.class = { $in: matchingClasses.map(c => c._id) };
+        }
+
+        // Subject filter
+        if (subject) {
+            const matchingSubjects = await Subject.find({ name: new RegExp(subject, 'i') }).select('_id').lean();
+            query.subject = { $in: matchingSubjects.map(s => s._id) };
+        }
+
         // Text search
         if (search) {
             query.name = new RegExp(search, 'i');
@@ -264,31 +306,27 @@ exports.filterExams = async (req, res) => {
             if (endDate) query.examDate.$lte = new Date(endDate);
         }
 
-        let exams = await Exam.find(query)
-            .populate('class', 'name section')
-            .populate('subject', 'name')
-            .sort({ [sortBy]: order === 'asc' ? 1 : -1 })
-            .skip((page - 1) * limit)
-            .limit(parseInt(limit))
-            .lean();
+        const parsedPage = parseInt(page) || 1;
+        const parsedLimit = parseInt(limit) || 20;
 
-        // Filter by class/section/subject
-        exams = exams.filter(exam => {
-            if (className && exam.class?.name !== className) return false;
-            if (section && exam.class?.section !== section) return false;
-            if (subject && exam.subject?.name !== subject) return false;
-            return true;
-        });
-
-        const total = await Exam.countDocuments(query);
+        const [exams, total] = await Promise.all([
+            Exam.find(query)
+                .populate('class', 'name section')
+                .populate('subject', 'name')
+                .sort({ [sortBy]: order === 'asc' ? 1 : -1 })
+                .skip((parsedPage - 1) * parsedLimit)
+                .limit(parsedLimit)
+                .lean(),
+            Exam.countDocuments(query)
+        ]);
 
         res.json({
             data: exams,
             pagination: {
                 total,
-                page: parseInt(page),
-                limit: parseInt(limit),
-                pages: Math.ceil(total / limit)
+                page: parsedPage,
+                limit: parsedLimit,
+                pages: Math.ceil(total / parsedLimit)
             }
         });
 
@@ -341,23 +379,27 @@ exports.filterComplaints = async (req, res) => {
             if (endDate) query.createdAt.$lte = new Date(endDate);
         }
 
-        const complaints = await Complaint.find(query)
-            .populate('student', 'name email')
-            .populate('assignedTo', 'name')
-            .sort({ [sortBy]: order === 'asc' ? 1 : -1 })
-            .skip((page - 1) * limit)
-            .limit(parseInt(limit))
-            .lean();
+        const parsedPage = parseInt(page) || 1;
+        const parsedLimit = parseInt(limit) || 20;
 
-        const total = await Complaint.countDocuments(query);
+        const [complaints, total] = await Promise.all([
+            Complaint.find(query)
+                .populate('student', 'name email')
+                .populate('assignedTo', 'name')
+                .sort({ [sortBy]: order === 'asc' ? 1 : -1 })
+                .skip((parsedPage - 1) * parsedLimit)
+                .limit(parsedLimit)
+                .lean(),
+            Complaint.countDocuments(query)
+        ]);
 
         res.json({
             data: complaints,
             pagination: {
                 total,
-                page: parseInt(page),
-                limit: parseInt(limit),
-                pages: Math.ceil(total / limit)
+                page: parsedPage,
+                limit: parsedLimit,
+                pages: Math.ceil(total / parsedLimit)
             }
         });
 

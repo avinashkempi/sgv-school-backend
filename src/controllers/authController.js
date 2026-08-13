@@ -2,6 +2,7 @@ const { validationResult } = require('express-validator');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const User = require('../models/User');
+const { invalidateUserCache } = require('../middleware/auth');
 
 const login = async (req, res) => {
   try {
@@ -180,6 +181,9 @@ const changePassword = async (req, res) => {
     user.passwordChangedAt = new Date();
     user.tokenVersion = (user.tokenVersion || 0) + 1;
     await user.save();
+
+    // Clear cached user validation
+    invalidateUserCache(user._id);
 
     // Issue a new token with updated tokenVersion so user stays logged in
     const newToken = jwt.sign(

@@ -9,6 +9,7 @@ const Class = require('../models/Class');
 const Subject = require('../models/Subject');
 const LeaveRequest = require('../models/LeaveRequest');
 const Event = require('../models/Event');
+const { invalidateDashboardCaches } = require('../controllers/dashboardController');
 
 const isAdminRole = (role) => role === 'admin' || role === 'super admin';
 const hasObjectIdMatch = (ids = [], userId) => ids.some((id) => id && id.toString() === userId);
@@ -106,6 +107,9 @@ router.post('/mark', [auth, yearContext, requireOpenYear], async (req, res) => {
             await Attendance.bulkWrite(bulkOps, { ordered: false });
         }
 
+        // Invalidate dashboard caches so stats update immediately
+        invalidateDashboardCaches().catch(() => {});
+
         res.json({ message: 'Attendance marked successfully' });
     } catch (err) {
         console.error('Attendance Mark Error:', err);
@@ -161,6 +165,10 @@ router.post('/mark-staff', [auth, yearContext, requireOpenYear], async (req, res
         if (bulkOps.length > 0) {
             await Attendance.bulkWrite(bulkOps, { ordered: false });
         }
+
+        // Invalidate dashboard caches so stats update immediately
+        invalidateDashboardCaches().catch(() => {});
+
         res.json({ message: 'Staff attendance marked successfully' });
     } catch (err) {
         console.error(err.message);

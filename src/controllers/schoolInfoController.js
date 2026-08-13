@@ -1,10 +1,21 @@
 const SchoolInfo = require('../models/SchoolInfo');
 
+// In-memory cache for school info (static data)
+let cachedSchoolInfo = null;
+
 // Get school info (public endpoint)
 const getSchoolInfo = async (req, res) => {
   try {
+    // Return cached document if available
+    if (cachedSchoolInfo) {
+      return res.status(200).json({
+        success: true,
+        data: cachedSchoolInfo
+      });
+    }
+
     // Get the first (and likely only) school info document
-    const schoolInfo = await SchoolInfo.findOne();
+    const schoolInfo = await SchoolInfo.findOne().lean();
 
     if (!schoolInfo) {
       return res.status(404).json({
@@ -12,6 +23,8 @@ const getSchoolInfo = async (req, res) => {
         message: 'School information not found'
       });
     }
+
+    cachedSchoolInfo = schoolInfo;
 
     res.status(200).json({
       success: true,
@@ -44,6 +57,9 @@ const createOrUpdateSchoolInfo = async (req, res) => {
       await schoolInfo.save();
     }
 
+    // Invalidate and refresh cache
+    cachedSchoolInfo = schoolInfo.toObject ? schoolInfo.toObject() : schoolInfo;
+
     res.status(200).json({
       success: true,
       data: schoolInfo,
@@ -62,3 +78,4 @@ module.exports = {
   getSchoolInfo,
   createOrUpdateSchoolInfo
 };
+
