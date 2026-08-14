@@ -39,12 +39,13 @@ const createEvent = async (req, res) => {
     }
 
     // Immediately create a notification for the new event
-    const notificationTitle = title ? `New Event: ${title}` : 'New Event';
+    const notificationTitle = `📅 New Event: ${title}`;
     const notification = new Notification({
       title: notificationTitle,
-      message: `New event added: ${title || 'Untitled'} on ${new Date(date).toDateString()}`,
+      message: `A new event "${title}" has been scheduled for ${new Date(date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' })}. Stay tuned for more details!`,
       type: 'Event',
       category: 'event',
+      priority: 'medium',
       targetRole: 'all',
       eventId: event._id
     });
@@ -52,10 +53,10 @@ const createEvent = async (req, res) => {
 
     // Trigger Push Notification
     await sendTargetedNotification('all', null, {
-      title: 'New Event: ' + title,
-      message: `A new event "${title}" has been scheduled for ${new Date(date).toDateString()}.`,
+      title: `📅 New Event: ${title}`,
+      message: `"${title}" has been scheduled for ${new Date(date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' })}. Mark your calendar!`,
       type: 'Event',
-      eventId: event._id
+      category: 'event',
     });
 
     res.status(201).json({

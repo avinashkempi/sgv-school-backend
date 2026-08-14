@@ -268,6 +268,13 @@ router.post('/:id/content', auth, async (req, res) => {
         await savedContent.populate('author', 'name');
         await savedContent.populate('subject', 'name');
 
+        // Send push notification to students of this class
+        try {
+            _notificationService.sendClassContentNotification(classId, savedContent);
+        } catch (notifErr) {
+            console.error('[Class Content] Notification error:', notifErr);
+        }
+
         res.json(savedContent);
     } catch (err) {
         console.error(err.message);

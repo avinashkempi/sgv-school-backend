@@ -3,7 +3,7 @@ const cors = require('cors');
 const compression = require('compression');
 const rateLimit = require('express-rate-limit');
 const connectDB = require('./src/config/database');
-const { startBirthdayCron } = require('./src/services/cronService');
+const { startAllCronJobs } = require('./src/services/cronService');
 const Event = require('./src/models/Event');
 const Notification = require('./src/models/Notification');
 const logger = require('./src/utils/logger');
@@ -124,5 +124,5 @@ app.use(errorHandler);
 app.listen(PORT, () => {
   logger.info(`✅ Server running on http://localhost:${PORT}`);
   // Start background cron jobs
-  startBirthdayCron();
+  startAllCronJobs();
 });

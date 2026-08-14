@@ -7,6 +7,7 @@ const Attendance = require('../models/Attendance');
 const AcademicYear = require('../models/AcademicYear');
 const { authenticateToken, checkRole } = require('../middleware/auth');
 const notificationController = require('../controllers/notificationController');
+const toTitleCase = require('../utils/titleCase');
 
 // @desc    Apply for leave
 // @route   POST /api/leaves/apply
@@ -72,14 +73,17 @@ router.post('/apply', authenticateToken, async (req, res) => {
 
         // Trigger Notification — send only to the concerned approver(s)
         try {
+            const applicantName = toTitleCase(user.name);
             if (req.user.role === 'student') {
                 // Student leave: notify ONLY the class teacher of the student's class
                 const classObj = await Class.findById(classId).select('classTeacher').lean();
                 if (classObj?.classTeacher) {
                     notificationController.triggerNotification({
-                        title: 'New Leave Request',
-                        message: `${user.name} has applied for leave from ${startDate} to ${endDate}.`,
-                        type: 'Emergency',
+                        title: '📋 New Leave Request',
+                        message: `${applicantName} has requested leave from ${startDate} to ${endDate}. Please review and respond.`,
+                        type: 'General',
+                        category: 'leave',
+                        priority: 'high',
                         target: 'user',
                         targetId: classObj.classTeacher,
                         metadata: { leaveId: leaveRequest._id }
@@ -88,18 +92,22 @@ router.post('/apply', authenticateToken, async (req, res) => {
             } else if (req.user.role === 'teacher') {
                 // Teacher leave: notify all admins
                 notificationController.triggerNotification({
-                    title: 'New Leave Request',
-                    message: `${user.name} (Teacher) has applied for leave from ${startDate} to ${endDate}.`,
-                    type: 'Emergency',
+                    title: '📋 New Leave Request',
+                    message: `${applicantName} (Teacher) has requested leave from ${startDate} to ${endDate}. Awaiting your approval.`,
+                    type: 'General',
+                    category: 'leave',
+                    priority: 'high',
                     target: 'admin',
                     metadata: { leaveId: leaveRequest._id }
                 });
             } else if (req.user.role === 'admin') {
                 // Admin leave: notify all super admins
                 notificationController.triggerNotification({
-                    title: 'New Leave Request',
-                    message: `${user.name} (Admin) has applied for leave from ${startDate} to ${endDate}.`,
-                    type: 'Emergency',
+                    title: '📋 New Leave Request',
+                    message: `${applicantName} (Admin) has requested leave from ${startDate} to ${endDate}. Awaiting your approval.`,
+                    type: 'General',
+                    category: 'leave',
+                    priority: 'high',
                     target: 'super admin',
                     metadata: { leaveId: leaveRequest._id }
                 });
@@ -317,11 +325,15 @@ router.put('/:id/action', authenticateToken, checkRole(['teacher', 'admin', 'sup
 
         res.status(200).json({ success: true, data: leaveRequest });
 
-        // Trigger Notification for Student
+        // Trigger Notification for applicant
+        const statusLabel = status.charAt(0).toUpperCase() + status.slice(1);
+        const statusEmoji = status === 'approved' ? '✅' : status === 'rejected' ? '❌' : '📋';
         notificationController.triggerNotification({
-            title: `Leave Request ${status.charAt(0).toUpperCase() + status.slice(1)}`,
-            message: `Your leave request for ${leaveRequest.startDate.toDateString()} has been ${status}.`,
+            title: `${statusEmoji} Leave Request ${statusLabel}`,
+            message: `Your leave request for ${leaveRequest.startDate.toDateString()} has been ${status}. ${status === 'approved' ? 'Enjoy your time off!' : 'Please contact your teacher for more details.'}`,
             type: 'General',
+            category: 'leave',
+            priority: 'high',
             target: 'user',
             targetId: leaveRequest.applicant._id,
             metadata: { leaveId: leaveRequest._id }

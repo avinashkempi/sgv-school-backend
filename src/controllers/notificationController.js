@@ -4,6 +4,7 @@ const NotificationPreference = require('../models/NotificationPreference');
 const User = require('../models/User');
 const { sendTargetedNotification } = require('../services/notificationService');
 const { cacheGet, cacheSet, cacheDel, cacheInvalidatePattern } = require('../config/redis');
+const logger = require('../utils/logger');
 
 /**
  * Get notifications for current user with filtering
@@ -408,7 +409,8 @@ exports.updatePreferences = async (req, res) => {
 };
 
 /**
- * Helper to trigger internal notifications from other controllers
+ * Helper to trigger internal notifications from other controllers.
+ * Saves to DB and sends push notification with preference awareness.
  */
 exports.triggerNotification = async (data) => {
     try {
@@ -431,11 +433,18 @@ exports.triggerNotification = async (data) => {
 
         await notification.save();
 
-        // Push
-        sendTargetedNotification(target, targetId, { title, message, type, category, priority });
+        // Push notification (preference-aware)
+        await sendTargetedNotification(target, targetId, {
+            title: notificationTitle,
+            message,
+            type: type || 'General',
+            category: category || 'general',
+            priority: priority || 'medium',
+        });
 
         return notification;
     } catch (error) {
-        console.error('[Notification Controller] Trigger Error:', error.message);
+        logger.error('[Notification Controller] Trigger Error:', error);
     }
 };
+

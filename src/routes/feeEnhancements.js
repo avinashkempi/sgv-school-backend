@@ -302,8 +302,8 @@ router.post('/send-reminders', [auth, checkRole(['admin', 'super admin'])], asyn
             if (pendingAmount >= minPendingAmount) {
                 // Send notification
                 await triggerNotification({
-                    title: 'Fee Payment Reminder',
-                    message: `You have a pending fee payment of ₹${pendingAmount.toLocaleString()}. Please pay at the earliest.`,
+                    title: '💰 Fee Payment Reminder',
+                    message: `You have an outstanding fee of ₹${pendingAmount.toLocaleString()}. Please clear your dues at the earliest to avoid any inconvenience.`,
                     category: 'fee',
                     priority: pendingAmount > 5000 ? 'high' : 'medium',
                     target: 'user',

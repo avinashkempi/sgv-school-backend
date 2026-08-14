@@ -1,5 +1,7 @@
 const FCMToken = require('../models/FCMToken');
+const NotificationPreference = require('../models/NotificationPreference');
 const path = require('path');
+const logger = require('../utils/logger');
 
 // Firebase Admin will be initialized with a warning if credentials are not available
 // This allows the app to run without Firebase, but notifications won't work
@@ -29,16 +31,50 @@ try {
             });
 
         } else {
-            console.warn('⚠️  Firebase credentials not found. Push notifications will not work.');
-            console.warn('⚠️  Set FIREBASE_SERVICE_ACCOUNT_JSON or FIREBASE_SERVICE_ACCOUNT_PATH environment variable');
+            logger.warn('⚠️  Firebase credentials not found. Push notifications will not work.');
+            logger.warn('⚠️  Set FIREBASE_SERVICE_ACCOUNT_JSON or FIREBASE_SERVICE_ACCOUNT_PATH environment variable');
             admin = null; // Set to null if not properly initialized
         }
     }
 } catch (error) {
-    console.error('❌ Failed to initialize Firebase Admin SDK:', error.message);
-    console.warn('⚠️  Push notifications will not work until Firebase is properly configured');
+    logger.error('❌ Failed to initialize Firebase Admin SDK:', error);
+    logger.warn('⚠️  Push notifications will not work until Firebase is properly configured');
     admin = null;
 }
+
+// ─────────────────────────────────────────────────────────────
+// Quiet Hours Check
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Check if the current IST time falls within a user's quiet hours.
+ * @param {string} quietStart - "HH:MM" e.g. "22:00"
+ * @param {string} quietEnd   - "HH:MM" e.g. "07:00"
+ * @returns {boolean} true if currently in quiet hours
+ */
+function isInQuietHours(quietStart, quietEnd) {
+    if (!quietStart || !quietEnd) return false;
+
+    const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+    const istNow = new Date(Date.now() + IST_OFFSET_MS);
+    const currentMinutes = istNow.getUTCHours() * 60 + istNow.getUTCMinutes();
+
+    const [startH, startM] = quietStart.split(':').map(Number);
+    const [endH, endM] = quietEnd.split(':').map(Number);
+    const startMinutes = startH * 60 + startM;
+    const endMinutes = endH * 60 + endM;
+
+    // Handles overnight quiet hours (e.g., 22:00 to 07:00)
+    if (startMinutes <= endMinutes) {
+        return currentMinutes >= startMinutes && currentMinutes < endMinutes;
+    } else {
+        return currentMinutes >= startMinutes || currentMinutes < endMinutes;
+    }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Core: Batch Push Notification Sender
+// ─────────────────────────────────────────────────────────────
 
 /**
  * Send push notification to multiple devices
@@ -48,7 +84,7 @@ try {
  */
 async function sendBatchNotifications(tokens, notification, data = {}) {
     if (!admin) {
-        console.warn('[Notifications] Firebase Admin not initialized, skipping notification send');
+        logger.warn('[Notifications] Firebase Admin not initialized, skipping notification send');
         return { success: false, error: 'Firebase not configured' };
     }
 
@@ -96,11 +132,11 @@ async function sendBatchNotifications(tokens, notification, data = {}) {
                             errorMsg.includes('Requested entity was not found') ||
                             errorMsg.includes('NotRegistered') ||
                             errorMsg.includes('not a valid FCM registration token')) {
-                            console.warn(`[Notifications] Invalid/Expired token removed (will delete from DB)`);
+                            logger.warn('[Notifications] Invalid/Expired token removed (will delete from DB)');
                         } else if (errorCode === 'messaging/mismatched-credential' || errorMsg.includes('SenderId mismatch')) {
-                            console.error(`[Notifications] SenderId Mismatch Error - Firebase config mismatch between app build and backend`);
+                            logger.error('[Notifications] SenderId Mismatch Error — Firebase config mismatch between app build and backend');
                         } else {
-                            console.error(`[Notifications] Failed to send - Error: ${errorMsg} (Code: ${errorCode})`);
+                            logger.error(`[Notifications] Failed to send — Error: ${errorMsg} (Code: ${errorCode})`);
                         }
                     }
                 });
@@ -111,13 +147,11 @@ async function sendBatchNotifications(tokens, notification, data = {}) {
         if (failedTokens.length > 0) {
             try {
                 const result = await FCMToken.deleteMany({ token: { $in: failedTokens } });
-                console.log(`[Notifications] Cleaned up ${result.deletedCount} invalid FCM tokens`);
+                logger.info(`[Notifications] Cleaned up ${result.deletedCount} invalid FCM tokens`);
             } catch (cleanupErr) {
-                console.error(`[Notifications] Error cleaning up invalid tokens:`, cleanupErr.message);
+                logger.error('[Notifications] Error cleaning up invalid tokens:', cleanupErr);
             }
         }
-
-
 
         return {
             success: true,
@@ -125,7 +159,7 @@ async function sendBatchNotifications(tokens, notification, data = {}) {
             failureCount: totalFailure,
         };
     } catch (error) {
-        console.error('[Notifications] Send error:', error);
+        logger.error('[Notifications] Send error:', error);
         return {
             success: false,
             error: error.message,
@@ -133,65 +167,9 @@ async function sendBatchNotifications(tokens, notification, data = {}) {
     }
 }
 
-/**
- * Send notification when news is created
- * @param {Object} newsData - The created news object
- */
-async function sendNewsNotification(newsData) {
-    try {
-        if (!admin) {
-            console.warn('[Notifications] Firebase not initialized, skipping news notification');
-            return { success: false, error: 'Firebase not configured' };
-        }
-
-        const { title, description, privateNews, _id } = newsData;
-
-
-
-
-        // Get tokens based on privateNews flag
-        let tokenQuery = {};
-
-        if (privateNews) {
-            // Private news: only send to authenticated users
-            tokenQuery = { isAuthenticated: true };
-
-        } else {
-            // Public news: send to all users (authenticated + guests)
-
-        }
-
-        const fcmTokenDocs = await FCMToken.find(tokenQuery);
-        const tokens = fcmTokenDocs.map(doc => doc.token);
-
-        if (tokens.length === 0) {
-            console.debug('[Notifications] No tokens found for news notification');
-            return { success: true, message: 'No tokens to send to' };
-        }
-
-        const notification = {
-            title: '📰 New News Update',
-            body: title,
-        };
-
-        const data = {
-            type: 'news',
-            newsId: _id.toString(),
-            title,
-            description: description.substring(0, 100),
-            privateNews: privateNews.toString(),
-        };
-
-        const result = await sendBatchNotifications(tokens, notification, data);
-
-        return result;
-    } catch (error) {
-        console.error('[Notifications] Error sending news notification:', error);
-        return { success: false, error: error.message };
-    }
-}
-
-
+// ─────────────────────────────────────────────────────────────
+// Class Content Notification
+// ─────────────────────────────────────────────────────────────
 
 /**
  * Send notification when class content is posted
@@ -201,7 +179,7 @@ async function sendNewsNotification(newsData) {
 async function sendClassContentNotification(classId, content) {
     try {
         if (!admin) {
-            console.warn('[Notifications] Firebase not initialized, skipping class notification');
+            logger.warn('[Notifications] Firebase not initialized, skipping class notification');
             return { success: false, error: 'Firebase not configured' };
         }
 
@@ -212,7 +190,7 @@ async function sendClassContentNotification(classId, content) {
         const studentIds = students.map(s => s._id);
 
         if (studentIds.length === 0) {
-            console.debug(`[Notifications] No students found in class: ${classId}`);
+            logger.info(`[Notifications] No students found in class: ${classId}`);
             return { success: true, message: 'No students in class' };
         }
 
@@ -221,13 +199,14 @@ async function sendClassContentNotification(classId, content) {
         const tokens = fcmTokenDocs.map(doc => doc.token);
 
         if (tokens.length === 0) {
-            console.debug(`[Notifications] No FCM tokens registered for ${studentIds.length} students in class`);
+            logger.info(`[Notifications] No FCM tokens registered for ${studentIds.length} students in class`);
             return { success: true, message: 'No tokens found for students' };
         }
 
+        const contentType = content.type || 'Content';
         const notification = {
-            title: `New ${content.type}: ${content.title}`,
-            body: content.description ? content.description.substring(0, 100) : 'Check the app for details',
+            title: `📚 New ${contentType}: ${content.title}`,
+            body: content.description ? content.description.substring(0, 100) : 'New content has been posted. Open the app to view it.',
         };
 
         const data = {
@@ -240,21 +219,26 @@ async function sendClassContentNotification(classId, content) {
         return await sendBatchNotifications(tokens, notification, data);
 
     } catch (error) {
-        console.error('[Notifications] Error sending class notification:', error);
+        logger.error('[Notifications] Error sending class notification:', error);
         return { success: false, error: error.message };
     }
 }
 
+// ─────────────────────────────────────────────────────────────
+// Preference-Aware Targeted Notification
+// ─────────────────────────────────────────────────────────────
+
 /**
- * Send targeted notification based on criteria
- * @param {string} target - The target type ('all', 'class', 'user', 'teacher', 'staff')
+ * Send targeted notification based on criteria, respecting user preferences.
+ * @param {string} target - The target type ('all', 'class', 'user', 'teacher', 'staff', etc.)
  * @param {string} targetId - The ID of the target (if applicable)
- * @param {Object} notificationData - The notification data { title, message, type }
+ * @param {Object} notificationData - { title, message, type, category, priority }
+ * @param {boolean} sendToPublic - Whether to include non-authenticated users
  */
 async function sendTargetedNotification(target, targetId, notificationData, sendToPublic = false) {
     try {
         if (!admin) {
-            console.warn('[Notifications] Firebase not initialized, skipping targeted notification');
+            logger.warn('[Notifications] Firebase not initialized, skipping targeted notification');
             return { success: false, error: 'Firebase not configured' };
         }
 
@@ -293,7 +277,7 @@ async function sendTargetedNotification(target, targetId, notificationData, send
         // Build token query
         if (userIds) {
             if (userIds.length === 0) {
-                console.log(`[Notifications] No users found for target: ${target}`);
+                logger.info(`[Notifications] No users found for target: ${target}`);
                 return { success: true, message: 'No users found for target' };
             }
             tokenQuery = { userId: { $in: userIds } };
@@ -308,14 +292,77 @@ async function sendTargetedNotification(target, targetId, notificationData, send
         }
 
         const fcmTokenDocs = await FCMToken.find(tokenQuery);
-        const tokens = fcmTokenDocs.map(doc => doc.token);
 
-        if (tokens.length === 0) {
-            console.debug(`[Notifications] No devices to notify (Target: ${target}, UserCount: ${userIds ? userIds.length : 'all'})`);
+        if (fcmTokenDocs.length === 0) {
+            logger.info(`[Notifications] No devices to notify (Target: ${target}, UserCount: ${userIds ? userIds.length : 'all'})`);
             return { success: true, message: 'No tokens found', successCount: 0, failureCount: 0 };
         }
+
+        // ── Preference-based filtering ──
+        // Skip filtering for targets that don't map to individual users (e.g., public broadcasts)
+        const category = notificationData.category || 'general';
+        const priority = notificationData.priority || 'medium';
+        let filteredTokens = fcmTokenDocs.map(doc => doc.token);
+
+        if (userIds && userIds.length > 0) {
+            // Batch-fetch preferences for all target users
+            const preferences = await NotificationPreference.find({
+                user: { $in: userIds },
+            }).lean();
+
+            const prefMap = new Map();
+            for (const pref of preferences) {
+                prefMap.set(pref.user.toString(), pref);
+            }
+
+            // Filter out tokens for users who have opted out
+            const excludedUserIds = new Set();
+
+            for (const uid of userIds) {
+                const uidStr = uid.toString();
+                const pref = prefMap.get(uidStr);
+                if (!pref) continue; // No preferences saved → use defaults (all enabled)
+
+                // Check if push is globally disabled
+                if (pref.pushEnabled === false) {
+                    excludedUserIds.add(uidStr);
+                    continue;
+                }
+
+                // Check category preference
+                if (pref.categories && pref.categories[category] === false) {
+                    excludedUserIds.add(uidStr);
+                    continue;
+                }
+
+                // Check priority preference
+                if (pref.priorities && pref.priorities[priority] === false) {
+                    excludedUserIds.add(uidStr);
+                    continue;
+                }
+
+                // Check quiet hours
+                if (pref.quietHoursEnabled && isInQuietHours(pref.quietHoursStart, pref.quietHoursEnd)) {
+                    excludedUserIds.add(uidStr);
+                    continue;
+                }
+            }
+
+            if (excludedUserIds.size > 0) {
+                filteredTokens = fcmTokenDocs
+                    .filter(doc => !excludedUserIds.has(doc.userId?.toString()))
+                    .map(doc => doc.token);
+
+                logger.info(`[Notifications] Excluded ${excludedUserIds.size} user(s) based on preferences`);
+            }
+        }
+
+        if (filteredTokens.length === 0) {
+            logger.info(`[Notifications] All target users opted out of this notification`);
+            return { success: true, message: 'All users opted out', successCount: 0, failureCount: 0 };
+        }
         
-        console.log(`[Notifications] Sending notification to ${tokens.length} devices (Target: ${target})`);
+        logger.info(`[Notifications] Sending notification to ${filteredTokens.length} devices (Target: ${target})`);
 
         const notification = {
             title: notificationData.title,
@@ -329,17 +376,16 @@ async function sendTargetedNotification(target, targetId, notificationData, send
             targetId: targetId ? targetId.toString() : '',
         };
 
-        return await sendBatchNotifications(tokens, notification, data);
+        return await sendBatchNotifications(filteredTokens, notification, data);
 
     } catch (error) {
-        console.error('[Notifications] Error sending targeted notification:', error);
+        logger.error('[Notifications] Error sending targeted notification:', error);
         return { success: false, error: error.message };
     }
 }
 
 module.exports = {
     sendBatchNotifications,
-    sendNewsNotification,
     sendClassContentNotification,
     sendTargetedNotification
 };

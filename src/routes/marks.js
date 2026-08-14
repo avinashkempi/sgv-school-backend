@@ -132,9 +132,11 @@ router.post('/bulk', [auth, yearContext, requireOpenYear], async (req, res) => {
 
                 // Trigger Notification for Student
                 notificationController.triggerNotification({
-                    title: 'New Marks Posted',
-                    message: `Marks for ${exam.name} have been updated.`,
+                    title: '📊 Marks Published',
+                    message: `Your marks for ${exam.name} have been posted. Open the app to view your results.`,
                     type: 'Exam',
+                    category: 'exam',
+                    priority: 'medium',
                     target: 'user',
                     targetId: marks.student,
                     metadata: { examId: exam._id, marksId: marks._id }
@@ -309,9 +311,11 @@ router.post('/', [auth, yearContext, requireOpenYear], async (req, res) => {
 
         // Trigger Notification for Student
         notificationController.triggerNotification({
-            title: 'New Marks Posted',
-            message: `Marks for ${exam.name} have been updated.`,
+            title: '📊 Marks Published',
+            message: `Your marks for ${exam.name} have been posted. Open the app to view your results.`,
             type: 'Exam',
+            category: 'exam',
+            priority: 'medium',
             target: 'user',
             targetId: studentId,
             metadata: { examId: exam._id, marksId: marks._id }
