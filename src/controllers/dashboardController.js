@@ -6,7 +6,6 @@ const StudentFee = require('../models/StudentFee');
 const Complaint = require('../models/Complaint');
 const Marks = require('../models/Marks');
 const Class = require('../models/Class');
-const Subject = require('../models/Subject');
 const Exam = require('../models/Exam');
 const AcademicYear = require('../models/AcademicYear');
 const { cacheGet, cacheSet, cacheInvalidatePattern } = require('../config/redis');

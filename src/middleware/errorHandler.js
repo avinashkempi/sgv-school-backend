@@ -4,7 +4,7 @@ const logger = require('../utils/logger');
  * Global Express Error Handling Middleware.
  * Categorizes errors, logs full diagnostic stack traces, and returns clean structured JSON error responses.
  */
-const errorHandler = (err, req, res, next) => {
+const errorHandler = (err, req, res, _next) => {
   let statusCode = err.status || err.statusCode || 500;
   let message = err.message || 'Internal Server Error';
   let errorDetails = null;

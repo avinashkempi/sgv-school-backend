@@ -78,7 +78,7 @@ router.get('/my-complaints', auth, async (req, res) => {
 // @access  Private (Admin/Super Admin)
 router.get('/inbox', [auth, checkRole(['admin', 'super admin'])], async (req, res) => {
     try {
-        const { role, userId } = req.user;
+        const { role } = req.user;
         let filter = {};
 
         if (role === 'admin') {

@@ -5,7 +5,6 @@ const Class = require('../models/Class');
 const AcademicYear = require('../models/AcademicYear');
 const FeeStructure = require('../models/FeeStructure');
 const { wipeNonAdminData } = require('./wipeService');
-const crypto = require('crypto');
 
 // Utility to parse currency string "₹11,900" -> 11900
 const parseCurrency = (str) => {
@@ -337,15 +336,6 @@ const buildFeeData = (studentId, row, academicYear, classId, branch) => {
     }
 
     return feeData;
-};
-
-const processFees = async (student, row, academicYear, classId, branch) => {
-    const feeData = buildFeeData(student._id, row, academicYear, classId, branch);
-    await StudentFee.findOneAndUpdate(
-        { student: student._id, academicYear: academicYear ? academicYear._id : null },
-        { $set: feeData },
-        { upsert: true, new: true }
-    );
 };
 
 const processStaffImport = async (csvData) => {

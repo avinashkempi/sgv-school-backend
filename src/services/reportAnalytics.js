@@ -6,7 +6,6 @@
 const Exam = require('../models/Exam');
 const Marks = require('../models/Marks');
 const User = require('../models/User');
-const Subject = require('../models/Subject');
 
 /**
  * Calculate class performance aggregation

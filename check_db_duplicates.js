@@ -10,8 +10,6 @@ async function main() {
 
     const AcademicYear = require('./src/models/AcademicYear');
     const Class = require('./src/models/Class');
-    const Subject = require('./src/models/Subject');
-    const User = require('./src/models/User');
 
     // 1. Get all academic years
     const years = await AcademicYear.find({}).lean();

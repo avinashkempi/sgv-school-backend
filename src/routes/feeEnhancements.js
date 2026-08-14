@@ -364,7 +364,7 @@ router.get('/installments/:studentId', auth, async (req, res) => {
             status: 'success'
         }).sort({ paymentDate: 1 }).lean();
 
-        let totalPaid = 0;
+        let totalPaid = payments.reduce((sum, p) => sum + (p.amount || 0), 0);
         const installments = feeStructure.paymentSchedule.map((schedule, index) => {
             const installmentAmount = schedule.amount;
             const dueDate = new Date(schedule.dueDate);

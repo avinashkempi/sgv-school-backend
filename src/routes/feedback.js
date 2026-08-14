@@ -1,6 +1,5 @@
 const express = require('express');
 const router = express.Router();
-const mongoose = require('mongoose');
 const { authenticateToken: auth, checkRole } = require('../middleware/auth');
 const Feedback = require('../models/Feedback');
 const User = require('../models/User');

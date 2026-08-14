@@ -4,8 +4,6 @@ const compression = require('compression');
 const rateLimit = require('express-rate-limit');
 const connectDB = require('./src/config/database');
 const { startAllCronJobs } = require('./src/services/cronService');
-const Event = require('./src/models/Event');
-const Notification = require('./src/models/Notification');
 const logger = require('./src/utils/logger');
 const requestId = require('./src/middleware/requestId');
 const requestLogger = require('./src/middleware/requestLogger');
@@ -20,7 +18,7 @@ process.on('uncaughtException', (err) => {
   logger.error('CRITICAL: Uncaught Exception detected in Node process', err);
 });
 
-process.on('unhandledRejection', (reason, promise) => {
+process.on('unhandledRejection', (reason, _promise) => {
   logger.error('CRITICAL: Unhandled Promise Rejection detected', reason instanceof Error ? reason : { reason });
 });
 

@@ -5,7 +5,7 @@ const Marks = require('../models/Marks');
 const User = require('../models/User');
 const AcademicYear = require('../models/AcademicYear');
 const StudentHistory = require('../models/StudentHistory');
-const { authenticateToken: auth, checkRole } = require('../middleware/auth');
+const { authenticateToken: auth } = require('../middleware/auth');
 const { requireStudentAccessParam, requireClassAccessParam } = require('../middleware/accessControl');
 
 // Helper to get grade: 90-100 A+, 70-89 A, 50-69 B+, 30-49 B, Below 30 C

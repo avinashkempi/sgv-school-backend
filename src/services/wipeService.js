@@ -1,7 +1,5 @@
-const mongoose = require('mongoose');
 const User = require('../models/User');
 const StudentFee = require('../models/StudentFee');
-const Class = require('../models/Class');
 
 /**
  * Wipes all non-admin users and their related data

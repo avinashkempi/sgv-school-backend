@@ -7,7 +7,6 @@ const { yearContext, requireOpenYear } = require('../middleware/yearContext');
 const Marks = require('../models/Marks');
 const Exam = require('../models/Exam');
 const User = require('../models/User');
-const Subject = require('../models/Subject');
 const { hasObjectIdMatch } = require('../middleware/accessControl');
 
 // @route   POST /api/marks/grid-update

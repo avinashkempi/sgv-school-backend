@@ -1,8 +1,8 @@
 const mongoose = require('mongoose');
 const Exam = require('./src/models/Exam');
 const AcademicYear = require('./src/models/AcademicYear');
-const Class = require('./src/models/Class');
-const Subject = require('./src/models/Subject');
+require('./src/models/Class');
+require('./src/models/Subject');
 const Marks = require('./src/models/Marks');
 const User = require('./src/models/User');
 

@@ -1,4 +1,3 @@
-const mongoose = require('mongoose');
 const AcademicYear = require('../models/AcademicYear');
 const User = require('../models/User');
 const Class = require('../models/Class');

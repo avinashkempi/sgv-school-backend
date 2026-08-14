@@ -1,4 +1,3 @@
-const mongoose = require('mongoose');
 require('dotenv').config();
 const Event = require('./src/models/Event');
 const connectDB = require('./src/config/database');
