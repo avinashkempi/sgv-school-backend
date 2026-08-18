@@ -743,14 +743,8 @@ exports.getStudentStats = async (req, res) => {
         const prevAttendancePercentage = prevTotalDays > 0 ? ((prevPresentDays / prevTotalDays) * 100) : 0;
         const attendanceTrend = (attendancePercentage - prevAttendancePercentage).toFixed(1);
 
-        // 2. Fee Due - use pendingAmount from StudentFee (CSV source of truth)
-        //    Subtract any additional app-recorded payments on top
-        const csvPending = studentFeeRecord?.pendingAmount || 0;
-        const appPaid = appPayments[0]?.total || 0;
-        // Only subtract appPaid if it's not already reflected in pendingAmount
-        // pendingAmount from CSV = totalFees - totalPaid (at import time)
-        // appPaid = payments made via app after import
-        const dueAmount = Math.max(csvPending - appPaid, 0);
+        // 2. Fee Due - use pendingAmount from StudentFee (source of truth)
+        const dueAmount = studentFeeRecord ? (studentFeeRecord.pendingAmount || 0) : Math.max(0, - (appPayments[0]?.total || 0));
 
         // 3. Performance trend — exam-type wise, ordered FA1 → FA2 → SA1 → FA3 → FA4 → SA2
         const EXAM_ORDER = ['FA1', 'FA2', 'SA1', 'FA3', 'FA4', 'SA2'];
@@ -777,6 +771,8 @@ exports.getStudentStats = async (req, res) => {
                 attendanceTrend: parseFloat(attendanceTrend),
                 dueAmount,
                 totalFees: studentFeeRecord?.totalFees || 0,
+                toPay: studentFeeRecord?.toPay || Math.max(0, (studentFeeRecord?.totalFees || 0) - (studentFeeRecord?.concession || 0)),
+                concession: studentFeeRecord?.concession || 0,
                 totalPaid: studentFeeRecord?.totalPaid || 0,
                 nextExamDate,
                 nextExamName: nextExam?.name || null

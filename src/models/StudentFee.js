@@ -24,6 +24,10 @@ const studentFeeSchema = new mongoose.Schema({
         type: Number,
         default: 0
     },
+    toPay: {
+        type: Number,
+        default: 0
+    },
     totalPaid: {
         type: Number,
         default: 0
@@ -76,7 +80,7 @@ const studentFeeSchema = new mongoose.Schema({
     }
 });
 
-// Middleware to update pending amount before save
+// Middleware to update pending amount and toPay before save
 studentFeeSchema.pre('save', function (next) {
     this.updatedAt = Date.now();
 
@@ -85,13 +89,19 @@ studentFeeSchema.pre('save', function (next) {
         this.totalPaid = this.payments.reduce((sum, payment) => sum + (payment.amount || 0), 0);
     }
 
-    // Recalculate pending: Total + Arrears - Paid - Concession
-    this.pendingAmount = this.totalFees + (this.arrears || 0) - this.totalPaid - this.concession;
+    // Recalculate toPay: Total Fees + Arrears - Concession
+    this.toPay = (this.totalFees || 0) + (this.arrears || 0) - (this.concession || 0);
+
+    // Recalculate pending: toPay - totalPaid
+    this.pendingAmount = Math.max(0, this.toPay - (this.totalPaid || 0));
 
     next();
 });
 
 // Compound index to ensure one fee record per student per year
 studentFeeSchema.index({ student: 1, academicYear: 1 }, { unique: true });
+// Indexes for fast academic year aggregation, class breakdown and defaulters
+studentFeeSchema.index({ academicYear: 1 });
+studentFeeSchema.index({ academicYear: 1, class: 1, pendingAmount: -1 });
 
 module.exports = mongoose.model('StudentFee', studentFeeSchema);

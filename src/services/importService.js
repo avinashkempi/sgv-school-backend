@@ -305,18 +305,27 @@ const processFeeStructure = async (classId, academicYear, row) => {
 };
 
 const buildFeeData = (studentId, row, academicYear, classId, branch) => {
+    const totalFees = parseCurrency(row['Total Fees']);
+    const arrears = parseCurrency(row['Arrears / Previous Dues'] || row['Previous Dues'] || row['Arrears']);
+    const concession = parseCurrency(row['Concession']);
+    const rawToPay = parseCurrency(row['To pay']);
+    const toPay = rawToPay > 0 || row['To pay'] !== undefined ? rawToPay : Math.max(0, totalFees + arrears - concession);
+    const totalPaid = parseCurrency(row['Total Paid']);
+    const rawPending = parseCurrency(row['Pending']);
+    const pendingAmount = rawPending > 0 || row['Pending'] !== undefined ? rawPending : Math.max(0, toPay - totalPaid);
+
     const feeData = {
         student: studentId,
         academicYear: academicYear ? academicYear._id : null,
         class: classId,
         branch: branch,
 
-        totalFees: parseCurrency(row['Total Fees']),
-        arrears: parseCurrency(row['Arrears / Previous Dues'] || row['Previous Dues'] || row['Arrears']),
-        toPay: parseCurrency(row['To pay']),
-        totalPaid: parseCurrency(row['Total Paid']),
-        pendingAmount: parseCurrency(row['Pending']),
-        concession: parseCurrency(row['Concession']),
+        totalFees,
+        arrears,
+        toPay,
+        totalPaid,
+        pendingAmount,
+        concession,
 
         payments: [],
         updatedAt: new Date()

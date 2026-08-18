@@ -201,7 +201,7 @@ router.post('/payment', [auth, checkRole(['admin', 'super admin']), yearContext,
             class: student.currentClass,
             academicYear: academicYearId,
             feeStructure: feeStructure ? feeStructure._id : specificStructures[0]?._id,
-            amount,
+            amount: Number(amount),
             paymentMethod,
             transactionId,
             receiptNumber,
@@ -212,6 +212,29 @@ router.post('/payment', [auth, checkRole(['admin', 'super admin']), yearContext,
         });
 
         await payment.save();
+
+        // Also update/sync with StudentFee record if it exists
+        const studentFee = await StudentFee.findOne({
+            student: studentId,
+            academicYear: academicYearId
+        });
+
+        if (studentFee) {
+            studentFee.payments.push({
+                amount: Number(amount),
+                date: new Date(),
+                invoiceNumber: receiptNumber,
+                installmentNumber: (studentFee.payments?.length || 0) + 1,
+                paymentMode: paymentMethod === 'cash' ? 'Cash' : (paymentMethod === 'online' || paymentMethod === 'upi' ? 'UPI' : (paymentMethod || 'Cash')),
+                remarks: remarks
+            });
+            studentFee.totalPaid = (studentFee.totalPaid || 0) + Number(amount);
+            const toPay = studentFee.toPay || Math.max(0, (studentFee.totalFees || 0) + (studentFee.arrears || 0) - (studentFee.concession || 0));
+            studentFee.toPay = toPay;
+            studentFee.pendingAmount = Math.max(0, toPay - studentFee.totalPaid);
+            studentFee.updatedAt = new Date();
+            await studentFee.save();
+        }
 
         // Notify Student
         await sendTargetedNotification('user', studentId, {
@@ -270,16 +293,15 @@ router.get('/summary', [auth, checkRole(['admin', 'super admin']), yearContext],
             let totalFees = 0;
             let paidAmount = 0;
             let pendingAmount = 0;
+            let concession = 0;
+            let toPay = 0;
 
             if (feeRecord) {
-                totalFees = feeRecord.totalFees;
-                paidAmount = feeRecord.totalPaid;
-                pendingAmount = feeRecord.pendingAmount;
-            } else {
-                // Fallback: If no StudentFee record, usually means no fee assigned or data not imported yet.
-                // We could try to calculate from FeeStructure/FeePayment but that's heavy. 
-                // For the summary list, we'll default to 0 to keep it fast.
-                // Detailed calculation happens when clicking on a student.
+                totalFees = feeRecord.totalFees || 0;
+                paidAmount = feeRecord.totalPaid || 0;
+                pendingAmount = feeRecord.pendingAmount || 0;
+                concession = feeRecord.concession || 0;
+                toPay = feeRecord.toPay || Math.max(0, totalFees + (feeRecord.arrears || 0) - concession);
             }
 
             return {
@@ -291,6 +313,8 @@ router.get('/summary', [auth, checkRole(['admin', 'super admin']), yearContext],
                 section: student.currentClass?.section || '',
                 currentClassId: student.currentClass?._id,
                 totalFees,
+                toPay,
+                concession,
                 paidAmount,
                 pendingAmount
             };
@@ -320,6 +344,13 @@ router.get('/student/:studentId', [auth, yearContext], async (req, res) => {
         const student = await User.findById(req.params.studentId);
         if (!student) return res.status(404).json({ message: 'Student not found' });
 
+        // Fetch Fee Structure for payment schedule comparison
+        const defaultFeeStructure = await FeeStructure.findOne({
+            class: student.currentClass,
+            academicYear: academicYearId,
+            type: 'class_default'
+        });
+
         // CHECK FOR IMPORTED FEE RECORD FIRST (StudentFee)
         // This is the source of truth for imported data
         const StudentFee = require('../models/StudentFee');
@@ -327,6 +358,45 @@ router.get('/student/:studentId', [auth, yearContext], async (req, res) => {
             student: req.params.studentId,
             academicYear: academicYearId
         });
+
+        const computeInstallmentSchedule = (totalPaidAmount, structure) => {
+            if (!structure?.paymentSchedule || structure.paymentSchedule.length === 0) {
+                return [];
+            }
+            const now = new Date();
+            let runningTarget = 0;
+
+            return structure.paymentSchedule.map((inst, idx) => {
+                runningTarget += (inst.amount || 0);
+                let status = 'upcoming';
+                let paidForInst = 0;
+
+                if (totalPaidAmount >= runningTarget) {
+                    status = 'paid';
+                    paidForInst = inst.amount || 0;
+                } else if (totalPaidAmount > (runningTarget - (inst.amount || 0))) {
+                    status = 'partial';
+                    paidForInst = totalPaidAmount - (runningTarget - (inst.amount || 0));
+                } else {
+                    if (inst.dueDate && new Date(inst.dueDate) < now) {
+                        status = 'overdue';
+                    } else if (inst.dueDate && (new Date(inst.dueDate).getTime() - now.getTime()) < 14 * 24 * 60 * 60 * 1000) {
+                        status = 'due_soon';
+                    } else {
+                        status = 'upcoming';
+                    }
+                }
+
+                return {
+                    installmentNumber: inst.installmentNumber || idx + 1,
+                    description: inst.description || `Installment ${inst.installmentNumber || idx + 1}`,
+                    amount: inst.amount || 0,
+                    dueDate: inst.dueDate,
+                    paidAmount: paidForInst,
+                    status
+                };
+            });
+        };
 
         if (studentFee) {
             // Map payments to match expected frontend structure
@@ -340,29 +410,29 @@ router.get('/student/:studentId', [auth, yearContext], async (req, res) => {
                 installmentNumber: p.installmentNumber
             })).sort((a, b) => new Date(b.paymentDate) - new Date(a.paymentDate));
 
+            const toPay = studentFee.toPay || Math.max(0, (studentFee.totalFees || 0) + (studentFee.arrears || 0) - (studentFee.concession || 0));
+            const installmentSchedule = computeInstallmentSchedule(studentFee.totalPaid || 0, defaultFeeStructure);
+
             return res.json({
                 feeStructure: {
                     totalAmount: studentFee.totalFees,
-                    components: [
+                    components: defaultFeeStructure?.components?.length > 0 ? defaultFeeStructure.components : [
                         { name: "Tuition & Other Fees", amount: studentFee.totalFees }
-                    ]
+                    ],
+                    paymentSchedule: defaultFeeStructure?.paymentSchedule || []
                 },
                 totalFees: studentFee.totalFees,
+                toPay: toPay,
                 paidAmount: studentFee.totalPaid,
                 pendingAmount: studentFee.pendingAmount,
                 concession: studentFee.concession || 0,
-                payments: mappedPayments
+                arrears: studentFee.arrears || 0,
+                payments: mappedPayments,
+                installmentSchedule: installmentSchedule
             });
         }
 
         // --- FALLBACK TO LEGACY/CALCULATED LOGIC ---
-
-        // Get Fee Structure (Default)
-        const defaultFeeStructure = await FeeStructure.findOne({
-            class: student.currentClass,
-            academicYear: academicYearId,
-            type: 'class_default'
-        });
 
         // Get Specific Fee Structures
         const specificFeeStructures = await FeeStructure.find({
@@ -375,9 +445,13 @@ router.get('/student/:studentId', [auth, yearContext], async (req, res) => {
         if (!defaultFeeStructure && specificFeeStructures.length === 0) {
             return res.json({
                 totalFees: 0,
+                toPay: 0,
                 paidAmount: 0,
                 pendingAmount: 0,
+                concession: 0,
+                arrears: 0,
                 payments: [],
+                installmentSchedule: [],
                 message: 'Fee structure not found'
             });
         }
@@ -404,17 +478,23 @@ router.get('/student/:studentId', [auth, yearContext], async (req, res) => {
         }).sort({ paymentDate: -1 });
 
         const paidAmount = payments.reduce((sum, p) => sum + p.amount, 0);
-        const pendingAmount = totalFees - paidAmount;
+        const pendingAmount = Math.max(0, totalFees - paidAmount);
+        const installmentSchedule = computeInstallmentSchedule(paidAmount, defaultFeeStructure);
 
         res.json({
             feeStructure: {
                 totalAmount: totalFees,
-                components: components
+                components: components,
+                paymentSchedule: defaultFeeStructure?.paymentSchedule || []
             },
             totalFees,
+            toPay: totalFees,
             paidAmount,
             pendingAmount,
-            payments
+            concession: 0,
+            arrears: 0,
+            payments,
+            installmentSchedule
         });
 
     } catch (err) {
@@ -424,7 +504,7 @@ router.get('/student/:studentId', [auth, yearContext], async (req, res) => {
 });
 
 // @route   GET /api/fees/analytics
-// @desc    Get fee collection analytics (Scroped to Academic Year Context)
+// @desc    Get fee collection analytics (Scoped to Academic Year Context) with single $facet query
 // @access  Admin/Super Admin
 router.get('/analytics', [auth, checkRole(['admin', 'super admin']), yearContext], async (req, res) => {
     try {
@@ -435,44 +515,118 @@ router.get('/analytics', [auth, checkRole(['admin', 'super admin']), yearContext
 
         const firstDayOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
 
-        const [todayPayments, monthPayments, globalStats] = await Promise.all([
-            // Collected Today (from payments array — needs date filter)
-            StudentFee.aggregate([
-                { $match: { academicYear: academicYearId } },
-                { $unwind: "$payments" },
-                { $match: { "payments.date": { $gte: today } } },
-                { $group: { _id: null, total: { $sum: '$payments.amount' } } }
-            ]),
-            // Collected This Month (from payments array — needs date filter)
-            StudentFee.aggregate([
-                { $match: { academicYear: academicYearId } },
-                { $unwind: "$payments" },
-                { $match: { "payments.date": { $gte: firstDayOfMonth } } },
-                { $group: { _id: null, total: { $sum: '$payments.amount' } } }
-            ]),
-            // Global Stats for the Academic Year
-            StudentFee.aggregate([
-                { $match: { academicYear: academicYearId } },
-                { $group: { 
-                    _id: null, 
-                    totalCollected: { $sum: '$totalPaid' },
-                    totalPending: { $sum: '$pendingAmount' },
-                    totalArrears: { $sum: '$arrears' },
-                    totalFees: { $sum: '$totalFees' }
-                } }
-            ])
+        const aggregationResult = await StudentFee.aggregate([
+            { $match: { academicYear: academicYearId } },
+            {
+                $facet: {
+                    todayPayments: [
+                        { $unwind: "$payments" },
+                        { $match: { "payments.date": { $gte: today } } },
+                        { $group: { _id: null, total: { $sum: '$payments.amount' } } }
+                    ],
+                    monthPayments: [
+                        { $unwind: "$payments" },
+                        { $match: { "payments.date": { $gte: firstDayOfMonth } } },
+                        { $group: { _id: null, total: { $sum: '$payments.amount' } } }
+                    ],
+                    globalStats: [
+                        {
+                            $group: {
+                                _id: null,
+                                totalCollected: { $sum: '$totalPaid' },
+                                totalPending: { $sum: '$pendingAmount' },
+                                totalArrears: { $sum: '$arrears' },
+                                totalConcession: { $sum: '$concession' },
+                                totalGrossFees: { $sum: '$totalFees' },
+                                totalExpectedFees: {
+                                    $sum: {
+                                        $subtract: [
+                                            { $add: [{ $ifNull: ['$totalFees', 0] }, { $ifNull: ['$arrears', 0] }] },
+                                            { $ifNull: ['$concession', 0] }
+                                        ]
+                                    }
+                                },
+                                totalStudents: { $sum: 1 }
+                            }
+                        }
+                    ],
+                    classBreakdown: [
+                        {
+                            $group: {
+                                _id: "$class",
+                                totalFees: { $sum: "$totalFees" },
+                                totalConcession: { $sum: "$concession" },
+                                totalArrears: { $sum: "$arrears" },
+                                totalExpected: {
+                                    $sum: {
+                                        $subtract: [
+                                            { $add: [{ $ifNull: ["$totalFees", 0] }, { $ifNull: ["$arrears", 0] }] },
+                                            { $ifNull: ["$concession", 0] }
+                                        ]
+                                    }
+                                },
+                                totalPaid: { $sum: "$totalPaid" },
+                                totalPending: { $sum: "$pendingAmount" },
+                                studentCount: { $sum: 1 }
+                            }
+                        },
+                        {
+                            $lookup: {
+                                from: "classes",
+                                localField: "_id",
+                                foreignField: "_id",
+                                as: "classInfo"
+                            }
+                        },
+                        { $unwind: { path: "$classInfo", preserveNullAndEmptyArrays: true } },
+                        {
+                            $project: {
+                                classId: "$_id",
+                                className: { $ifNull: ["$classInfo.name", "Unassigned"] },
+                                section: { $ifNull: ["$classInfo.section", ""] },
+                                totalFees: 1,
+                                totalExpected: 1,
+                                totalPaid: 1,
+                                totalPending: 1,
+                                totalConcession: 1,
+                                totalArrears: 1,
+                                studentCount: 1,
+                                collectionRate: {
+                                    $cond: [
+                                        { $gt: ["$totalExpected", 0] },
+                                        { $round: [{ $multiply: [{ $divide: ["$totalPaid", "$totalExpected"] }, 100] }, 1] },
+                                        0
+                                    ]
+                                }
+                            }
+                        },
+                        { $sort: { className: 1, section: 1 } }
+                    ]
+                }
+            }
         ]);
 
-        const stats = globalStats[0] || {};
-        const totalExpectedFees = (stats.totalFees || 0) + (stats.totalArrears || 0);
+        const facet = aggregationResult[0] || {};
+        const stats = facet.globalStats?.[0] || {};
+        const todayTotal = facet.todayPayments?.[0]?.total || 0;
+        const monthTotal = facet.monthPayments?.[0]?.total || 0;
+        const classBreakdown = facet.classBreakdown || [];
+
+        const totalExpectedFees = stats.totalExpectedFees !== undefined
+            ? stats.totalExpectedFees
+            : ((stats.totalGrossFees || 0) + (stats.totalArrears || 0) - (stats.totalConcession || 0));
 
         res.json({
-            collectedToday: todayPayments[0]?.total || 0,
-            collectedThisMonth: monthPayments[0]?.total || 0,
+            collectedToday: todayTotal,
+            collectedThisMonth: monthTotal,
             totalCollected: stats.totalCollected || 0,
             totalPending: stats.totalPending || 0,
             totalArrears: stats.totalArrears || 0,
-            totalExpectedFees: totalExpectedFees
+            totalConcession: stats.totalConcession || 0,
+            totalGrossFees: stats.totalGrossFees || 0,
+            totalExpectedFees: totalExpectedFees,
+            totalStudents: stats.totalStudents || 0,
+            classBreakdown: classBreakdown
         });
 
     } catch (err) {

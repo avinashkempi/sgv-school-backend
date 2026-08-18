@@ -89,11 +89,12 @@ router.post('/apply', authenticateToken, async (req, res) => {
                         metadata: { leaveId: leaveRequest._id }
                     });
                 }
-            } else if (req.user.role === 'teacher') {
-                // Teacher leave: notify all admins
+            } else if (req.user.role === 'teacher' || req.user.role === 'staff') {
+                // Teacher/Staff leave: notify all admins
+                const roleLabel = req.user.role === 'staff' ? 'Staff' : 'Teacher';
                 notificationController.triggerNotification({
                     title: '📋 New Leave Request',
-                    message: `${applicantName} (Teacher) has requested leave from ${startDate} to ${endDate}. Awaiting your approval.`,
+                    message: `${applicantName} (${roleLabel}) has requested leave from ${startDate} to ${endDate}. Awaiting your approval.`,
                     type: 'General',
                     category: 'leave',
                     priority: 'high',
@@ -157,11 +158,11 @@ router.get('/requests', authenticateToken, checkRole(['teacher', 'admin', 'super
             query.class = classObj._id;
             query.applicantRole = 'student';
         } else if (req.user.role === 'admin') {
-            // Admin sees pending leaves for Students (All) AND Teachers
-            query.applicantRole = { $in: ['student', 'teacher'] };
+            // Admin sees pending leaves for Students (All), Teachers, and Staff
+            query.applicantRole = { $in: ['student', 'teacher', 'staff'] };
         } else if (req.user.role === 'super admin') {
-            // Super Admin sees ALL pending leaves (including Admins)
-            query.applicantRole = { $in: ['student', 'teacher', 'admin'] };
+            // Super Admin sees ALL pending leaves (including Admins and Staff)
+            query.applicantRole = { $in: ['student', 'teacher', 'staff', 'admin'] };
         }
 
 
@@ -223,8 +224,8 @@ router.put('/:id/action', authenticateToken, checkRole(['teacher', 'admin', 'sup
             } else if (['admin', 'super admin'].includes(req.user.role)) {
                 isAuthorized = true;
             }
-        } else if (applicantRole === 'teacher') {
-            // Teacher leave: Admin OR Super Admin can approve
+        } else if (applicantRole === 'teacher' || applicantRole === 'staff') {
+            // Teacher/Staff leave: Admin OR Super Admin can approve
             if (['admin', 'super admin'].includes(req.user.role)) {
                 isAuthorized = true;
             }
