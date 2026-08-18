@@ -689,7 +689,7 @@ router.get('/missing-tracker', [auth, yearContext], async (req, res) => {
             }
         }
 
-        if (req.user.role === 'teacher') {
+        if (req.user.role === 'teacher' || req.user.role === 'staff' || req.user.role === 'support_staff') {
             // Find class where teacher is classTeacher
             const assignedClass = await Class.findOne({ classTeacher: req.user.userId }).lean();
             if (!assignedClass) {
