@@ -684,7 +684,7 @@ exports.getReports = async (req, res) => {
             }).populate('applicant', 'name role').lean(),
             User.find({
                 role: { $in: ['teacher', 'staff', 'support_staff'] }
-            }).select('name email phone role').lean(),
+            }).select('name email phone role designation').lean(),
             Attendance.aggregate([
                 {
                     $match: {
@@ -761,6 +761,7 @@ exports.getReports = async (req, res) => {
                 email: staff.email,
                 phone: staff.phone,
                 role: staff.role,
+                designation: staff.designation || null,
                 totalDays,
                 presentDays,
                 absentDays,
@@ -786,6 +787,7 @@ exports.getReports = async (req, res) => {
                     name: name,
                     email: stat.userInfo?.[0]?.email,
                     role: stat.userInfo?.[0]?.role || 'staff',
+                    designation: stat.userInfo?.[0]?.designation || null,
                     totalDays,
                     presentDays,
                     absentDays: stat.absentDays || 0,
