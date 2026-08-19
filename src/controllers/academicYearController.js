@@ -672,46 +672,148 @@ exports.getReports = async (req, res) => {
         const year = await AcademicYear.findById(academicYearId);
         if (!year) return res.status(404).json({ msg: 'Academic year not found' });
 
-        const [history, exams, teacherLeaves, teacherAttendance] = await Promise.all([
+        const [history, exams, teacherLeaves, staffUsers, attendanceAgg] = await Promise.all([
             StudentHistory.find({ academicYear: academicYearId })
                 .populate('student', 'name email phone')
                 .populate('class', 'name section')
                 .lean(),
             Exam.find({ academicYear: academicYearId }).lean(),
             LeaveRequest.find({
-                applicantRole: { $in: ['teacher', 'staff'] },
+                applicantRole: { $in: ['teacher', 'staff', 'support_staff'] },
                 startDate: { $gte: year.startDate, $lte: year.endDate }
             }).populate('applicant', 'name role').lean(),
+            User.find({
+                role: { $in: ['teacher', 'staff', 'support_staff'] }
+            }).select('name email phone role').lean(),
             Attendance.aggregate([
                 {
                     $match: {
-                        role: { $in: ['teacher', 'staff'] },
-                        date: { $gte: year.startDate, $lte: year.endDate }
+                        role: { $in: ['teacher', 'staff', 'support_staff'] },
+                        $or: [
+                            { academicYear: year._id },
+                            { date: { $gte: year.startDate, $lte: year.endDate } }
+                        ]
                     }
                 },
                 {
                     $group: {
-                        _id: { user: '$user', status: '$status' },
-                        count: { $sum: 1 }
+                        _id: '$user',
+                        totalDays: { $sum: 1 },
+                        presentDays: {
+                            $sum: {
+                                $cond: [{ $in: ['$status', ['present', 'late', 'excused']] }, 1, 0]
+                            }
+                        },
+                        absentDays: {
+                            $sum: {
+                                $cond: [{ $eq: ['$status', 'absent'] }, 1, 0]
+                            }
+                        },
+                        lateDays: {
+                            $sum: {
+                                $cond: [{ $eq: ['$status', 'late'] }, 1, 0]
+                            }
+                        },
+                        halfDays: {
+                            $sum: {
+                                $cond: [{ $eq: ['$status', 'half-day'] }, 1, 0]
+                            }
+                        },
+                        excusedDays: {
+                            $sum: {
+                                $cond: [{ $eq: ['$status', 'excused'] }, 1, 0]
+                            }
+                        }
                     }
                 },
                 {
                     $lookup: {
                         from: 'users',
-                        localField: '_id.user',
+                        localField: '_id',
                         foreignField: '_id',
                         as: 'userInfo'
-                    }
-                },
-                {
-                    $project: {
-                        user: { $arrayElemAt: ['$userInfo.name', 0] },
-                        status: '$_id.status',
-                        count: 1
                     }
                 }
             ])
         ]);
+
+        const attendanceMap = new Map();
+        attendanceAgg.forEach(stat => {
+            attendanceMap.set(stat._id.toString(), stat);
+        });
+
+        // Consolidate per-staff attendance statistics
+        const teacherAttendance = staffUsers.map(staff => {
+            const stat = attendanceMap.get(staff._id.toString());
+            const totalDays = stat?.totalDays || 0;
+            const presentDays = stat?.presentDays || 0;
+            const absentDays = stat?.absentDays || 0;
+            const lateDays = stat?.lateDays || 0;
+            const halfDays = stat?.halfDays || 0;
+            const excusedDays = stat?.excusedDays || 0;
+            const percentage = totalDays > 0 ? parseFloat(((presentDays / totalDays) * 100).toFixed(1)) : 0;
+
+            return {
+                userId: staff._id,
+                _id: staff._id,
+                user: staff.name,
+                name: staff.name,
+                email: staff.email,
+                phone: staff.phone,
+                role: staff.role,
+                totalDays,
+                presentDays,
+                absentDays,
+                lateDays,
+                halfDays,
+                excusedDays,
+                percentage
+            };
+        });
+
+        // Include any attendance records for staff not in current staffUsers list (e.g. deactivated/alumni staff)
+        attendanceAgg.forEach(stat => {
+            const alreadyIncluded = teacherAttendance.some(t => t._id.toString() === stat._id.toString());
+            if (!alreadyIncluded) {
+                const totalDays = stat.totalDays || 0;
+                const presentDays = stat.presentDays || 0;
+                const percentage = totalDays > 0 ? parseFloat(((presentDays / totalDays) * 100).toFixed(1)) : 0;
+                const name = stat.userInfo?.[0]?.name || 'Staff Member';
+                teacherAttendance.push({
+                    userId: stat._id,
+                    _id: stat._id,
+                    user: name,
+                    name: name,
+                    email: stat.userInfo?.[0]?.email,
+                    role: stat.userInfo?.[0]?.role || 'staff',
+                    totalDays,
+                    presentDays,
+                    absentDays: stat.absentDays || 0,
+                    lateDays: stat.lateDays || 0,
+                    halfDays: stat.halfDays || 0,
+                    excusedDays: stat.excusedDays || 0,
+                    percentage
+                });
+            }
+        });
+
+        // Sort alphabetically by name
+        teacherAttendance.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+
+        // Calculate summary statistics
+        const trackedStaff = teacherAttendance.filter(t => t.totalDays > 0);
+        const avgPercentage = trackedStaff.length > 0
+            ? parseFloat((trackedStaff.reduce((sum, t) => sum + t.percentage, 0) / trackedStaff.length).toFixed(1))
+            : 0;
+
+        const teacherAttendanceSummary = {
+            totalStaff: staffUsers.length,
+            trackedStaff: trackedStaff.length,
+            averagePercentage: avgPercentage,
+            totalPresentDays: teacherAttendance.reduce((sum, t) => sum + t.presentDays, 0),
+            totalAbsentDays: teacherAttendance.reduce((sum, t) => sum + t.absentDays, 0),
+            totalLateDays: teacherAttendance.reduce((sum, t) => sum + t.lateDays, 0)
+        };
 
         const classWiseStudents = history.reduce((acc, curr) => {
             const className = curr.class ? `${curr.class.name} ${curr.class.section || ''}` : 'Unassigned';
@@ -731,7 +833,8 @@ exports.getReports = async (req, res) => {
             classWiseStudents,
             marks,
             teacherLeaves,
-            teacherAttendance
+            teacherAttendance,
+            teacherAttendanceSummary
         });
 
     } catch (err) {
