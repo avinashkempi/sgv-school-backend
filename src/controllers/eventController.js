@@ -130,8 +130,16 @@ const getEvent = async (req, res) => {
     // Date range filter
     if (req.query.startDate || req.query.endDate) {
       query.date = {};
-      if (req.query.startDate) query.date.$gte = new Date(req.query.startDate);
-      if (req.query.endDate) query.date.$lte = new Date(req.query.endDate);
+      if (req.query.startDate) {
+        const start = new Date(req.query.startDate);
+        start.setHours(0, 0, 0, 0);
+        query.date.$gte = start;
+      }
+      if (req.query.endDate) {
+        const end = new Date(req.query.endDate);
+        end.setHours(23, 59, 59, 999);
+        query.date.$lte = end;
+      }
     }
 
     // School event filter
