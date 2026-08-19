@@ -163,7 +163,7 @@ const getStudentRankings = async (classId, academicYearId, examType = null) => {
             examQuery.standardizedType = examType;
         }
 
-        const exams = await Exam.find(examQuery).lean();
+        const exams = await Exam.find(examQuery).populate('subject', 'name').lean();
         const students = await User.find({
             currentClass: classId,
             role: 'student'
@@ -180,12 +180,23 @@ const getStudentRankings = async (classId, academicYearId, examType = null) => {
 
             let totalObtained = 0;
             let totalMax = 0;
+            const subjectScores = [];
 
             studentMarks.forEach(mark => {
                 const exam = exams.find(e => e._id.toString() === mark.exam.toString());
                 if (exam) {
                     totalObtained += mark.marksObtained;
                     totalMax += exam.totalMarks;
+                    subjectScores.push({
+                        examId: exam._id,
+                        subjectId: exam.subject?._id,
+                        subjectName: exam.subject?.name || 'Unknown',
+                        examType: exam.standardizedType,
+                        marksObtained: mark.marksObtained,
+                        totalMarks: exam.totalMarks,
+                        percentage: exam.totalMarks > 0 ? parseFloat(((mark.marksObtained / exam.totalMarks) * 100).toFixed(1)) : 0,
+                        grade: mark.grade || getDefaultGrade(exam.totalMarks > 0 ? (mark.marksObtained / exam.totalMarks) * 100 : 0)
+                    });
                 }
             });
 
@@ -200,7 +211,8 @@ const getStudentRankings = async (classId, academicYearId, examType = null) => {
                 percentage: parseFloat(percentage),
                 grade: getDefaultGrade(parseFloat(percentage)),
                 examsAttempted: studentMarks.length,
-                totalExams: exams.length
+                totalExams: exams.length,
+                subjectScores
             };
         });
 

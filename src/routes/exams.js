@@ -628,9 +628,38 @@ router.get('/performance/school', auth, async (req, res) => {
             const activeYear = await AcademicYear.findOne({ isActive: true });
             if (activeYear) yearId = activeYear._id;
         }
-        const exams = await Exam.find({ academicYear: yearId, isStandardized: true }).populate('class subject').lean();
+        const exams = await Exam.find({ academicYear: yearId, isStandardized: true }).populate('class subject createdBy').lean();
         const examIds = exams.map(e => e._id);
         const allMarks = await Marks.find({ exam: { $in: examIds } }).lean();
+        const classes = await Class.find().populate('classTeacher', 'name email').lean();
+        const allStudents = await User.find({ role: 'student' }).select('name currentClass').lean();
+
+        // Map class student counts
+        const classStudentCountMap = {};
+        allStudents.forEach(s => {
+            if (s.currentClass) {
+                const cId = s.currentClass.toString();
+                classStudentCountMap[cId] = (classStudentCountMap[cId] || 0) + 1;
+            }
+        });
+
+        // Global KPI Totals
+        let schoolTotalMarksEvaluated = 0;
+        let schoolTotalMarksObtained = 0;
+        allMarks.forEach(mark => {
+            const exam = exams.find(e => e._id.toString() === mark.exam.toString());
+            if (exam) {
+                schoolTotalMarksEvaluated += exam.totalMarks;
+                schoolTotalMarksObtained += mark.marksObtained;
+            }
+        });
+
+        let totalExpectedEntries = 0;
+        exams.forEach(exam => {
+            const cId = exam.class?._id?.toString() || exam.class?.toString();
+            const studentCount = classStudentCountMap[cId] || 0;
+            totalExpectedEntries += studentCount;
+        });
 
         const examTypes = ['FA1', 'FA2', 'SA1', 'FA3', 'FA4', 'SA2'];
         const schoolPerformance = examTypes.map(type => {
@@ -643,13 +672,43 @@ router.get('/performance/school', auth, async (req, res) => {
                 if (exam) { totalMarks += exam.totalMarks; obtainedMarks += mark.marksObtained; }
             });
             const avgPercentage = totalMarks > 0 ? ((obtainedMarks / totalMarks) * 100).toFixed(2) : 0;
-            return { examType: type, examsCount: typeExams.length, marksEntered: marksForType.length, avgPercentage: parseFloat(avgPercentage) };
+
+            // Representative max marks for this type (e.g. 25, 50, 100)
+            const representativeMaxMarks = typeExams.length > 0 ? (typeExams[0].totalMarks || 100) : 100;
+
+            let typeExpectedMarks = 0;
+            typeExams.forEach(exam => {
+                const cId = exam.class?._id?.toString() || exam.class?.toString();
+                typeExpectedMarks += (classStudentCountMap[cId] || 0);
+            });
+
+            const avgMarksObtained = marksForType.length > 0
+                ? parseFloat((obtainedMarks / marksForType.length).toFixed(1))
+                : 0;
+
+            const marksPublishedCount = typeExams.filter(e => e.marksPublished).length;
+
+            return {
+                examType: type,
+                examsCount: typeExams.length,
+                marksEntered: marksForType.length,
+                expectedMarks: typeExpectedMarks,
+                totalMarksEvaluated: totalMarks,
+                totalMarksObtained: obtainedMarks,
+                maxMarks: representativeMaxMarks,
+                avgMarksObtained,
+                avgPercentage: parseFloat(avgPercentage),
+                marksPublishedCount,
+                completionRate: typeExpectedMarks > 0 ? parseFloat(((marksForType.length / typeExpectedMarks) * 100).toFixed(1)) : 0
+            };
         });
 
-        const classes = await Class.find().lean();
         const classwiseSummary = classes.map(cls => {
-            const classExams = exams.filter(e => e.class._id.toString() === cls._id.toString());
-            const marks = allMarks.filter(m => classExams.some(e => e._id.toString() === m.exam.toString()));
+            const cId = cls._id.toString();
+            const studentCount = classStudentCountMap[cId] || 0;
+            const classExams = exams.filter(e => (e.class?._id?.toString() || e.class?.toString()) === cId);
+            const classExamIds = classExams.map(e => e._id.toString());
+            const marks = allMarks.filter(m => classExamIds.includes(m.exam.toString()));
             let total = 0, obtained = 0;
             marks.forEach(mark => {
                 const exam = classExams.find(e => e._id.toString() === mark.exam.toString());
@@ -659,46 +718,85 @@ router.get('/performance/school', auth, async (req, res) => {
             // Per-exam-type breakdown for this class
             const examTypeBreakdown = examTypes.map(type => {
                 const typeExams = classExams.filter(e => e.standardizedType === type);
-                const typeMarks = allMarks.filter(m => typeExams.some(e => e._id.toString() === m.exam.toString()));
+                const typeExamIds = typeExams.map(e => e._id.toString());
+                const typeMarks = allMarks.filter(m => typeExamIds.includes(m.exam.toString()));
                 let tTotal = 0, tObtained = 0;
                 typeMarks.forEach(mark => {
                     const exam = typeExams.find(e => e._id.toString() === mark.exam.toString());
                     if (exam) { tTotal += exam.totalMarks; tObtained += mark.marksObtained; }
                 });
+                const repMax = typeExams.length > 0 ? (typeExams[0].totalMarks || 100) : 100;
+                const expected = typeExams.length * studentCount;
                 return {
                     examType: type,
+                    maxMarks: repMax,
+                    totalMarksEvaluated: tTotal,
+                    totalMarksObtained: tObtained,
+                    avgMarksObtained: typeMarks.length > 0 ? parseFloat((tObtained / typeMarks.length).toFixed(1)) : null,
                     avgPercentage: tTotal > 0 ? parseFloat(((tObtained / tTotal) * 100).toFixed(2)) : null,
                     marksEntered: typeMarks.length,
-                    examsCount: typeExams.length
+                    expectedMarks: expected,
+                    examsCount: typeExams.length,
+                    status: typeExams.length === 0 ? 'not_initialized' : (typeMarks.length === 0 ? 'pending' : (typeMarks.length >= expected ? 'completed' : 'partial'))
                 };
-            }).filter(b => b.examsCount > 0);
+            });
+
+            const maxMarksSum = classExams.reduce((sum, e) => sum + (e.totalMarks || 0), 0);
+            const avgMarksPerStudent = studentCount > 0 ? parseFloat((obtained / studentCount).toFixed(1)) : 0;
 
             return {
                 classId: cls._id,
-                className: `${cls.name} ${cls.section || ''}`,
-                avgPercentage: total > 0 ? parseFloat(((obtained / total) * 100).toFixed(2)) : 0,
+                className: `${cls.name} ${cls.section || ''}`.trim(),
+                classTeacher: cls.classTeacher ? cls.classTeacher.name : null,
+                studentCount,
                 examsCount: classExams.length,
+                marksEnteredCount: marks.length,
+                totalExpectedMarks: classExams.length * studentCount,
+                totalMarksEvaluated: total,
+                totalMarksObtained: obtained,
+                maxMarksPerStudent: maxMarksSum,
+                avgMarksPerStudent,
+                avgPercentage: total > 0 ? parseFloat(((obtained / total) * 100).toFixed(2)) : 0,
                 examTypeBreakdown
             };
         });
 
         const subjectNameMap = new Map();
         exams.forEach(exam => {
-            const name = exam.subject.name.trim();
+            const name = (exam.subject?.name || 'Unknown Subject').trim();
+            const subjectId = exam.subject?._id?.toString() || exam.subject?.toString();
             const marks = allMarks.filter(m => m.exam.toString() === exam._id.toString());
-            if (!subjectNameMap.has(name)) subjectNameMap.set(name, { total: 0, obtained: 0, count: 0, examsByType: {} });
+            if (!subjectNameMap.has(name)) {
+                subjectNameMap.set(name, {
+                    subjectId,
+                    total: 0,
+                    obtained: 0,
+                    count: 0,
+                    marksEntered: 0,
+                    maxMarks: exam.totalMarks || 100,
+                    highest: 0,
+                    lowest: 999999,
+                    examsByType: {}
+                });
+            }
             const s = subjectNameMap.get(name);
-            s.total += exam.totalMarks * marks.length;
-            marks.forEach(m => s.obtained += m.marksObtained);
+            s.total += (exam.totalMarks || 0) * marks.length;
+            marks.forEach(m => {
+                s.obtained += m.marksObtained;
+                if (m.marksObtained > s.highest) s.highest = m.marksObtained;
+                if (m.marksObtained < s.lowest) s.lowest = m.marksObtained;
+            });
             s.count += 1;
+            s.marksEntered += marks.length;
 
             // Group by exam type for breakdown
             const type = exam.standardizedType;
-            if (!s.examsByType[type]) s.examsByType[type] = { total: 0, obtained: 0, count: 0 };
+            if (!s.examsByType[type]) s.examsByType[type] = { total: 0, obtained: 0, count: 0, marksEntered: 0, maxMarks: exam.totalMarks || 100 };
             const t = s.examsByType[type];
-            t.total += exam.totalMarks * marks.length;
+            t.total += (exam.totalMarks || 0) * marks.length;
             marks.forEach(m => t.obtained += m.marksObtained);
             t.count += 1;
+            t.marksEntered += marks.length;
         });
 
         const subjectwiseSummary = Array.from(subjectNameMap.entries()).map(([name, s]) => {
@@ -707,20 +805,66 @@ router.get('/performance/school', auth, async (req, res) => {
                 if (!t || t.count === 0) return null;
                 return {
                     examType: type,
+                    maxMarks: t.maxMarks,
+                    totalMarksEvaluated: t.total,
+                    totalMarksObtained: t.obtained,
+                    avgMarksObtained: t.marksEntered > 0 ? parseFloat((t.obtained / t.marksEntered).toFixed(1)) : null,
                     avgPercentage: t.total > 0 ? parseFloat(((t.obtained / t.total) * 100).toFixed(2)) : null,
-                    examsCount: t.count
+                    examsCount: t.count,
+                    marksEntered: t.marksEntered
                 };
             }).filter(Boolean);
 
             return {
+                subjectId: s.subjectId,
                 subjectName: name,
+                maxMarks: s.maxMarks,
+                totalMarksEvaluated: s.total,
+                totalMarksObtained: s.obtained,
+                avgMarksObtained: s.marksEntered > 0 ? parseFloat((s.obtained / s.marksEntered).toFixed(1)) : 0,
                 avgPercentage: s.total > 0 ? parseFloat(((s.obtained / s.total) * 100).toFixed(2)) : 0,
+                highestMarks: s.marksEntered > 0 ? s.highest : null,
+                lowestMarks: s.marksEntered > 0 && s.lowest !== 999999 ? s.lowest : null,
                 examsCount: s.count,
+                marksEntered: s.marksEntered,
                 examTypeBreakdown
             };
         });
 
-        res.json({ examwisePerformance: schoolPerformance, classwiseSummary, subjectwiseSummary });
+        // Initialization overview
+        const totalClassesCount = classes.length;
+        const fullyInitializedClassesCount = classwiseSummary.filter(c => c.examsCount >= 6).length;
+        const partiallyInitializedClassesCount = classwiseSummary.filter(c => c.examsCount > 0 && c.examsCount < 6).length;
+        const uninitializedClassesCount = classwiseSummary.filter(c => c.examsCount === 0).length;
+
+        const kpis = {
+            totalMarksEvaluated: schoolTotalMarksEvaluated,
+            totalMarksObtained: schoolTotalMarksObtained,
+            schoolAvgPercentage: schoolTotalMarksEvaluated > 0 ? parseFloat(((schoolTotalMarksObtained / schoolTotalMarksEvaluated) * 100).toFixed(2)) : 0,
+            totalExamsConfigured: exams.length,
+            totalStudentsCount: allStudents.length,
+            totalMarksEntriesCount: allMarks.length,
+            totalExpectedEntries,
+            completionRate: totalExpectedEntries > 0 ? parseFloat(((allMarks.length / totalExpectedEntries) * 100).toFixed(1)) : 0,
+            fullyInitializedClassesCount,
+            totalClassesCount
+        };
+
+        const initializationSummary = {
+            totalClassesCount,
+            fullyInitializedClassesCount,
+            partiallyInitializedClassesCount,
+            uninitializedClassesCount,
+            totalExamsConfigured: exams.length
+        };
+
+        res.json({
+            kpis,
+            examwisePerformance: schoolPerformance,
+            classwiseSummary,
+            subjectwiseSummary,
+            initializationSummary
+        });
     } catch (err) {
         console.error(err.message);
         res.status(500).send('Server Error');
