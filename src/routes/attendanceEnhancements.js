@@ -5,6 +5,10 @@ const { yearContext, requireOpenYear } = require('../middleware/yearContext');
 const { canAccessClass, requireStudentAccessParam } = require('../middleware/accessControl');
 const Attendance = require('../models/Attendance');
 const User = require('../models/User');
+const {
+    getISTDateString,
+    validateAttendanceDate
+} = require('../utils/dateUtils');
 
 // @route   POST /api/attendance/bulk-quick-mark
 // @desc    Quick mark all students as present/absent with exceptions
@@ -28,11 +32,16 @@ router.post('/bulk-quick-mark', [auth, yearContext, requireOpenYear], async (req
             return res.status(400).json({ success: false, message: 'Invalid exception attendance status' });
         }
 
+        // Server-side guard against marking attendance on Sundays and Holidays
+        const validation = await validateAttendanceDate(date);
+        if (!validation.allowed) {
+            return res.status(400).json({ success: false, message: validation.reason });
+        }
+
+        const attendanceDate = validation.normalizedDate;
+
         // Get all students in class
         const students = await User.find({ currentClass: classId, role: 'student' }).select('_id');
-
-        const attendanceDate = new Date(date);
-        attendanceDate.setHours(0, 0, 0, 0);
 
         // Create attendance records
         const attendanceRecords = students.map(student => {
@@ -102,7 +111,7 @@ router.get('/calendar/:classId', auth, async (req, res) => {
         // Group by date
         const calendar = {};
         attendance.forEach(record => {
-            const dateKey = new Date(record.date).toISOString().split('T')[0];
+            const dateKey = getISTDateString(record.date);
             if (!calendar[dateKey]) {
                 calendar[dateKey] = {
                     date: dateKey,

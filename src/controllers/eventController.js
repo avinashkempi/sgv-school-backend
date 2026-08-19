@@ -3,6 +3,7 @@ const Event = require('../models/Event');
 const Notification = require('../models/Notification');
 const Attendance = require('../models/Attendance');
 const { sendTargetedNotification } = require('../services/notificationService');
+const { getISTDayBounds, getISTDateObject } = require('../utils/dateUtils');
 
 const createEvent = async (req, res) => {
   try {
@@ -29,13 +30,10 @@ const createEvent = async (req, res) => {
     });
     await event.save();
 
-    // If it's a holiday, clear attendance for that day
+    // If it's a holiday, clear attendance for that day in IST
     if (event.isHoliday) {
-      const targetDate = new Date(date);
-      targetDate.setHours(0, 0, 0, 0);
-      const nextDay = new Date(targetDate);
-      nextDay.setDate(targetDate.getDate() + 1);
-      await Attendance.deleteMany({ date: { $gte: targetDate, $lt: nextDay } });
+      const { startOfDay, endOfDay } = getISTDayBounds(date);
+      await Attendance.deleteMany({ date: { $gte: startOfDay, $lte: endOfDay } });
     }
 
     // Immediately create a notification for the new event
@@ -131,14 +129,12 @@ const getEvent = async (req, res) => {
     if (req.query.startDate || req.query.endDate) {
       query.date = {};
       if (req.query.startDate) {
-        const start = new Date(req.query.startDate);
-        start.setHours(0, 0, 0, 0);
-        query.date.$gte = start;
+        const { startOfDay } = getISTDayBounds(req.query.startDate);
+        query.date.$gte = startOfDay;
       }
       if (req.query.endDate) {
-        const end = new Date(req.query.endDate);
-        end.setHours(23, 59, 59, 999);
-        query.date.$lte = end;
+        const { endOfDay } = getISTDayBounds(req.query.endDate);
+        query.date.$lte = endOfDay;
       }
     }
 
@@ -215,11 +211,8 @@ const updateEvent = async (req, res) => {
     await event.save();
 
     if (becameHoliday) {
-      const targetDate = new Date(event.date);
-      targetDate.setHours(0, 0, 0, 0);
-      const nextDay = new Date(targetDate);
-      nextDay.setDate(targetDate.getDate() + 1);
-      await Attendance.deleteMany({ date: { $gte: targetDate, $lt: nextDay } });
+      const { startOfDay, endOfDay } = getISTDayBounds(event.date);
+      await Attendance.deleteMany({ date: { $gte: startOfDay, $lte: endOfDay } });
     }
 
     res.json({

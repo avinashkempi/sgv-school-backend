@@ -8,6 +8,7 @@ const Marks = require('../models/Marks');
 const Class = require('../models/Class');
 const Exam = require('../models/Exam');
 const AcademicYear = require('../models/AcademicYear');
+const { getISTDateString, getISTToday, isISTSunday, getISTDayBounds } = require('../utils/dateUtils');
 const { cacheGet, cacheSet, cacheInvalidatePattern } = require('../config/redis');
 
 // In-memory fallback caches
@@ -347,8 +348,7 @@ exports.getTeacherStats = async (req, res) => {
 
         const today = new Date();
         today.setHours(0, 0, 0, 0);
-        const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-        const currentDay = days[today.getDay()];
+        const currentDay = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Kolkata', weekday: 'long' }).format(new Date());
 
         // 1. Fetch My Class (as class teacher) & all timetables in parallel
         const Timetable = require('../models/Timetable');
@@ -412,7 +412,7 @@ exports.getTeacherStats = async (req, res) => {
                 excused: excusedCount,
                 total: myStudentCount,
                 marked: todayAttendance.length,
-                date: today.toISOString().split('T')[0]
+                date: getISTDateString(today)
             };
 
             // 4. Low Attendance Students (< 75%) — last 30 days
@@ -493,7 +493,7 @@ exports.getTeacherStats = async (req, res) => {
             });
 
             trendDays.forEach(day => {
-                const key = day.toISOString().split('T')[0];
+                const key = getISTDateString(day);
                 const label = day.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
                 attendanceTrendLabels.push(label);
                 attendanceTrendData.push(trendMap[key] || 0);
@@ -762,7 +762,7 @@ exports.getStudentStats = async (req, res) => {
 
         // 4. Next Exam Date
         const nextExamDate = nextExam
-            ? new Date(nextExam.examDate).toISOString().split('T')[0]
+            ? getISTDateString(nextExam.examDate)
             : null;
 
         const responseData = {

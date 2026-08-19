@@ -10,6 +10,13 @@ const Subject = require('../models/Subject');
 const LeaveRequest = require('../models/LeaveRequest');
 const Event = require('../models/Event');
 const { invalidateDashboardCaches } = require('../controllers/dashboardController');
+const {
+    getISTDateString,
+    getISTDateObject,
+    getISTDayBounds,
+    validateAttendanceDate,
+    isISTSunday
+} = require('../utils/dateUtils');
 
 const isAdminRole = (role) => role === 'admin' || role === 'super admin';
 const hasObjectIdMatch = (ids = [], userId) => ids.some((id) => id && id.toString() === userId);
@@ -74,8 +81,13 @@ router.post('/mark', [auth, yearContext, requireOpenYear], async (req, res) => {
             return res.status(403).json({ message: 'Not authorized to mark attendance for this class/subject' });
         }
 
-        const attendanceDate = new Date(date);
-        attendanceDate.setHours(0, 0, 0, 0);
+        // Server-side guard against marking attendance on Sundays and Holidays
+        const validation = await validateAttendanceDate(date);
+        if (!validation.allowed) {
+            return res.status(400).json({ success: false, message: validation.reason });
+        }
+
+        const attendanceDate = validation.normalizedDate;
 
         const bulkOps = attendanceRecords.map(record => {
             const { studentId, status, remarks } = record;
@@ -130,7 +142,13 @@ router.post('/mark-staff', [auth, yearContext, requireOpenYear], async (req, res
         const { date, attendanceRecords } = req.body; // Records: [{ userId, status, remarks }]
         const academicYearId = req.academicYearContext;
 
-        const dateMidnight = new Date(date).setHours(0, 0, 0, 0);
+        // Server-side guard against marking attendance on Sundays and Holidays
+        const validation = await validateAttendanceDate(date);
+        if (!validation.allowed) {
+            return res.status(400).json({ success: false, message: validation.reason });
+        }
+
+        const dateMidnight = validation.normalizedDate;
 
         // Pre-fetch roles for all users
         const userIds = attendanceRecords.map(r => r.userId);
@@ -185,11 +203,12 @@ router.get('/class/:classId/date/:date', [auth, yearContext], async (req, res) =
         const { classId, date } = req.params;
         const { subject, period } = req.query;
         const academicYearId = req.academicYearContext;
+        const { startOfDay, endOfDay, dateStr } = getISTDayBounds(date);
 
         const filter = {
             class: classId,
             academicYear: academicYearId,
-            date: new Date(date).setHours(0, 0, 0, 0)
+            date: { $gte: startOfDay, $lte: endOfDay }
         };
 
         if (subject) filter.subject = subject;
@@ -206,14 +225,13 @@ router.get('/class/:classId/date/:date', [auth, yearContext], async (req, res) =
             .sort({ name: 1 });
 
         // Check for approved leaves overlapping this date
-        const targetDate = new Date(date);
-        targetDate.setHours(0, 0, 0, 0);
+        const targetDate = new Date(`${dateStr}T12:00:00+05:30`);
         const approvedLeaves = await LeaveRequest.find({
             class: classId,
             applicantRole: 'student',
             status: 'approved',
-            startDate: { $lte: targetDate },
-            endDate: { $gte: targetDate }
+            startDate: { $lte: endOfDay },
+            endDate: { $gte: startOfDay }
         }).select('applicant reason leaveType');
 
         const onLeaveStudentIds = new Set(approvedLeaves.map(l => l.applicant.toString()));
@@ -496,7 +514,7 @@ router.get('/staff-list', [auth, yearContext], async (req, res) => {
         }
 
         const { date } = req.query;
-        const targetDate = date ? new Date(date).setHours(0, 0, 0, 0) : new Date().setHours(0, 0, 0, 0);
+        const { startOfDay, endOfDay } = getISTDayBounds(date || new Date());
         const academicYearId = req.academicYearContext;
 
         // Get all staff (teachers, staff, support_staff) — consistent with mark-staff endpoint
@@ -504,7 +522,7 @@ router.get('/staff-list', [auth, yearContext], async (req, res) => {
 
         // Get attendance for this date
         const attendance = await Attendance.find({
-            date: targetDate,
+            date: { $gte: startOfDay, $lte: endOfDay },
             role: { $in: ['teacher', 'staff', 'support_staff'] },
             academicYear: academicYearId
         });
@@ -537,8 +555,7 @@ router.get('/school-summary', [auth, yearContext], async (req, res) => {
         }
 
         const { date } = req.query;
-        const targetDate = date ? new Date(date) : new Date();
-        targetDate.setHours(0, 0, 0, 0);
+        const { startOfDay, endOfDay } = getISTDayBounds(date || new Date());
         const academicYearId = req.academicYearContext;
 
         // 1. Get Total Counts
@@ -547,7 +564,7 @@ router.get('/school-summary', [auth, yearContext], async (req, res) => {
 
         // 2. Get Attendance for Target Date
         const attendanceRecords = await Attendance.find({
-            date: targetDate,
+            date: { $gte: startOfDay, $lte: endOfDay },
             role: { $in: ['student', 'teacher'] },
             academicYear: academicYearId
         }).populate({
@@ -633,14 +650,10 @@ router.get('/classes-marked', [auth, yearContext], async (req, res) => {
         const { date } = req.query;
         if (!date) return res.status(400).json({ message: 'Date is required' });
 
-        const targetDate = new Date(date);
-        targetDate.setHours(0, 0, 0, 0);
-
-        const nextDay = new Date(targetDate);
-        nextDay.setDate(targetDate.getDate() + 1);
+        const { startOfDay, endOfDay } = getISTDayBounds(date);
 
         const markedClasses = await Attendance.distinct('class', {
-            date: { $gte: targetDate, $lt: nextDay },
+            date: { $gte: startOfDay, $lte: endOfDay },
             role: 'student',
             class: { $ne: null },
             academicYear: req.academicYearContext
@@ -661,30 +674,27 @@ router.get('/missing-tracker', [auth, yearContext], async (req, res) => {
         const { startDate, endDate } = req.query;
         if (!startDate || !endDate) return res.status(400).json({ message: 'Start and end dates are required' });
 
-        const start = new Date(startDate);
-        start.setHours(0, 0, 0, 0);
-        const end = new Date(endDate);
-        end.setHours(23, 59, 59, 999);
+        const { startOfDay: start } = getISTDayBounds(startDate);
+        const { endOfDay: end } = getISTDayBounds(endDate);
 
-        // Filter valid working days (assuming Monday-Saturday)
+        // Filter valid working days (assuming Monday-Saturday in IST)
         // Exclude today since attendance may not be taken yet
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const effectiveEnd = end >= today ? new Date(today.getTime() - 86400000) : end;
-        effectiveEnd.setHours(23, 59, 59, 999);
+        const todayStr = getISTDateString(new Date());
+        const { startOfDay: todayStart } = getISTDayBounds(todayStr);
+        const effectiveEnd = end >= todayStart ? new Date(todayStart.getTime() - 1) : end;
 
         // Fetch custom holidays in range
         const holidaysRaw = await Event.distinct('date', {
             isHoliday: true,
             date: { $gte: start, $lte: effectiveEnd }
         });
-        const holidayDates = holidaysRaw.map(d => d.toISOString().split('T')[0]);
+        const holidayDates = holidaysRaw.map(d => getISTDateString(d));
 
         const daysInRange = [];
         for (let d = new Date(start); d <= effectiveEnd; d.setDate(d.getDate() + 1)) {
             // Skip Sundays for standard school
-            const ds = d.toISOString().split('T')[0];
-            if (d.getDay() !== 0 && !holidayDates.includes(ds)) {
+            const ds = getISTDateString(d);
+            if (!isISTSunday(d) && !holidayDates.includes(ds)) {
                 daysInRange.push(new Date(d));
             }
         }
@@ -703,10 +713,10 @@ router.get('/missing-tracker', [auth, yearContext], async (req, res) => {
                 date: { $gte: start, $lte: end },
                 academicYear: req.academicYearContext
             });
-            const markedDays = markedDaysRaw.map(d => d.toISOString().split('T')[0]);
+            const markedDays = markedDaysRaw.map(d => getISTDateString(d));
 
             const missingDays = daysInRange
-                .map(d => d.toISOString().split('T')[0])
+                .map(d => getISTDateString(d))
                 .filter(d => !markedDays.includes(d));
 
             // Sort missing days newest first
@@ -751,7 +761,7 @@ router.get('/missing-tracker', [auth, yearContext], async (req, res) => {
 
             const missingData = [];
             daysInRange.forEach(dObj => {
-                const dateStr = dObj.toISOString().split('T')[0];
+                const dateStr = getISTDateString(dObj);
                 const markedForDay = dateClassMap[dateStr] || [];
                 const missingClasses = allClasses.filter(c => !markedForDay.includes(c._id.toString()));
 
