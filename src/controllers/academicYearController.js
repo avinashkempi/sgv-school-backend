@@ -672,10 +672,10 @@ exports.getReports = async (req, res) => {
         const year = await AcademicYear.findById(academicYearId);
         if (!year) return res.status(404).json({ msg: 'Academic year not found' });
 
-        const [history, exams, teacherLeaves, staffUsers, attendanceAgg] = await Promise.all([
+        const [history, exams, teacherLeaves, staffUsers, attendanceAgg, yearClasses] = await Promise.all([
             StudentHistory.find({ academicYear: academicYearId })
-                .populate('student', 'name email phone')
-                .populate('class', 'name section')
+                .populate('student', 'name email phone rollNumber gender')
+                .populate('class', 'name label section branch')
                 .lean(),
             Exam.find({ academicYear: academicYearId }).lean(),
             LeaveRequest.find({
@@ -734,7 +734,8 @@ exports.getReports = async (req, res) => {
                         as: 'userInfo'
                     }
                 }
-            ])
+            ]),
+            Class.find({ academicYear: academicYearId }).sort({ name: 1, label: 1, section: 1 }).lean()
         ]);
 
         const attendanceMap = new Map();
@@ -817,12 +818,87 @@ exports.getReports = async (req, res) => {
             totalLateDays: teacherAttendance.reduce((sum, t) => sum + t.lateDays, 0)
         };
 
-        const classWiseStudents = history.reduce((acc, curr) => {
-            const className = curr.class ? `${curr.class.name} ${curr.class.section || ''}` : 'Unassigned';
-            if (!acc[className]) acc[className] = [];
-            acc[className].push(curr.student);
-            return acc;
-        }, {});
+        // Determine relevant classes
+        let classesToUse = Array.isArray(yearClasses) ? [...yearClasses] : [];
+        if (classesToUse.length === 0 && year.isActive) {
+            classesToUse = await Class.find({
+                $or: [
+                    { academicYear: { $exists: false } },
+                    { academicYear: null },
+                    { academicYear: academicYearId }
+                ]
+            }).sort({ name: 1, label: 1, section: 1 }).lean();
+        }
+
+        const formatClassDisplayName = (cls) => {
+            if (!cls) return 'Unassigned';
+            const base = cls.label || cls.name || 'Unnamed Class';
+            const sec = cls.section && !base.toLowerCase().includes(cls.section.toLowerCase()) ? ` - ${cls.section}` : '';
+            const br = cls.branch && cls.branch !== 'Main' && !base.toLowerCase().includes(cls.branch.toLowerCase()) ? ` (${cls.branch})` : '';
+            return `${base}${sec}${br}`.trim();
+        };
+
+        const classWiseStudents = {};
+
+        // Pre-populate with all known classes for this academic year so they appear in distribution
+        classesToUse.forEach(cls => {
+            const displayName = formatClassDisplayName(cls);
+            if (!classWiseStudents[displayName]) {
+                classWiseStudents[displayName] = [];
+            }
+        });
+
+        // 1. If we have archived StudentHistory records and year is not currently active, use StudentHistory
+        if (history && history.length > 0 && !year.isActive) {
+            history.forEach(curr => {
+                const displayName = curr.class ? formatClassDisplayName(curr.class) : 'Unassigned';
+                if (!classWiseStudents[displayName]) classWiseStudents[displayName] = [];
+                if (curr.student) {
+                    classWiseStudents[displayName].push(curr.student);
+                }
+            });
+        } else {
+            // 2. Otherwise (active academic year, or unarchived past/future year), fetch active student Users
+            const classIds = classesToUse.map(c => c._id);
+            const studentFilter = {
+                role: 'student',
+                isActive: { $ne: false },
+                $or: [
+                    { academicYear: year._id },
+                    ...(classIds.length > 0 ? [{ currentClass: { $in: classIds } }] : []),
+                    ...(year.isActive ? [{ currentClass: { $exists: true, $ne: null } }] : [])
+                ]
+            };
+
+            const activeStudents = await User.find(studentFilter)
+                .populate('currentClass', 'name label section branch')
+                .select('name email phone rollNumber gender currentClass academicYear')
+                .lean();
+
+            if (activeStudents.length > 0) {
+                activeStudents.forEach(student => {
+                    const displayName = student.currentClass ? formatClassDisplayName(student.currentClass) : 'Unassigned';
+                    if (!classWiseStudents[displayName]) classWiseStudents[displayName] = [];
+                    classWiseStudents[displayName].push({
+                        _id: student._id,
+                        name: student.name,
+                        email: student.email,
+                        phone: student.phone,
+                        rollNumber: student.rollNumber,
+                        gender: student.gender
+                    });
+                });
+            } else if (history && history.length > 0) {
+                // Fallback to history if active students search returned nothing
+                history.forEach(curr => {
+                    const displayName = curr.class ? formatClassDisplayName(curr.class) : 'Unassigned';
+                    if (!classWiseStudents[displayName]) classWiseStudents[displayName] = [];
+                    if (curr.student) {
+                        classWiseStudents[displayName].push(curr.student);
+                    }
+                });
+            }
+        }
 
         const examIds = exams.map(e => e._id);
         const marks = await Marks.find({ exam: { $in: examIds } })
@@ -830,9 +906,14 @@ exports.getReports = async (req, res) => {
             .populate('exam', 'name subject totalMarks')
             .lean();
 
+        const totalStudents = Object.values(classWiseStudents).reduce((sum, list) => sum + (Array.isArray(list) ? list.length : 0), 0);
+        const totalClassesCount = Object.keys(classWiseStudents).length;
+
         res.json({
             academicYear: year,
             classWiseStudents,
+            totalStudents,
+            totalClassesCount,
             marks,
             teacherLeaves,
             teacherAttendance,
