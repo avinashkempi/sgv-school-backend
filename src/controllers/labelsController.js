@@ -1,4 +1,5 @@
 const Labels = require('../models/Labels');
+const DEFAULT_LABELS = require('../constants/defaultLabels');
 
 // In-memory cache for labels (static data, rarely changes)
 let cachedLabels = null;
@@ -27,18 +28,32 @@ const getLabels = async (req, res) => {
       });
     }
 
-    const labelsDoc = await Labels.findOne().lean();
-
-    if (!labelsDoc) {
-      return res.status(404).json({
-        success: false,
-        message: 'Labels not found. Run the seed script first.'
-      });
+    let labelsDoc = null;
+    try {
+      labelsDoc = await Labels.findOne().lean();
+    } catch (dbErr) {
+      console.warn('Could not query Labels from DB, falling back to defaults:', dbErr.message);
     }
 
-    // Populate cache
-    cachedLabels = labelsDoc.labels;
-    cachedVersion = labelsDoc.version;
+    if (!labelsDoc) {
+      // Auto-seed to DB in background if connection is active
+      try {
+        const created = await Labels.create({
+          labels: DEFAULT_LABELS,
+          version: 1
+        });
+        cachedLabels = created.labels;
+        cachedVersion = created.version;
+      } catch (_seedErr) {
+        // Fallback to in-memory defaults
+        cachedLabels = DEFAULT_LABELS;
+        cachedVersion = 1;
+      }
+    } else {
+      // Populate cache
+      cachedLabels = labelsDoc.labels;
+      cachedVersion = labelsDoc.version;
+    }
 
     // Client version check
     if (clientVersion === cachedVersion) {
@@ -51,10 +66,11 @@ const getLabels = async (req, res) => {
       version: cachedVersion
     });
   } catch (error) {
-    console.error('Error fetching labels:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error while fetching labels'
+    console.error('Error in labels controller, serving default fallback:', error);
+    res.status(200).json({
+      success: true,
+      data: DEFAULT_LABELS,
+      version: 1
     });
   }
 };

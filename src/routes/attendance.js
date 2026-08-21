@@ -12,7 +12,6 @@ const Event = require('../models/Event');
 const { invalidateDashboardCaches } = require('../controllers/dashboardController');
 const {
     getISTDateString,
-    getISTDateObject,
     getISTDayBounds,
     validateAttendanceDate,
     isISTSunday
@@ -203,7 +202,7 @@ router.get('/class/:classId/date/:date', [auth, yearContext], async (req, res) =
         const { classId, date } = req.params;
         const { subject, period } = req.query;
         const academicYearId = req.academicYearContext;
-        const { startOfDay, endOfDay, dateStr } = getISTDayBounds(date);
+        const { startOfDay, endOfDay } = getISTDayBounds(date);
 
         const filter = {
             class: classId,
@@ -225,7 +224,6 @@ router.get('/class/:classId/date/:date', [auth, yearContext], async (req, res) =
             .sort({ name: 1 });
 
         // Check for approved leaves overlapping this date
-        const targetDate = new Date(`${dateStr}T12:00:00+05:30`);
         const approvedLeaves = await LeaveRequest.find({
             class: classId,
             applicantRole: 'student',

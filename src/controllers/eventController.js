@@ -3,7 +3,7 @@ const Event = require('../models/Event');
 const Notification = require('../models/Notification');
 const Attendance = require('../models/Attendance');
 const { sendTargetedNotification } = require('../services/notificationService');
-const { getISTDayBounds, getISTDateObject } = require('../utils/dateUtils');
+const { getISTDayBounds } = require('../utils/dateUtils');
 
 const createEvent = async (req, res) => {
   try {

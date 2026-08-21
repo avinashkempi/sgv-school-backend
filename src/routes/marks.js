@@ -8,6 +8,7 @@ const Marks = require('../models/Marks');
 const Exam = require('../models/Exam');
 const GradeConfig = require('../models/GradeConfig');
 const User = require('../models/User');
+const AcademicYear = require('../models/AcademicYear');
 const notificationController = require('../controllers/notificationController');
 
 const hasObjectIdMatch = (ids = [], userId) => ids.some((id) => id && id.toString() === userId);

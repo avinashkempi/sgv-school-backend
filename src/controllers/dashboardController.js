@@ -8,7 +8,7 @@ const Marks = require('../models/Marks');
 const Class = require('../models/Class');
 const Exam = require('../models/Exam');
 const AcademicYear = require('../models/AcademicYear');
-const { getISTDateString, getISTToday, isISTSunday, getISTDayBounds } = require('../utils/dateUtils');
+const { getISTDateString } = require('../utils/dateUtils');
 const { cacheGet, cacheSet, cacheInvalidatePattern } = require('../config/redis');
 
 // In-memory fallback caches
