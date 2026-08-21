@@ -531,12 +531,24 @@ exports.getTeacherStats = async (req, res) => {
                 }
             ]);
 
+            const subjectMap = new Map();
             teacherUser.subjects.forEach(sub => {
                 const stat = marksStats.find(m => m._id.toString() === sub._id.toString());
                 if (stat) {
-                    subjectPerformanceLabels.push(sub.name.substring(0, 10));
-                    subjectPerformanceData.push(Math.round(stat.avgMarks));
+                    const cleanName = sub.name ? sub.name.trim() : 'Subject';
+                    if (!subjectMap.has(cleanName)) {
+                        subjectMap.set(cleanName, { total: stat.avgMarks, count: 1 });
+                    } else {
+                        const existing = subjectMap.get(cleanName);
+                        existing.total += stat.avgMarks;
+                        existing.count += 1;
+                    }
                 }
+            });
+
+            subjectMap.forEach((val, name) => {
+                subjectPerformanceLabels.push(name);
+                subjectPerformanceData.push(Math.round(val.total / val.count));
             });
 
         } else if (myClass) {
