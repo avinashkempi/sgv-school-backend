@@ -85,6 +85,7 @@ app.use('/api/webhooks', require('./src/routes/webhooks')); // Added decoupled W
 app.use('/api/events', require('./src/routes/events'));
 
 app.use('/api/school-info', require('./src/routes/schoolInfo'));
+app.use('/api/labels', require('./src/routes/labels'));
 app.use('/api/users', require('./src/routes/users'));
 app.use('/api/fcm', require('./src/routes/fcm'));
 app.use('/api/academic-year', require('./src/routes/academicYear'));
