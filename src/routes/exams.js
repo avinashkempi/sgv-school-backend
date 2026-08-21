@@ -510,12 +510,38 @@ router.get('/performance/class/:classId', auth, async (req, res) => {
             const activeYear = await AcademicYear.findOne({ isActive: true });
             if (activeYear) yearId = activeYear._id;
         }
-        const exams = await Exam.find({ class: req.params.classId, academicYear: yearId, isStandardized: true }).populate('subject').lean();
-        const students = await User.find({ currentClass: req.params.classId, role: 'student' }).select('name').lean();
+
+        const classDoc = await Class.findById(req.params.classId).select('name section').lean();
+        const exams = await Exam.find({ class: req.params.classId, academicYear: yearId, isStandardized: true })
+            .populate('subject', 'name')
+            .lean();
+        const students = await User.find({ currentClass: req.params.classId, role: 'student' })
+            .select('name rollNumber regNo satsNumber email phone gender')
+            .lean();
         const examIds = exams.map(e => e._id);
         const allMarks = await Marks.find({ exam: { $in: examIds } }).lean();
 
+        const getGrade = (percentage) => {
+            if (percentage >= 90) return 'A+';
+            if (percentage >= 70) return 'A';
+            if (percentage >= 50) return 'B+';
+            if (percentage >= 30) return 'B';
+            return 'C';
+        };
+
+        const EXAM_WEIGHTS = { FA1: 10, FA2: 10, SA1: 30, FA3: 10, FA4: 10, SA2: 30 };
+        const computeWeightedPercentage = (completedTypeScores) => {
+            const totalWeight = Object.keys(completedTypeScores)
+                .reduce((sum, type) => sum + (EXAM_WEIGHTS[type] || 0), 0);
+            if (totalWeight === 0) return 0;
+            const weightedSum = Object.entries(completedTypeScores)
+                .reduce((sum, [type, pct]) => sum + pct * (EXAM_WEIGHTS[type] || 0), 0);
+            return parseFloat((weightedSum / totalWeight).toFixed(1));
+        };
+
         const examTypes = ['FA1', 'FA2', 'SA1', 'FA3', 'FA4', 'SA2'];
+
+        // 1. Exam-wise performance with subject breakdown inside each exam
         const performance = examTypes.map(type => {
             const typeExams = exams.filter(e => e.standardizedType === type);
             const examIdsForType = typeExams.map(e => e._id.toString());
@@ -523,6 +549,7 @@ router.get('/performance/class/:classId', auth, async (req, res) => {
             let totalMarks = 0, obtainedMarks = 0;
             let studentsWithMarks = new Set();
             const studentMarks = {};
+
             marksForType.forEach(mark => {
                 const exam = typeExams.find(e => e._id.toString() === mark.exam.toString());
                 if (exam) {
@@ -537,11 +564,51 @@ router.get('/performance/class/:classId', auth, async (req, res) => {
                     studentMarks[studentId].total += exam.totalMarks;
                 }
             });
+
             const avgPercentage = totalMarks > 0 ? ((obtainedMarks / totalMarks) * 100).toFixed(2) : 0;
-            
             const percentages = Object.values(studentMarks).map(sm => sm.total > 0 ? (sm.obtained / sm.total) * 100 : 0);
             const highest = percentages.length > 0 ? Math.max(...percentages) : 0;
             const lowest = percentages.length > 0 ? Math.min(...percentages) : 0;
+
+            // Subjects inside this specific exam type
+            const subjectsInExam = typeExams.map(exam => {
+                const subMarks = marksForType.filter(m => m.exam.toString() === exam._id.toString());
+                let subObtained = 0;
+                const subPcts = [];
+                let passCount = 0;
+                let failCount = 0;
+
+                subMarks.forEach(m => {
+                    subObtained += m.marksObtained;
+                    if (exam.totalMarks > 0) {
+                        const pct = (m.marksObtained / exam.totalMarks) * 100;
+                        subPcts.push(pct);
+                        if (pct >= 35) passCount++;
+                        else failCount++;
+                    }
+                });
+
+                const subAvg = (subMarks.length > 0 && exam.totalMarks > 0)
+                    ? parseFloat(((subObtained / (exam.totalMarks * subMarks.length)) * 100).toFixed(2))
+                    : 0;
+                const subHighest = subPcts.length > 0 ? parseFloat(Math.max(...subPcts).toFixed(2)) : 0;
+                const subLowest = subPcts.length > 0 ? parseFloat(Math.min(...subPcts).toFixed(2)) : 0;
+
+                return {
+                    examId: exam._id,
+                    subjectId: exam.subject?._id || exam.subject,
+                    subjectName: exam.subject?.name || 'Unknown',
+                    totalMarks: exam.totalMarks,
+                    marksEntered: subMarks.length,
+                    totalStudents: students.length,
+                    avgPercentage: subAvg,
+                    highest: subHighest,
+                    lowest: subLowest,
+                    passCount,
+                    failCount,
+                    passPercentage: subMarks.length > 0 ? parseFloat(((passCount / subMarks.length) * 100).toFixed(1)) : 0
+                };
+            });
 
             return {
                 examType: type,
@@ -551,12 +618,271 @@ router.get('/performance/class/:classId', auth, async (req, res) => {
                 avgPercentage: parseFloat(avgPercentage),
                 highest: parseFloat(highest.toFixed(2)),
                 lowest: parseFloat(lowest.toFixed(2)),
-                isComplete: typeExams.length > 0 && studentsWithMarks.size === students.length
+                isComplete: typeExams.length > 0 && studentsWithMarks.size === students.length,
+                subjects: subjectsInExam
             };
         });
-        res.json({ classId: req.params.classId, totalStudents: students.length, performance });
+
+        // 2. Subject-wise Analysis across all exams
+        const subjectMap = {};
+        exams.forEach(exam => {
+            const subId = (exam.subject?._id || exam.subject || 'unknown').toString();
+            const subName = exam.subject?.name || 'Unknown';
+            if (!subjectMap[subId]) {
+                subjectMap[subId] = {
+                    subjectId: subId,
+                    subjectName: subName,
+                    exams: [],
+                    totalObtained: 0,
+                    totalMax: 0,
+                    marksEntered: 0,
+                    passCount: 0,
+                    failCount: 0,
+                    allPercentages: []
+                };
+            }
+            subjectMap[subId].exams.push(exam);
+        });
+
+        allMarks.forEach(mark => {
+            const exam = exams.find(e => e._id.toString() === mark.exam.toString());
+            if (exam && exam.subject) {
+                const subId = (exam.subject._id || exam.subject).toString();
+                if (subjectMap[subId]) {
+                    subjectMap[subId].totalObtained += mark.marksObtained;
+                    subjectMap[subId].totalMax += exam.totalMarks;
+                    subjectMap[subId].marksEntered++;
+                    if (exam.totalMarks > 0) {
+                        const pct = (mark.marksObtained / exam.totalMarks) * 100;
+                        subjectMap[subId].allPercentages.push(pct);
+                        if (pct >= 35) subjectMap[subId].passCount++;
+                        else subjectMap[subId].failCount++;
+                    }
+                }
+            }
+        });
+
+        const subjectWise = Object.values(subjectMap).map(subj => {
+            const avgPct = subj.totalMax > 0
+                ? parseFloat(((subj.totalObtained / subj.totalMax) * 100).toFixed(2))
+                : 0;
+            const highest = subj.allPercentages.length > 0
+                ? parseFloat(Math.max(...subj.allPercentages).toFixed(2))
+                : 0;
+            const lowest = subj.allPercentages.length > 0
+                ? parseFloat(Math.min(...subj.allPercentages).toFixed(2))
+                : 0;
+            const passPercentage = subj.marksEntered > 0
+                ? parseFloat(((subj.passCount / subj.marksEntered) * 100).toFixed(1))
+                : 0;
+
+            // Breakdown by exam type for this subject
+            const examScores = examTypes.map(type => {
+                const typeExam = subj.exams.find(e => e.standardizedType === type);
+                if (!typeExam) return { examType: type, conducted: false, avgPercentage: null };
+                const marksForSubExam = allMarks.filter(m => m.exam.toString() === typeExam._id.toString());
+                let subExamObtained = 0;
+                marksForSubExam.forEach(m => { subExamObtained += m.marksObtained; });
+                const subExamAvg = marksForSubExam.length > 0 && typeExam.totalMarks > 0
+                    ? parseFloat(((subExamObtained / (typeExam.totalMarks * marksForSubExam.length)) * 100).toFixed(2))
+                    : 0;
+                return {
+                    examType: type,
+                    conducted: true,
+                    examId: typeExam._id,
+                    totalMarks: typeExam.totalMarks,
+                    marksEntered: marksForSubExam.length,
+                    avgPercentage: subExamAvg
+                };
+            });
+
+            return {
+                subjectId: subj.subjectId,
+                subjectName: subj.subjectName,
+                avgPercentage: avgPct,
+                highest,
+                lowest,
+                examsConducted: subj.exams.length,
+                marksEntered: subj.marksEntered,
+                passPercentage,
+                grade: getGrade(avgPct),
+                examScores
+            };
+        });
+
+        // Sort subjects by average descending
+        subjectWise.sort((a, b) => b.avgPercentage - a.avgPercentage);
+
+        // 3. Student-wise Breakdown
+        const studentPerformanceList = students.map(student => {
+            const studentId = student._id.toString();
+            const studentMarks = allMarks.filter(m => m.student.toString() === studentId);
+            const completedTypeScores = {};
+            const examWise = {};
+            let grandTotalObtained = 0;
+            let grandTotalMax = 0;
+
+            examTypes.forEach(type => {
+                const typeExams = exams.filter(e => e.standardizedType === type);
+                let typeObtained = 0;
+                let typeMax = 0;
+                let marksCount = 0;
+
+                typeExams.forEach(exam => {
+                    const markEntry = studentMarks.find(m => m.exam.toString() === exam._id.toString());
+                    if (markEntry) {
+                        typeObtained += markEntry.marksObtained;
+                        typeMax += exam.totalMarks;
+                        marksCount++;
+                    }
+                });
+
+                const isComplete = typeExams.length > 0 && marksCount === typeExams.length;
+                const typePct = typeMax > 0 ? parseFloat(((typeObtained / typeMax) * 100).toFixed(1)) : null;
+
+                examWise[type] = {
+                    percentage: typePct,
+                    obtained: typeObtained,
+                    total: typeMax,
+                    grade: typePct !== null ? getGrade(typePct) : '-',
+                    isComplete,
+                    marksEntered: marksCount,
+                    totalSubjects: typeExams.length
+                };
+
+                if (isComplete && typeMax > 0) {
+                    completedTypeScores[type] = typePct;
+                }
+                grandTotalObtained += typeObtained;
+                grandTotalMax += typeMax;
+            });
+
+            // Student subject-wise breakdown
+            const studentSubjectBreakdown = Object.values(subjectMap).map(subj => {
+                let subObtained = 0;
+                let subMax = 0;
+                let attemptedCount = 0;
+
+                subj.exams.forEach(exam => {
+                    const markEntry = studentMarks.find(m => m.exam.toString() === exam._id.toString());
+                    if (markEntry) {
+                        subObtained += markEntry.marksObtained;
+                        subMax += exam.totalMarks;
+                        attemptedCount++;
+                    }
+                });
+
+                const subPct = subMax > 0 ? parseFloat(((subObtained / subMax) * 100).toFixed(1)) : null;
+
+                return {
+                    subjectId: subj.subjectId,
+                    subjectName: subj.subjectName,
+                    obtainedMarks: subObtained,
+                    maxMarks: subMax,
+                    percentage: subPct,
+                    grade: subPct !== null ? getGrade(subPct) : '-',
+                    examsAttempted: attemptedCount,
+                    totalExams: subj.exams.length
+                };
+            });
+
+            // Calculate overall percentage
+            let overallPct = computeWeightedPercentage(completedTypeScores);
+            if (overallPct === 0 && grandTotalMax > 0) {
+                overallPct = parseFloat(((grandTotalObtained / grandTotalMax) * 100).toFixed(1));
+            }
+
+            // Determine strong & weak subjects
+            const validSubjectScores = studentSubjectBreakdown.filter(s => s.percentage !== null);
+            validSubjectScores.sort((a, b) => b.percentage - a.percentage);
+            const topSubject = validSubjectScores.length > 0 ? { name: validSubjectScores[0].subjectName, percentage: validSubjectScores[0].percentage } : null;
+            const weakSubject = validSubjectScores.length > 1 ? { name: validSubjectScores[validSubjectScores.length - 1].subjectName, percentage: validSubjectScores[validSubjectScores.length - 1].percentage } : null;
+
+            return {
+                studentId: student._id,
+                _id: student._id,
+                name: student.name,
+                rollNumber: student.rollNumber || student.regNo || '',
+                regNo: student.regNo || '',
+                satsNumber: student.satsNumber || '',
+                email: student.email || '',
+                gender: student.gender || '',
+                overallPercentage: overallPct,
+                grade: getGrade(overallPct),
+                totalObtained: grandTotalObtained,
+                totalMax: grandTotalMax,
+                examsAttempted: studentMarks.length,
+                totalExams: exams.length,
+                examWise,
+                subjectBreakdown: studentSubjectBreakdown,
+                topSubject,
+                weakSubject
+            };
+        });
+
+        // Sort students descending by percentage
+        studentPerformanceList.sort((a, b) => b.overallPercentage - a.overallPercentage);
+
+        // Assign ranks (handle ties)
+        studentPerformanceList.forEach((st, i) => {
+            if (i > 0 && st.overallPercentage === studentPerformanceList[i - 1].overallPercentage) {
+                st.rank = studentPerformanceList[i - 1].rank;
+            } else {
+                st.rank = i + 1;
+            }
+        });
+
+        // 4. Grade distribution & Class Summary / Insights
+        const gradeCounts = { 'A+': 0, 'A': 0, 'B+': 0, 'B': 0, 'C': 0 };
+        studentPerformanceList.forEach(st => {
+            if (st.grade && gradeCounts[st.grade] !== undefined) {
+                gradeCounts[st.grade]++;
+            }
+        });
+
+        const overallPercentages = studentPerformanceList.map(s => s.overallPercentage).filter(p => p > 0);
+        const classAvg = overallPercentages.length > 0
+            ? parseFloat((overallPercentages.reduce((a, b) => a + b, 0) / overallPercentages.length).toFixed(1))
+            : 0;
+
+        const passingStudents = studentPerformanceList.filter(s => s.overallPercentage >= 35);
+        const passingRate = studentPerformanceList.length > 0
+            ? parseFloat(((passingStudents.length / studentPerformanceList.length) * 100).toFixed(1))
+            : 0;
+
+        const insights = {
+            classAverage: classAvg,
+            grade: getGrade(classAvg),
+            totalStudents: students.length,
+            passingRate,
+            topPerformer: studentPerformanceList.length > 0 ? {
+                name: studentPerformanceList[0].name,
+                percentage: studentPerformanceList[0].overallPercentage,
+                rank: studentPerformanceList[0].rank,
+                grade: studentPerformanceList[0].grade
+            } : null,
+            bestSubject: subjectWise.length > 0 ? {
+                name: subjectWise[0].subjectName,
+                avgPercentage: subjectWise[0].avgPercentage
+            } : null,
+            weakestSubject: subjectWise.length > 1 ? {
+                name: subjectWise[subjectWise.length - 1].subjectName,
+                avgPercentage: subjectWise[subjectWise.length - 1].avgPercentage
+            } : null,
+            gradeDistribution: gradeCounts
+        };
+
+        res.json({
+            classId: req.params.classId,
+            className: classDoc ? `${classDoc.name} ${classDoc.section || ''}`.trim() : '',
+            totalStudents: students.length,
+            performance,
+            subjectWise,
+            students: studentPerformanceList,
+            insights
+        });
     } catch (err) {
-        console.error(err.message);
+        console.error('Error in /exams/performance/class/:classId:', err);
         res.status(500).send('Server Error');
     }
 });
