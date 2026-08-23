@@ -9,6 +9,16 @@ const loginValidation = [
     .withMessage('Password is required')
 ];
 
+const changePasswordValidation = [
+  body('currentPassword')
+    .notEmpty()
+    .withMessage('Current password is required'),
+  body('newPassword')
+    .isLength({ min: 8 })
+    .withMessage('New password must be at least 8 characters long')
+];
+
 module.exports = {
-  loginValidation
+  loginValidation,
+  changePasswordValidation
 };
