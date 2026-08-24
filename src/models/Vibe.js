@@ -13,10 +13,24 @@ const vibeSchema = new mongoose.Schema({
     default: 'general'
   },
   images: [{
+    type: {
+      type: String,
+      enum: ['image', 'video'],
+      default: 'image'
+    },
     url: {
       type: String,
       required: true,
       trim: true
+    },
+    thumbnailUrl: {
+      type: String,
+      trim: true,
+      default: ''
+    },
+    duration: {
+      type: Number,
+      default: 0
     },
     publicId: {
       type: String,

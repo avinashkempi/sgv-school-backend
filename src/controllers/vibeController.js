@@ -141,22 +141,41 @@ exports.createVibe = async (req, res) => {
     const user = req.user;
 
     if (!images || !Array.isArray(images) || images.length === 0) {
-      return res.status(400).json({ success: false, message: 'At least one photo is required' });
+      return res.status(400).json({ success: false, message: 'At least one photo or video is required' });
     }
 
-    // Limit to 5 images per vibe for high performance & fast loading
-    const sanitizedImages = images.slice(0, 5).map(img => {
-      if (typeof img === 'string') {
-        return { url: img.trim(), width: 1080, height: 1080, aspectRatio: 1 };
-      }
-      return {
-        url: img.url.trim(),
-        publicId: img.publicId || '',
-        width: img.width || 1080,
-        height: img.height || 1080,
-        aspectRatio: img.aspectRatio || (img.width && img.height ? img.width / img.height : 1)
-      };
-    });
+    const hasVideo = images.some(img => typeof img === 'object' && img.type === 'video');
+
+    // Rule: Only 1 video is allowed, OR up to 5 photos
+    let sanitizedMedia = [];
+    if (hasVideo) {
+      const videoItem = images.find(img => typeof img === 'object' && img.type === 'video') || images[0];
+      sanitizedMedia = [{
+        type: 'video',
+        url: videoItem.url.trim(),
+        thumbnailUrl: videoItem.thumbnailUrl ? videoItem.thumbnailUrl.trim() : '',
+        duration: Math.min(Math.max(Number(videoItem.duration) || 0, 0), 60),
+        publicId: videoItem.publicId || '',
+        width: videoItem.width || 720,
+        height: videoItem.height || 1280,
+        aspectRatio: videoItem.aspectRatio || (videoItem.width && videoItem.height ? Number((videoItem.width / videoItem.height).toFixed(3)) : 0.562)
+      }];
+    } else {
+      // Up to 5 photos
+      sanitizedMedia = images.slice(0, 5).map(img => {
+        if (typeof img === 'string') {
+          return { type: 'image', url: img.trim(), width: 1080, height: 1080, aspectRatio: 1 };
+        }
+        return {
+          type: 'image',
+          url: img.url.trim(),
+          publicId: img.publicId || '',
+          width: img.width || 1080,
+          height: img.height || 1080,
+          aspectRatio: img.aspectRatio || (img.width && img.height ? Number((img.width / img.height).toFixed(3)) : 1)
+        };
+      });
+    }
 
     const isAdmin = user.role === 'admin' || user.role === 'super admin';
     const postIdentity = isAdmin && postAs === 'school' ? 'school' : 'self';
@@ -175,7 +194,7 @@ exports.createVibe = async (req, res) => {
     const vibe = new Vibe({
       caption: caption ? caption.trim() : '',
       category: ['general', 'achievement', 'life', 'sports', 'arts', 'official'].includes(category) ? category : 'general',
-      images: sanitizedImages,
+      images: sanitizedMedia,
       author: user.userId,
       postAs: postIdentity,
       authorRole: user.role,
