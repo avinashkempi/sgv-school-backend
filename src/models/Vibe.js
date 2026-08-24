@@ -106,6 +106,10 @@ const vibeSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  isSpotlight: {
+    type: Boolean,
+    default: false
+  },
   isActive: {
     type: Boolean,
     default: true
@@ -115,6 +119,7 @@ const vibeSchema = new mongoose.Schema({
 });
 
 // Performance compound indexes
+vibeSchema.index({ status: 1, isActive: 1, isSpotlight: -1, isPinned: -1, createdAt: -1 });
 vibeSchema.index({ status: 1, isActive: 1, isPinned: -1, createdAt: -1 });
 vibeSchema.index({ status: 1, category: 1, isActive: 1, isPinned: -1, createdAt: -1 });
 vibeSchema.index({ author: 1, status: 1, isActive: 1, createdAt: -1 });

@@ -20,19 +20,29 @@ const {
   getMySavedVibes,
   listPendingVibes,
   reviewVibe,
-  togglePinVibe
+  togglePinVibe,
+  toggleSpotlightVibe,
+  getVibeHighlights,
+  getSpotlightVibe,
+  getUserVibes
 } = require('../controllers/vibeController');
 
 const router = express.Router();
+
+// ── Highlights & Spotlight (Public / Authenticated) ──
+router.get('/highlights', optionalAuthenticateToken, getVibeHighlights);
+router.get('/spotlight', optionalAuthenticateToken, getSpotlightVibe);
 
 // ── Admin Moderation Endpoints ──
 router.get('/admin/pending', authenticateToken, requireAdmin, listPendingVibes);
 router.patch('/admin/:id/review', authenticateToken, requireAdmin, reviewVibe);
 router.patch('/admin/:id/pin', authenticateToken, requireAdmin, togglePinVibe);
+router.patch('/admin/:id/spotlight', authenticateToken, requireAdmin, toggleSpotlightVibe);
 
 // ── User Specific Endpoints ──
 router.get('/user/my-vibes', authenticateToken, getMyVibes);
 router.get('/user/saved', authenticateToken, getMySavedVibes);
+router.get('/user/:userId', optionalAuthenticateToken, getUserVibes);
 
 // ── Public & Authenticated Feed Endpoints ──
 router.get('/', optionalAuthenticateToken, listVibes);

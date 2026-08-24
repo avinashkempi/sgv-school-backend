@@ -756,3 +756,201 @@ exports.togglePinVibe = async (req, res) => {
     res.status(500).json({ success: false, message: 'Server error while toggling pin' });
   }
 };
+
+/**
+ * PATCH /api/vibes/admin/:id/spotlight
+ * Toggle spotlight status. Admin / Super Admin only.
+ */
+exports.toggleSpotlightVibe = async (req, res) => {
+  try {
+    const vibe = await Vibe.findOne({ _id: req.params.id, isActive: true });
+    if (!vibe) {
+      return res.status(404).json({ success: false, message: 'Vibe not found' });
+    }
+
+    vibe.isSpotlight = !vibe.isSpotlight;
+    await vibe.save();
+
+    res.status(200).json({
+      success: true,
+      data: { isSpotlight: vibe.isSpotlight },
+      message: vibe.isSpotlight ? 'Vibe set as Home Spotlight' : 'Spotlight removed'
+    });
+  } catch (error) {
+    logger.error('Error toggling spotlight:', error);
+    res.status(500).json({ success: false, message: 'Server error while toggling spotlight' });
+  }
+};
+
+/**
+ * GET /api/vibes/highlights
+ * Returns grouped highlights for the Home Page Stories Tray:
+ * - Official announcements
+ * - Achievements
+ * - Recent campus stories (grouped by author)
+ */
+exports.getVibeHighlights = async (req, res) => {
+  try {
+    const [officialVibes, achievementVibes, recentCampusVibes] = await Promise.all([
+      // Official / School broadcasts
+      Vibe.find({
+        status: 'approved',
+        isActive: true,
+        $or: [{ postAs: 'school' }, { category: 'official' }]
+      })
+        .sort({ isSpotlight: -1, isPinned: -1, createdAt: -1 })
+        .limit(5)
+        .populate('author', 'name role')
+        .lean(),
+
+      // Achievements
+      Vibe.find({
+        status: 'approved',
+        isActive: true,
+        category: 'achievement'
+      })
+        .sort({ isSpotlight: -1, isPinned: -1, createdAt: -1 })
+        .limit(5)
+        .populate('author', 'name role')
+        .lean(),
+
+      // Recent campus vibes from students & teachers
+      Vibe.find({
+        status: 'approved',
+        isActive: true,
+        postAs: 'self'
+      })
+        .sort({ createdAt: -1 })
+        .limit(15)
+        .populate('author', 'name role profilePhoto designation currentClass')
+        .lean(),
+    ]);
+
+    // Group recent campus vibes by unique author for circular story bubbles
+    const authorStoriesMap = new Map();
+    for (const vibe of recentCampusVibes) {
+      const authorId = vibe.author?._id?.toString() || 'unknown';
+      if (!authorStoriesMap.has(authorId)) {
+        authorStoriesMap.set(authorId, {
+          author: vibe.author,
+          latestVibeId: vibe._id,
+          latestImage: vibe.images?.[0]?.thumbnailUrl || vibe.images?.[0]?.url || '',
+          captionPreview: vibe.caption || '',
+          category: vibe.category,
+          storyCount: 1,
+          createdAt: vibe.createdAt
+        });
+      } else {
+        const item = authorStoriesMap.get(authorId);
+        item.storyCount += 1;
+      }
+    }
+
+    const recentAuthorStories = Array.from(authorStoriesMap.values()).slice(0, 10);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        official: officialVibes,
+        achievements: achievementVibes,
+        stories: recentAuthorStories,
+        totalActiveStories: recentCampusVibes.length + officialVibes.length + achievementVibes.length
+      }
+    });
+  } catch (error) {
+    logger.error('Error fetching vibe highlights:', error);
+    res.status(500).json({ success: false, message: 'Server error while fetching highlights' });
+  }
+};
+
+/**
+ * GET /api/vibes/spotlight
+ * Returns the top spotlighted/pinned vibe for the Home Page hero banner.
+ */
+exports.getSpotlightVibe = async (req, res) => {
+  try {
+    let spotlight = await Vibe.findOne({
+      status: 'approved',
+      isActive: true,
+      isSpotlight: true
+    })
+      .populate('author', 'name role currentClass designation')
+      .lean();
+
+    // Fallback: If no vibe is explicitly marked spotlight, pick top pinned vibe
+    if (!spotlight) {
+      spotlight = await Vibe.findOne({
+        status: 'approved',
+        isActive: true,
+        isPinned: true
+      })
+        .sort({ createdAt: -1 })
+        .populate('author', 'name role currentClass designation')
+        .lean();
+    }
+
+    // Secondary fallback: Most recent official or achievement vibe
+    if (!spotlight) {
+      spotlight = await Vibe.findOne({
+        status: 'approved',
+        isActive: true,
+        $or: [{ postAs: 'school' }, { category: 'achievement' }]
+      })
+        .sort({ createdAt: -1 })
+        .populate('author', 'name role currentClass designation')
+        .lean();
+    }
+
+    res.status(200).json({
+      success: true,
+      data: spotlight || null
+    });
+  } catch (error) {
+    logger.error('Error fetching spotlight vibe:', error);
+    res.status(500).json({ success: false, message: 'Server error while fetching spotlight vibe' });
+  }
+};
+
+/**
+ * GET /api/vibes/user/:userId
+ * Returns approved vibes for a specific author (for Profile and UserDetailModal).
+ */
+exports.getUserVibes = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const page = Math.max(parseInt(req.query.page) || 1, 1);
+    const limit = Math.min(Math.max(parseInt(req.query.limit) || 20, 1), 50);
+    const skip = (page - 1) * limit;
+
+    const query = {
+      author: userId,
+      status: 'approved',
+      isActive: true
+    };
+
+    const [vibes, total] = await Promise.all([
+      Vibe.find(query)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .populate('author', 'name role currentClass designation')
+        .lean(),
+      Vibe.countDocuments(query)
+    ]);
+
+    res.status(200).json({
+      success: true,
+      data: vibes,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+        hasMore: skip + vibes.length < total
+      }
+    });
+  } catch (error) {
+    logger.error('Error fetching user vibes:', error);
+    res.status(500).json({ success: false, message: 'Server error while fetching user vibes' });
+  }
+};
