@@ -144,21 +144,30 @@ exports.createVibe = async (req, res) => {
       return res.status(400).json({ success: false, message: 'At least one photo or video is required' });
     }
 
-    const hasVideo = images.some(img => typeof img === 'object' && img.type === 'video');
+    const isVideoMedia = (img) => {
+      if (!img) return false;
+      if (typeof img === 'object' && img.type === 'video') return true;
+      const url = typeof img === 'string' ? img : (img.url || '');
+      return /\.(mov|mp4|m4v|webm|avi|3gp|mkv|flv|wmv|qt)(\?.*)?$/i.test(url);
+    };
+
+    const hasVideo = images.some(img => isVideoMedia(img));
 
     // Rule: Only 1 video is allowed, OR up to 5 photos
     let sanitizedMedia = [];
     if (hasVideo) {
-      const videoItem = images.find(img => typeof img === 'object' && img.type === 'video') || images[0];
+      const videoItem = images.find(img => isVideoMedia(img)) || images[0];
+      const videoUrl = typeof videoItem === 'string' ? videoItem.trim() : (videoItem.url ? videoItem.url.trim() : '');
+      const thumbUrl = typeof videoItem === 'object' && videoItem.thumbnailUrl ? videoItem.thumbnailUrl.trim() : '';
       sanitizedMedia = [{
         type: 'video',
-        url: videoItem.url.trim(),
-        thumbnailUrl: videoItem.thumbnailUrl ? videoItem.thumbnailUrl.trim() : '',
-        duration: Math.min(Math.max(Number(videoItem.duration) || 0, 0), 60),
-        publicId: videoItem.publicId || '',
-        width: videoItem.width || 720,
-        height: videoItem.height || 1280,
-        aspectRatio: videoItem.aspectRatio || (videoItem.width && videoItem.height ? Number((videoItem.width / videoItem.height).toFixed(3)) : 0.562)
+        url: videoUrl,
+        thumbnailUrl: thumbUrl,
+        duration: typeof videoItem === 'object' ? Math.min(Math.max(Number(videoItem.duration) || 0, 0), 60) : 0,
+        publicId: typeof videoItem === 'object' ? (videoItem.publicId || '') : '',
+        width: typeof videoItem === 'object' && videoItem.width ? videoItem.width : 720,
+        height: typeof videoItem === 'object' && videoItem.height ? videoItem.height : 1280,
+        aspectRatio: typeof videoItem === 'object' && videoItem.aspectRatio ? videoItem.aspectRatio : 0.562
       }];
     } else {
       // Up to 5 photos
