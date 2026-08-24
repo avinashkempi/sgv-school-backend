@@ -1,20 +1,30 @@
 const SchoolInfo = require('../models/SchoolInfo');
 
-// In-memory cache for school info (static data)
-let cachedSchoolInfo = null;
+// Helper to normalize photo URLs into an array of strings
+const normalizePhotos = (data) => {
+  if (!data) return [];
+  const raw = data.photoUrl ?? data.photoUrls ?? data.photourls ?? [];
+  if (Array.isArray(raw)) {
+    return raw.map(p => (typeof p === 'string' ? p.trim() : (p?.url || ''))).filter(Boolean);
+  }
+  if (typeof raw === 'string' && raw.trim()) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed.map(p => (typeof p === 'string' ? p.trim() : (p?.url || ''))).filter(Boolean);
+      }
+    } catch {
+      // Not JSON, continue to delimiter split
+    }
+    return raw.split(',').map(s => s.trim()).filter(Boolean);
+  }
+  return [];
+};
 
 // Get school info (public endpoint)
 const getSchoolInfo = async (req, res) => {
   try {
-    // Return cached document if available
-    if (cachedSchoolInfo) {
-      return res.status(200).json({
-        success: true,
-        data: cachedSchoolInfo
-      });
-    }
-
-    // Get the first (and likely only) school info document
+    // Always query MongoDB directly to ensure pull-to-refresh gets fresh updates immediately
     const schoolInfo = await SchoolInfo.findOne().lean();
 
     if (!schoolInfo) {
@@ -24,7 +34,10 @@ const getSchoolInfo = async (req, res) => {
       });
     }
 
-    cachedSchoolInfo = schoolInfo;
+    // Normalize photos so photoUrl and photoUrls are always valid arrays
+    const photos = normalizePhotos(schoolInfo);
+    schoolInfo.photoUrl = photos;
+    schoolInfo.photoUrls = photos;
 
     res.status(200).json({
       success: true,
@@ -42,7 +55,13 @@ const getSchoolInfo = async (req, res) => {
 // Create or update school info (admin only)
 const createOrUpdateSchoolInfo = async (req, res) => {
   try {
-    const updateData = req.body;
+    const updateData = { ...req.body };
+
+    if (updateData.photoUrl !== undefined || updateData.photoUrls !== undefined) {
+      const photos = normalizePhotos(updateData);
+      updateData.photoUrl = photos;
+      updateData.photoUrls = photos;
+    }
 
     // Find existing school info or create new one
     let schoolInfo = await SchoolInfo.findOne();
@@ -57,12 +76,14 @@ const createOrUpdateSchoolInfo = async (req, res) => {
       await schoolInfo.save();
     }
 
-    // Invalidate and refresh cache
-    cachedSchoolInfo = schoolInfo.toObject ? schoolInfo.toObject() : schoolInfo;
+    const responseData = schoolInfo.toObject ? schoolInfo.toObject() : schoolInfo;
+    const photos = normalizePhotos(responseData);
+    responseData.photoUrl = photos;
+    responseData.photoUrls = photos;
 
     res.status(200).json({
       success: true,
-      data: schoolInfo,
+      data: responseData,
       message: schoolInfo.isNew ? 'School info created successfully' : 'School info updated successfully'
     });
   } catch (error) {

@@ -71,6 +71,14 @@ const schoolInfoSchema = new mongoose.Schema({
       trim: true
     }
   }],
+  photoUrl: [{
+    type: String,
+    trim: true
+  }],
+  photoUrls: [{
+    type: String,
+    trim: true
+  }],
   createdAt: {
     type: Date,
     default: Date.now
