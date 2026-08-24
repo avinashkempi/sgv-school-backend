@@ -826,9 +826,36 @@ exports.getVibeHighlights = async (req, res) => {
         .lean(),
     ]);
 
+    // Enhance with user interaction flags if logged in
+    const currentUserId = req.user?.userId;
+    let likedVibeIds = new Set();
+    let bookmarkedVibeIds = new Set();
+
+    const allFetchedVibes = [...officialVibes, ...achievementVibes, ...recentCampusVibes];
+    if (currentUserId && allFetchedVibes.length > 0) {
+      const vibeIds = allFetchedVibes.map(v => v._id);
+      const [userLikes, userBookmarks] = await Promise.all([
+        VibeLike.find({ vibe: { $in: vibeIds }, user: currentUserId }).select('vibe').lean(),
+        VibeBookmark.find({ vibe: { $in: vibeIds }, user: currentUserId }).select('vibe').lean()
+      ]);
+
+      likedVibeIds = new Set(userLikes.map(l => l.vibe.toString()));
+      bookmarkedVibeIds = new Set(userBookmarks.map(b => b.vibe.toString()));
+    }
+
+    const enhanceVibe = (vibe) => ({
+      ...vibe,
+      isLiked: likedVibeIds.has(vibe._id.toString()),
+      isBookmarked: bookmarkedVibeIds.has(vibe._id.toString())
+    });
+
+    const enhancedOfficial = officialVibes.map(enhanceVibe);
+    const enhancedAchievements = achievementVibes.map(enhanceVibe);
+    const enhancedRecentCampus = recentCampusVibes.map(enhanceVibe);
+
     // Group recent campus vibes by unique author for circular story bubbles
     const authorStoriesMap = new Map();
-    for (const vibe of recentCampusVibes) {
+    for (const vibe of enhancedRecentCampus) {
       const authorId = vibe.author?._id?.toString() || 'unknown';
       if (!authorStoriesMap.has(authorId)) {
         authorStoriesMap.set(authorId, {
@@ -838,11 +865,13 @@ exports.getVibeHighlights = async (req, res) => {
           captionPreview: vibe.caption || '',
           category: vibe.category,
           storyCount: 1,
-          createdAt: vibe.createdAt
+          createdAt: vibe.createdAt,
+          vibes: [vibe]
         });
       } else {
         const item = authorStoriesMap.get(authorId);
         item.storyCount += 1;
+        item.vibes.push(vibe);
       }
     }
 
@@ -851,10 +880,10 @@ exports.getVibeHighlights = async (req, res) => {
     res.status(200).json({
       success: true,
       data: {
-        official: officialVibes,
-        achievements: achievementVibes,
+        official: enhancedOfficial,
+        achievements: enhancedAchievements,
         stories: recentAuthorStories,
-        totalActiveStories: recentCampusVibes.length + officialVibes.length + achievementVibes.length
+        totalActiveStories: enhancedRecentCampus.length + enhancedOfficial.length + enhancedAchievements.length
       }
     });
   } catch (error) {
