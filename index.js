@@ -86,6 +86,7 @@ app.use('/api/events', require('./src/routes/events'));
 
 app.use('/api/school-info', require('./src/routes/schoolInfo'));
 app.use('/api/posts', require('./src/routes/posts'));
+app.use('/api/vibes', require('./src/routes/vibes'));
 app.use('/api/labels', require('./src/routes/labels'));
 app.use('/api/users', require('./src/routes/users'));
 app.use('/api/fcm', require('./src/routes/fcm'));
