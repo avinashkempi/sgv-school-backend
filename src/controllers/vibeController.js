@@ -2,9 +2,9 @@ const Vibe = require('../models/Vibe');
 const VibeLike = require('../models/VibeLike');
 const VibeComment = require('../models/VibeComment');
 const VibeBookmark = require('../models/VibeBookmark');
-const Notification = require('../models/Notification');
-const { sendTargetedNotification } = require('../services/notificationService');
 const logger = require('../utils/logger');
+
+// NOTE: Push notifications for Vibes are disabled for testing as requested.
 
 /**
  * GET /api/vibes
@@ -189,61 +189,7 @@ exports.createVibe = async (req, res) => {
     await vibe.save();
     await vibe.populate('author', 'name role currentClass designation');
 
-    // Push notification triggers
-    if (initialStatus === 'pending') {
-      try {
-        const notif = new Notification({
-          title: '📸 New Vibe Pending Review',
-          message: `${user.name} submitted a new vibe for approval.`,
-          type: 'General',
-          category: 'announcement',
-          priority: 'medium',
-          targetRole: 'admin',
-          sendToPublic: false,
-          actionType: 'navigate',
-          actionData: { screen: 'admin/vibe-approvals', vibeId: vibe._id.toString() }
-        });
-        await notif.save();
-
-        sendTargetedNotification('admin', null, {
-          title: '📸 New Vibe Pending Review',
-          message: `${user.name} submitted a new vibe for approval.`,
-          type: 'General',
-          category: 'announcement',
-          priority: 'medium'
-        }).catch(err => logger.warn('Failed to notify admins of pending vibe:', err));
-      } catch (err) {
-        logger.warn('Error saving admin notification for vibe:', err);
-      }
-    } else if (postIdentity === 'school' || category === 'achievement') {
-      try {
-        const notifTitle = postIdentity === 'school' ? '🏛️ New School Vibe' : '🏆 New Achievement Vibe!';
-        const notifBody = caption ? caption.substring(0, 100) : 'Check out the latest post from school!';
-
-        const notif = new Notification({
-          title: notifTitle,
-          message: notifBody,
-          type: 'General',
-          category: 'announcement',
-          priority: 'medium',
-          targetRole: 'all',
-          sendToPublic: true,
-          actionType: 'navigate',
-          actionData: { screen: 'vibes', vibeId: vibe._id.toString() }
-        });
-        await notif.save();
-
-        sendTargetedNotification('all', null, {
-          title: notifTitle,
-          message: notifBody,
-          type: 'General',
-          category: 'announcement',
-          priority: 'medium'
-        }, true).catch(err => logger.warn('Failed to broadcast school vibe notification:', err));
-      } catch (err) {
-        logger.warn('Error broadcasting vibe notification:', err);
-      }
-    }
+    // NOTE: Notifications intentionally bypassed for testing
 
     res.status(201).json({
       success: true,
@@ -745,37 +691,7 @@ exports.reviewVibe = async (req, res) => {
 
     await vibe.save();
 
-    // Send push notification to the author
-    try {
-      const isApproved = action === 'approve';
-      const notifTitle = isApproved ? '🎉 Vibe Approved!' : '📝 Vibe Review Update';
-      const notifBody = isApproved
-        ? 'Your post is now live on the school Vibes feed!'
-        : `Your submission could not be approved: ${vibe.rejectionReason}`;
-
-      const notif = new Notification({
-        title: notifTitle,
-        message: notifBody,
-        type: 'General',
-        category: 'announcement',
-        priority: 'medium',
-        targetUser: vibe.author._id,
-        sendToPublic: false,
-        actionType: 'navigate',
-        actionData: { screen: 'vibes', tab: 'my-vibes', vibeId: vibe._id.toString() }
-      });
-      await notif.save();
-
-      sendTargetedNotification('user', vibe.author._id.toString(), {
-        title: notifTitle,
-        message: notifBody,
-        type: 'General',
-        category: 'announcement',
-        priority: 'medium'
-      }).catch(err => logger.warn('Failed to send author review notification:', err));
-    } catch (notifErr) {
-      logger.warn('Failed to log review notification:', notifErr);
-    }
+    // NOTE: Notifications intentionally bypassed for testing
 
     res.status(200).json({
       success: true,
