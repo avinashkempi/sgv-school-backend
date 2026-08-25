@@ -25,7 +25,7 @@ exports.listPosts = async (req, res) => {
         .sort({ isPinned: -1, createdAt: -1 }) // Pinned first, then newest
         .skip(skip)
         .limit(limit)
-        .populate('postedBy', 'name role')
+        .populate('postedBy', 'name role profilePhoto')
         .lean(),
       Post.countDocuments(query)
     ]);
@@ -54,7 +54,7 @@ exports.listPosts = async (req, res) => {
 exports.getPost = async (req, res) => {
   try {
     const post = await Post.findOne({ _id: req.params.id, isActive: true })
-      .populate('postedBy', 'name role')
+      .populate('postedBy', 'name role profilePhoto')
       .lean();
 
     if (!post) {

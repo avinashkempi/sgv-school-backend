@@ -268,7 +268,7 @@ router.get('/summary', [auth, checkRole(['admin', 'super admin']), yearContext],
 
         // 2. Fetch All Students (Lite)
         const students = await User.find(query)
-            .select('name phone email currentClass regNo')
+            .select('name phone email currentClass regNo profilePhoto')
             .populate('currentClass', 'name section')
             .lean();
 
@@ -307,6 +307,7 @@ router.get('/summary', [auth, checkRole(['admin', 'super admin']), yearContext],
             return {
                 _id: student._id,
                 name: student.name,
+                profilePhoto: student.profilePhoto,
                 admissionNo: student.admissionNo,
                 rollNo: student.rollNo,
                 className: student.currentClass?.name || 'N/A',

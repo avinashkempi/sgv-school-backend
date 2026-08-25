@@ -104,7 +104,7 @@ router.get('/:id/usage', [auth, checkRole(['admin', 'super admin'])], async (req
     try {
         const usage = await Subject.find({ globalSubject: req.params.id })
             .populate('class', 'name section branch')
-            .populate('teachers', 'name email')
+            .populate('teachers', 'name email profilePhoto')
             .sort({ 'class.name': 1 });
 
         res.json(usage);

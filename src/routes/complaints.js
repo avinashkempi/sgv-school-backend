@@ -90,8 +90,8 @@ router.get('/inbox', [auth, checkRole(['admin', 'super admin'])], async (req, re
         }
 
         const complaints = await Complaint.find(filter)
-            .populate('raisedBy', 'name email role currentClass')
-            .populate('assignedTo', 'name')
+            .populate('raisedBy', 'name email role currentClass profilePhoto')
+            .populate('assignedTo', 'name profilePhoto')
             .sort({ createdAt: -1 });
 
         res.json(complaints);

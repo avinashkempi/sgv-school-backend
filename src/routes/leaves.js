@@ -169,7 +169,7 @@ router.get('/requests', authenticateToken, checkRole(['teacher', 'admin', 'super
 
 
         const leaves = await LeaveRequest.find(query)
-            .populate('applicant', 'name role')
+            .populate('applicant', 'name role profilePhoto')
             .populate('class', 'name section')
             .sort({ createdAt: -1 });
 
@@ -367,7 +367,7 @@ router.get('/daily-stats', authenticateToken, checkRole(['admin', 'super admin']
             startDate: { $lte: targetDate },
             endDate: { $gte: targetDate },
             status: 'approved'
-        }).populate('applicant', 'name role')
+        }).populate('applicant', 'name role profilePhoto')
             .populate('class', 'name section');
 
         res.status(200).json({ success: true, data: leaves });

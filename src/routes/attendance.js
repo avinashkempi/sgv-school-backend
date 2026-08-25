@@ -220,7 +220,7 @@ router.get('/class/:classId/date/:date', [auth, yearContext], async (req, res) =
             .sort({ 'user.name': 1 });
 
         const students = await User.find({ currentClass: classId, role: 'student' })
-            .select('name email')
+            .select('name email profilePhoto')
             .sort({ name: 1 });
 
         // Check for approved leaves overlapping this date
@@ -241,7 +241,8 @@ router.get('/class/:classId/date/:date', [auth, yearContext], async (req, res) =
                 student: {
                     _id: student._id,
                     name: student.name,
-                    email: student.email
+                    email: student.email,
+                    profilePhoto: student.profilePhoto
                 },
                 status: attendanceRecord ? attendanceRecord.status : null,
                 remarks: attendanceRecord ? attendanceRecord.remarks : '',

@@ -331,12 +331,12 @@ router.get('/admin/teacher-subject-matrix', [auth, checkRole(['admin', 'super ad
                 match: { academicYear: req.academicYearContext },
                 populate: { path: 'class', select: 'name section' }
             })
-            .select('name email role subjects')
+            .select('name email role subjects profilePhoto')
             .sort({ name: 1 });
 
         const allSubjects = await Subject.find({ academicYear: req.academicYearContext })
             .populate('class', 'name section')
-            .populate('teachers', 'name email')
+            .populate('teachers', 'name email profilePhoto')
             .sort({ 'class.name': 1, name: 1 });
 
         res.json({

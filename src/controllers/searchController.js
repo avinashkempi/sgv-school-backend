@@ -37,7 +37,7 @@ exports.globalSearch = async (req, res) => {
                         { phone: searchRegex }
                     ]
                 })
-                    .select('name email phone role currentClass')
+                    .select('name email phone role currentClass profilePhoto')
                     .populate('currentClass', 'name section')
                     .limit(parsedLimit)
                     .lean()

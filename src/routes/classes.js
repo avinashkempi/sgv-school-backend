@@ -17,7 +17,7 @@ const _notificationService = require('../services/notificationService');
 router.get('/', [auth, yearContext], async (req, res) => {
     try {
         const classes = await Class.find({ academicYear: req.academicYearContext })
-            .populate('classTeacher', 'name email')
+            .populate('classTeacher', 'name email profilePhoto')
             .sort({ name: 1 });
         res.json(classes);
     } catch (err) {
@@ -35,7 +35,7 @@ router.get('/my-classes', [auth, yearContext], async (req, res) => {
             classTeacher: req.user.userId,
             academicYear: req.academicYearContext 
         })
-            .populate('classTeacher', 'name email')
+            .populate('classTeacher', 'name email profilePhoto')
             .sort({ name: 1 });
         res.json(classes);
     } catch (err) {
@@ -50,10 +50,10 @@ router.get('/my-classes', [auth, yearContext], async (req, res) => {
 router.get('/admin/init', [auth, checkRole(['admin', 'super admin']), yearContext], async (req, res) => {
     try {
         const [classes, academicYears, teachers, subjects, timetables] = await Promise.all([
-            Class.find({ academicYear: req.academicYearContext }).populate('classTeacher', 'name email').sort({ name: 1 }).lean(),
+            Class.find({ academicYear: req.academicYearContext }).populate('classTeacher', 'name email profilePhoto').sort({ name: 1 }).lean(),
             AcademicYear.find().sort({ startDate: -1 }),
-            User.find({ role: { $nin: ['student', 'super admin', 'support_staff'] } }).select('name email role'),
-            Subject.find({ academicYear: req.academicYearContext }).populate('teachers', 'name email'),
+            User.find({ role: { $nin: ['student', 'super admin', 'support_staff'] } }).select('name email role profilePhoto'),
+            Subject.find({ academicYear: req.academicYearContext }).populate('teachers', 'name email profilePhoto'),
             Timetable.find({
                 $or: [
                     { academicYear: req.academicYearContext },
@@ -110,7 +110,7 @@ router.get('/:id', auth, async (req, res) => {
         if (!req.params.id.match(/^[0-9a-fA-F]{24}$/)) {
             return res.status(404).json({ msg: 'Invalid class ID format' });
         }
-        const classData = await Class.findById(req.params.id).populate('classTeacher', 'name email');
+        const classData = await Class.findById(req.params.id).populate('classTeacher', 'name email profilePhoto');
         if (!classData) {
             return res.status(404).json({ msg: 'Class not found' });
         }
@@ -130,8 +130,8 @@ router.get('/:id', auth, async (req, res) => {
 router.get('/:id/full-details', auth, async (req, res) => {
     try {
         const [classData, subjects, students] = await Promise.all([
-            Class.findById(req.params.id).populate('classTeacher', 'name email'),
-            Subject.find({ class: req.params.id }).populate('teachers', 'name email').sort({ name: 1 }),
+            Class.findById(req.params.id).populate('classTeacher', 'name email profilePhoto'),
+            Subject.find({ class: req.params.id }).populate('teachers', 'name email profilePhoto').sort({ name: 1 }),
             User.find({ currentClass: req.params.id, role: 'student' })
                 .select('-password')
                 .populate('currentClass', 'name')
@@ -453,7 +453,7 @@ router.delete('/:id/students/:studentId', auth, async (req, res) => {
 router.get('/:id/subjects', auth, async (req, res) => {
     try {
         const subjects = await Subject.find({ class: req.params.id })
-            .populate('teachers', 'name email')
+            .populate('teachers', 'name email profilePhoto')
             .sort({ name: 1 });
         res.json(subjects);
     } catch (err) {
