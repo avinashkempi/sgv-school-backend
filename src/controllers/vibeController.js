@@ -170,7 +170,15 @@ exports.createVibe = async (req, res) => {
     if (hasVideo) {
       const videoItem = images.find(img => isVideoMedia(img)) || images[0];
       const videoUrl = typeof videoItem === 'string' ? videoItem.trim() : (videoItem.url ? videoItem.url.trim() : '');
-      const thumbUrl = typeof videoItem === 'object' && videoItem.thumbnailUrl ? videoItem.thumbnailUrl.trim() : '';
+      let thumbUrl = typeof videoItem === 'object' && videoItem.thumbnailUrl ? videoItem.thumbnailUrl.trim() : '';
+
+      // Auto-generate Cloudinary poster thumbnail if omitted
+      if (!thumbUrl && videoUrl && videoUrl.includes('cloudinary.com')) {
+        thumbUrl = videoUrl
+          .replace(/\/video\/upload\/(?:[^\/]+\/)?/, '/video/upload/so_0,w_720,q_auto,f_auto/')
+          .replace(/\.(mp4|mov|webm|m4v|avi|3gp|mkv|flv|wmv|qt)(\?.*)?$/i, '.jpg');
+      }
+
       sanitizedMedia = [{
         type: 'video',
         url: videoUrl,
@@ -1077,11 +1085,44 @@ exports.getSpotlightVibe = async (req, res) => {
         .lean();
     }
 
-    const enhancedSpotlight = spotlight ? {
-      ...spotlight,
-      likesCount: Math.max(0, Number(spotlight.likesCount) || 0),
-      commentsCount: Math.max(0, Number(spotlight.commentsCount) || 0)
-    } : null;
+    // Tertiary fallback: Most recent approved vibe with media
+    if (!spotlight) {
+      spotlight = await Vibe.findOne({
+        status: 'approved',
+        isActive: true,
+        'images.0': { $exists: true }
+      })
+        .sort({ createdAt: -1 })
+        .populate('author', 'name role profilePhoto currentClass designation')
+        .lean();
+    }
+
+    let enhancedSpotlight = null;
+    if (spotlight) {
+      let sanitizedImages = spotlight.images || [];
+      if (Array.isArray(sanitizedImages)) {
+        sanitizedImages = sanitizedImages.map(img => {
+          if (!img) return img;
+          const isVideo = img.type === 'video' || /\.(mp4|mov|webm|m4v|avi|3gp|mkv|flv|wmv|qt)(\?.*)?$/i.test(img.url || '');
+          if (isVideo && !img.thumbnailUrl && img.url && img.url.includes('cloudinary.com')) {
+            return {
+              ...img,
+              thumbnailUrl: img.url
+                .replace(/\/video\/upload\/(?:[^\/]+\/)?/, '/video/upload/so_0,w_720,q_auto,f_auto/')
+                .replace(/\.(mp4|mov|webm|m4v|avi|3gp|mkv|flv|wmv|qt)(\?.*)?$/i, '.jpg')
+            };
+          }
+          return img;
+        });
+      }
+
+      enhancedSpotlight = {
+        ...spotlight,
+        images: sanitizedImages,
+        likesCount: Math.max(0, Number(spotlight.likesCount) || 0),
+        commentsCount: Math.max(0, Number(spotlight.commentsCount) || 0)
+      };
+    }
 
     res.status(200).json({
       success: true,
