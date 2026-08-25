@@ -168,18 +168,43 @@ router.get('/my-leaves', authenticateToken, async (req, res) => {
         }
 
         if (academicYear && academicYear !== 'all') {
-            query.academicYear = academicYear;
+            const classesInYear = await Class.find({ academicYear }).select('_id').lean();
+            const classIdsInYear = classesInYear.map(c => c._id);
+            const activeYearDoc = await AcademicYear.findOne({ isActive: true }).select('_id').lean();
+            const isActiveYear = activeYearDoc && activeYearDoc._id.toString() === academicYear.toString();
+
+            const yearOr = [{ academicYear: academicYear }];
+            if (classIdsInYear.length > 0) {
+                yearOr.push({ class: { $in: classIdsInYear } });
+            }
+            if (isActiveYear) {
+                yearOr.push({ academicYear: { $exists: false } }, { academicYear: null });
+            }
+            query.$or = yearOr;
         }
 
-        const leaves = await LeaveRequest.find(query)
-            .populate('class', 'name label section branch')
+        let leaves = await LeaveRequest.find(query)
+            .populate('class', 'name label section branch academicYear')
             .populate('academicYear', 'name isActive startDate endDate status')
             .populate('actionBy', 'name role profilePhoto')
-            .sort({ createdAt: -1 });
+            .sort({ createdAt: -1 })
+            .lean();
+
+        const activeYear = await AcademicYear.findOne({ isActive: true }).select('name isActive status').lean();
+        leaves = leaves.map(leave => {
+            if (!leave.academicYear) {
+                if (leave.class?.academicYear) {
+                    leave.academicYear = leave.class.academicYear;
+                } else if (activeYear) {
+                    leave.academicYear = activeYear;
+                }
+            }
+            return leave;
+        });
 
         res.status(200).json({ success: true, data: leaves });
     } catch (error) {
-        console.error(error);
+        console.error('[My Leaves] Error:', error);
         res.status(500).json({ success: false, message: 'Server Error' });
     }
 });
@@ -188,18 +213,30 @@ router.get('/my-leaves', authenticateToken, async (req, res) => {
 const getLeaveRequestsHandler = async (req, res) => {
     try {
         const { status, academicYear, classId, role, search } = req.query;
-        let query = {};
+        let andConditions = [];
 
         if (status && status !== 'all') {
-            query.status = status;
-        }
-
-        if (academicYear && academicYear !== 'all') {
-            query.academicYear = academicYear;
+            andConditions.push({ status });
         }
 
         if (classId && classId !== 'all') {
-            query.class = classId;
+            andConditions.push({ class: classId });
+        }
+
+        if (academicYear && academicYear !== 'all') {
+            const classesInYear = await Class.find({ academicYear }).select('_id').lean();
+            const classIdsInYear = classesInYear.map(c => c._id);
+            const activeYearDoc = await AcademicYear.findOne({ isActive: true }).select('_id').lean();
+            const isActiveYear = activeYearDoc && activeYearDoc._id.toString() === academicYear.toString();
+
+            const yearOr = [{ academicYear: academicYear }];
+            if (classIdsInYear.length > 0) {
+                yearOr.push({ class: { $in: classIdsInYear } });
+            }
+            if (isActiveYear) {
+                yearOr.push({ academicYear: { $exists: false } }, { academicYear: null });
+            }
+            andConditions.push({ $or: yearOr });
         }
 
         if (req.user.role === 'teacher') {
@@ -215,42 +252,42 @@ const getLeaveRequestsHandler = async (req, res) => {
                 if (!isAssigned) {
                     return res.status(200).json({ success: true, data: [] });
                 }
-                query.class = classId;
+                andConditions.push({ class: classId });
             } else {
-                query.class = { $in: classIds };
+                andConditions.push({ class: { $in: classIds } });
             }
-            query.applicantRole = 'student';
+            andConditions.push({ applicantRole: 'student' });
         } else if (req.user.role === 'admin') {
             // Admin sees leaves for Students (All), Teachers, and Staff
             const allowedAdminRoles = ['student', 'teacher', 'staff', 'support_staff'];
             if (role && role !== 'all') {
                 if (role === 'staff_teachers') {
-                    query.applicantRole = { $in: ['teacher', 'staff', 'support_staff'] };
+                    andConditions.push({ applicantRole: { $in: ['teacher', 'staff', 'support_staff'] } });
                 } else if (role === 'staff') {
-                    query.applicantRole = { $in: ['staff', 'support_staff'] };
+                    andConditions.push({ applicantRole: { $in: ['staff', 'support_staff'] } });
                 } else if (allowedAdminRoles.includes(role)) {
-                    query.applicantRole = role;
+                    andConditions.push({ applicantRole: role });
                 } else {
-                    query.applicantRole = { $in: allowedAdminRoles };
+                    andConditions.push({ applicantRole: { $in: allowedAdminRoles } });
                 }
             } else {
-                query.applicantRole = { $in: allowedAdminRoles };
+                andConditions.push({ applicantRole: { $in: allowedAdminRoles } });
             }
         } else if (req.user.role === 'super admin') {
             // Super Admin sees ALL leaves (including Admins)
             const allowedSuperRoles = ['student', 'teacher', 'staff', 'support_staff', 'admin'];
             if (role && role !== 'all') {
                 if (role === 'staff_teachers') {
-                    query.applicantRole = { $in: ['teacher', 'staff', 'support_staff'] };
+                    andConditions.push({ applicantRole: { $in: ['teacher', 'staff', 'support_staff'] } });
                 } else if (role === 'staff') {
-                    query.applicantRole = { $in: ['staff', 'support_staff'] };
+                    andConditions.push({ applicantRole: { $in: ['staff', 'support_staff'] } });
                 } else if (allowedSuperRoles.includes(role)) {
-                    query.applicantRole = role;
+                    andConditions.push({ applicantRole: role });
                 } else {
-                    query.applicantRole = { $in: allowedSuperRoles };
+                    andConditions.push({ applicantRole: { $in: allowedSuperRoles } });
                 }
             } else {
-                query.applicantRole = { $in: allowedSuperRoles };
+                andConditions.push({ applicantRole: { $in: allowedSuperRoles } });
             }
         }
 
@@ -262,11 +299,15 @@ const getLeaveRequestsHandler = async (req, res) => {
             }).select('_id').lean();
 
             const userIds = matchingUsers.map(u => u._id);
-            query.$or = [
-                { applicant: { $in: userIds } },
-                { reason: { $regex: cleanSearch, $options: 'i' } }
-            ];
+            andConditions.push({
+                $or: [
+                    { applicant: { $in: userIds } },
+                    { reason: { $regex: cleanSearch, $options: 'i' } }
+                ]
+            });
         }
+
+        const query = andConditions.length > 0 ? { $and: andConditions } : {};
 
         let leaves = await LeaveRequest.find(query)
             .populate('applicant', 'name role profilePhoto email phone currentClass')
@@ -295,7 +336,7 @@ const getLeaveRequestsHandler = async (req, res) => {
 
         res.status(200).json({ success: true, data: leaves });
     } catch (error) {
-        console.error(error);
+        console.error('[Leave Requests] Error:', error);
         res.status(500).json({ success: false, message: 'Server Error' });
     }
 };
