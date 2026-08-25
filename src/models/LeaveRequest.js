@@ -60,6 +60,10 @@ const leaveRequestSchema = new mongoose.Schema({
         type: String,
         trim: true
     },
+    academicYear: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'AcademicYear'
+    },
     actionDate: {
         type: Date
     },
@@ -72,6 +76,8 @@ const leaveRequestSchema = new mongoose.Schema({
 // Index for faster queries
 leaveRequestSchema.index({ applicant: 1, status: 1 });
 leaveRequestSchema.index({ class: 1, status: 1 });
+leaveRequestSchema.index({ academicYear: 1, status: 1 });
+leaveRequestSchema.index({ academicYear: 1, applicantRole: 1, status: 1 });
 leaveRequestSchema.index({ startDate: 1, endDate: 1 });
 leaveRequestSchema.index({ applicantRole: 1, status: 1 });
 leaveRequestSchema.index({ class: 1, applicantRole: 1, status: 1, startDate: 1, endDate: 1 });

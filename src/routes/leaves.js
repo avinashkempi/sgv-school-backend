@@ -12,14 +12,12 @@ const toTitleCase = require('../utils/titleCase');
 const { isISTSunday, getISTDayBounds, getISTDateObject } = require('../utils/dateUtils');
 
 // @desc    Apply for leave
+// @desc    Apply for leave
 // @route   POST /api/leaves/apply
 // @access  Private (All)
 router.post('/apply', authenticateToken, async (req, res) => {
     try {
         const { startDate, endDate, reason, leaveType, halfDaySlot } = req.body;
-
-        // Log request for debugging
-
 
         // Validate required fields
         if (!startDate || !endDate || !reason) {
@@ -53,17 +51,39 @@ router.post('/apply', authenticateToken, async (req, res) => {
         }
 
         let classId = undefined;
+        let academicYearId = undefined;
+
         if (req.user.role === 'student') {
             if (!user.currentClass) {
                 return res.status(400).json({ success: false, message: 'Student is not assigned to any class' });
             }
             classId = user.currentClass;
+            const studentClass = await Class.findById(classId).select('academicYear classTeacher').lean();
+            if (studentClass?.academicYear) {
+                academicYearId = studentClass.academicYear;
+            }
+        }
+
+        // If academicYear is not resolved yet, find active or matching academic year
+        if (!academicYearId) {
+            let matchedYear = await AcademicYear.findOne({
+                startDate: { $lte: start },
+                endDate: { $gte: start }
+            }).select('_id').lean();
+
+            if (!matchedYear) {
+                matchedYear = await AcademicYear.findOne({ isActive: true }).select('_id').lean();
+            }
+            if (matchedYear) {
+                academicYearId = matchedYear._id;
+            }
         }
 
         const leaveRequest = await LeaveRequest.create({
             applicant: req.user.userId,
             applicantRole: req.user.role,
             class: classId,
+            academicYear: academicYearId,
             startDate: start,
             endDate: end,
             reason,
@@ -140,7 +160,21 @@ router.post('/apply', authenticateToken, async (req, res) => {
 // @access  Private (All)
 router.get('/my-leaves', authenticateToken, async (req, res) => {
     try {
-        const leaves = await LeaveRequest.find({ applicant: req.user.userId })
+        const { academicYear, status } = req.query;
+        let query = { applicant: req.user.userId };
+
+        if (status && status !== 'all') {
+            query.status = status;
+        }
+
+        if (academicYear && academicYear !== 'all') {
+            query.academicYear = academicYear;
+        }
+
+        const leaves = await LeaveRequest.find(query)
+            .populate('class', 'name label section branch')
+            .populate('academicYear', 'name isActive startDate endDate status')
+            .populate('actionBy', 'name role profilePhoto')
             .sort({ createdAt: -1 });
 
         res.status(200).json({ success: true, data: leaves });
@@ -153,11 +187,19 @@ router.get('/my-leaves', authenticateToken, async (req, res) => {
 // Handler helper for getting leave requests
 const getLeaveRequestsHandler = async (req, res) => {
     try {
-        const { status } = req.query; // 'pending', 'approved', 'rejected', or undefined (all)
+        const { status, academicYear, classId, role, search } = req.query;
         let query = {};
 
-        if (status) {
+        if (status && status !== 'all') {
             query.status = status;
+        }
+
+        if (academicYear && academicYear !== 'all') {
+            query.academicYear = academicYear;
+        }
+
+        if (classId && classId !== 'all') {
+            query.class = classId;
         }
 
         if (req.user.role === 'teacher') {
@@ -167,20 +209,89 @@ const getLeaveRequestsHandler = async (req, res) => {
                 return res.status(200).json({ success: true, data: [] }); // No class assigned
             }
             const classIds = teacherClasses.map(c => c._id);
-            query.class = { $in: classIds };
+            
+            if (classId && classId !== 'all') {
+                const isAssigned = classIds.some(id => id.toString() === classId.toString());
+                if (!isAssigned) {
+                    return res.status(200).json({ success: true, data: [] });
+                }
+                query.class = classId;
+            } else {
+                query.class = { $in: classIds };
+            }
             query.applicantRole = 'student';
         } else if (req.user.role === 'admin') {
-            // Admin sees pending leaves for Students (All), Teachers, and Staff
-            query.applicantRole = { $in: ['student', 'teacher', 'staff', 'support_staff'] };
+            // Admin sees leaves for Students (All), Teachers, and Staff
+            const allowedAdminRoles = ['student', 'teacher', 'staff', 'support_staff'];
+            if (role && role !== 'all') {
+                if (role === 'staff_teachers') {
+                    query.applicantRole = { $in: ['teacher', 'staff', 'support_staff'] };
+                } else if (role === 'staff') {
+                    query.applicantRole = { $in: ['staff', 'support_staff'] };
+                } else if (allowedAdminRoles.includes(role)) {
+                    query.applicantRole = role;
+                } else {
+                    query.applicantRole = { $in: allowedAdminRoles };
+                }
+            } else {
+                query.applicantRole = { $in: allowedAdminRoles };
+            }
         } else if (req.user.role === 'super admin') {
-            // Super Admin sees ALL pending leaves (including Admins and Staff)
-            query.applicantRole = { $in: ['student', 'teacher', 'staff', 'support_staff', 'admin'] };
+            // Super Admin sees ALL leaves (including Admins)
+            const allowedSuperRoles = ['student', 'teacher', 'staff', 'support_staff', 'admin'];
+            if (role && role !== 'all') {
+                if (role === 'staff_teachers') {
+                    query.applicantRole = { $in: ['teacher', 'staff', 'support_staff'] };
+                } else if (role === 'staff') {
+                    query.applicantRole = { $in: ['staff', 'support_staff'] };
+                } else if (allowedSuperRoles.includes(role)) {
+                    query.applicantRole = role;
+                } else {
+                    query.applicantRole = { $in: allowedSuperRoles };
+                }
+            } else {
+                query.applicantRole = { $in: allowedSuperRoles };
+            }
         }
 
-        const leaves = await LeaveRequest.find(query)
-            .populate('applicant', 'name role profilePhoto')
-            .populate('class', 'name label section')
-            .sort({ createdAt: -1 });
+        // Search text support
+        if (search && search.trim()) {
+            const cleanSearch = search.trim();
+            const matchingUsers = await User.find({
+                name: { $regex: cleanSearch, $options: 'i' }
+            }).select('_id').lean();
+
+            const userIds = matchingUsers.map(u => u._id);
+            query.$or = [
+                { applicant: { $in: userIds } },
+                { reason: { $regex: cleanSearch, $options: 'i' } }
+            ];
+        }
+
+        let leaves = await LeaveRequest.find(query)
+            .populate('applicant', 'name role profilePhoto email phone currentClass')
+            .populate({
+                path: 'class',
+                select: 'name label value section branch academicYear',
+                populate: { path: 'academicYear', select: 'name isActive' }
+            })
+            .populate('academicYear', 'name isActive startDate endDate status')
+            .populate('actionBy', 'name role profilePhoto')
+            .sort({ createdAt: -1 })
+            .lean();
+
+        // Fallback for legacy documents missing academicYear reference
+        const activeYear = await AcademicYear.findOne({ isActive: true }).select('name isActive status').lean();
+        leaves = leaves.map(leave => {
+            if (!leave.academicYear) {
+                if (leave.class?.academicYear) {
+                    leave.academicYear = leave.class.academicYear;
+                } else if (activeYear) {
+                    leave.academicYear = activeYear;
+                }
+            }
+            return leave;
+        });
 
         res.status(200).json({ success: true, data: leaves });
     } catch (error) {
@@ -383,15 +494,43 @@ router.put('/:id/action', authenticateToken, checkRole(['teacher', 'admin', 'sup
 router.get('/daily-stats', authenticateToken, checkRole(['admin', 'super admin']), async (req, res) => {
     try {
         const dateStr = req.query.date; // YYYY-MM-DD
+        const { academicYear } = req.query;
         let targetDate = dateStr ? new Date(dateStr) : new Date();
 
-        // Find approved leaves that overlap with targetDate
-        const leaves = await LeaveRequest.find({
+        let query = {
             startDate: { $lte: targetDate },
             endDate: { $gte: targetDate },
             status: 'approved'
-        }).populate('applicant', 'name role profilePhoto')
-            .populate('class', 'name section');
+        };
+
+        if (academicYear && academicYear !== 'all') {
+            query.academicYear = academicYear;
+        }
+
+        // Find approved leaves that overlap with targetDate
+        let leaves = await LeaveRequest.find(query)
+            .populate('applicant', 'name role profilePhoto email phone currentClass')
+            .populate({
+                path: 'class',
+                select: 'name label value section branch academicYear',
+                populate: { path: 'academicYear', select: 'name isActive' }
+            })
+            .populate('academicYear', 'name isActive status')
+            .sort({ createdAt: -1 })
+            .lean();
+
+        // Fallback for legacy documents missing academicYear reference
+        const activeYear = await AcademicYear.findOne({ isActive: true }).select('name isActive status').lean();
+        leaves = leaves.map(leave => {
+            if (!leave.academicYear) {
+                if (leave.class?.academicYear) {
+                    leave.academicYear = leave.class.academicYear;
+                } else if (activeYear) {
+                    leave.academicYear = activeYear;
+                }
+            }
+            return leave;
+        });
 
         res.status(200).json({ success: true, data: leaves });
     } catch (error) {
