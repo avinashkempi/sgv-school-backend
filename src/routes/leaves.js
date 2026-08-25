@@ -77,7 +77,7 @@ router.post('/apply', authenticateToken, async (req, res) => {
         try {
             const applicantName = toTitleCase(user.name);
             if (req.user.role === 'student') {
-                // Student leave: notify ONLY the class teacher of the student's class
+                // Student leave: notify the class teacher of the student's class
                 const classObj = await Class.findById(classId).select('classTeacher').lean();
                 if (classObj?.classTeacher) {
                     notificationController.triggerNotification({
@@ -88,6 +88,17 @@ router.post('/apply', authenticateToken, async (req, res) => {
                         priority: 'high',
                         target: 'user',
                         targetId: classObj.classTeacher,
+                        metadata: { leaveId: leaveRequest._id }
+                    });
+                } else {
+                    // Fallback: If no class teacher is assigned to this class, notify all Admins
+                    notificationController.triggerNotification({
+                        title: '📋 New Leave Request',
+                        message: `${applicantName} (Student) has requested leave from ${startDate} to ${endDate}. Awaiting your approval.`,
+                        type: 'General',
+                        category: 'leave',
+                        priority: 'high',
+                        target: 'admin',
                         metadata: { leaveId: leaveRequest._id }
                     });
                 }
@@ -139,10 +150,8 @@ router.get('/my-leaves', authenticateToken, async (req, res) => {
     }
 });
 
-// @desc    Get leave requests (Role based) with filters
-// @route   GET /api/leaves/requests
-// @access  Private (Teacher, Admin, Super Admin)
-router.get('/requests', authenticateToken, checkRole(['teacher', 'admin', 'super admin']), async (req, res) => {
+// Handler helper for getting leave requests
+const getLeaveRequestsHandler = async (req, res) => {
     try {
         const { status } = req.query; // 'pending', 'approved', 'rejected', or undefined (all)
         let query = {};
@@ -152,12 +161,13 @@ router.get('/requests', authenticateToken, checkRole(['teacher', 'admin', 'super
         }
 
         if (req.user.role === 'teacher') {
-            // Teacher sees pending leaves for students in their class
-            const classObj = await Class.findOne({ classTeacher: req.user.userId });
-            if (!classObj) {
+            // Teacher sees leaves for students in their assigned class(es)
+            const teacherClasses = await Class.find({ classTeacher: req.user.userId }).select('_id');
+            if (!teacherClasses || teacherClasses.length === 0) {
                 return res.status(200).json({ success: true, data: [] }); // No class assigned
             }
-            query.class = classObj._id;
+            const classIds = teacherClasses.map(c => c._id);
+            query.class = { $in: classIds };
             query.applicantRole = 'student';
         } else if (req.user.role === 'admin') {
             // Admin sees pending leaves for Students (All), Teachers, and Staff
@@ -167,18 +177,29 @@ router.get('/requests', authenticateToken, checkRole(['teacher', 'admin', 'super
             query.applicantRole = { $in: ['student', 'teacher', 'staff', 'support_staff', 'admin'] };
         }
 
-
         const leaves = await LeaveRequest.find(query)
             .populate('applicant', 'name role profilePhoto')
-            .populate('class', 'name section')
+            .populate('class', 'name label section')
             .sort({ createdAt: -1 });
-
 
         res.status(200).json({ success: true, data: leaves });
     } catch (error) {
         console.error(error);
         res.status(500).json({ success: false, message: 'Server Error' });
     }
+};
+
+// @desc    Get leave requests (Role based) with filters
+// @route   GET /api/leaves/requests
+// @access  Private (Teacher, Admin, Super Admin)
+router.get('/requests', authenticateToken, checkRole(['teacher', 'admin', 'super admin']), getLeaveRequestsHandler);
+
+// @desc    Get pending leave requests (Alias for GET /requests?status=pending)
+// @route   GET /api/leaves/pending
+// @access  Private (Teacher, Admin, Super Admin)
+router.get('/pending', authenticateToken, checkRole(['teacher', 'admin', 'super admin']), (req, res) => {
+    req.query.status = req.query.status || 'pending';
+    return getLeaveRequestsHandler(req, res);
 });
 
 // @desc    Approve/Reject leave request
@@ -214,12 +235,14 @@ router.put('/:id/action', authenticateToken, checkRole(['teacher', 'admin', 'sup
         const applicantRole = leaveRequest.applicantRole;
 
         if (applicantRole === 'student') {
-            // Student leave: Teacher OR Admin OR Super Admin can approve
+            // Student leave: Teacher of that class OR Admin OR Super Admin can approve
             if (req.user.role === 'teacher') {
-                // Check if it's their class
                 if (leaveRequest.class) {
-                    const classObj = await Class.findOne({ classTeacher: req.user.userId });
-                    if (classObj && classObj._id.toString() === leaveRequest.class.toString()) {
+                    const isTeacherOfClass = await Class.exists({
+                        _id: leaveRequest.class,
+                        classTeacher: req.user.userId
+                    });
+                    if (isTeacherOfClass) {
                         isAuthorized = true;
                     }
                 }

@@ -47,7 +47,7 @@ exports.listVibes = async (req, res) => {
         .sort({ isPinned: -1, createdAt: -1 })
         .skip(skip)
         .limit(limit)
-        .populate('author', 'name role currentClass designation')
+        .populate('author', 'name role profilePhoto currentClass designation')
         .lean(),
       Vibe.countDocuments(query)
     ]);
@@ -102,8 +102,8 @@ exports.getVibe = async (req, res) => {
     }
 
     const vibe = await Vibe.findOne({ _id: req.params.id, isActive: true })
-      .populate('author', 'name role currentClass designation')
-      .populate('reviewedBy', 'name role')
+      .populate('author', 'name role profilePhoto currentClass designation')
+      .populate('reviewedBy', 'name role profilePhoto')
       .lean();
 
     if (!vibe) {
@@ -223,7 +223,7 @@ exports.createVibe = async (req, res) => {
     });
 
     await vibe.save();
-    await vibe.populate('author', 'name role currentClass designation');
+    await vibe.populate('author', 'name role profilePhoto currentClass designation');
 
     // NOTE: Notifications intentionally bypassed for testing
 
@@ -274,7 +274,7 @@ exports.updateVibe = async (req, res) => {
     if (location !== undefined) vibe.location = location.trim();
 
     await vibe.save();
-    await vibe.populate('author', 'name role currentClass designation');
+    await vibe.populate('author', 'name role profilePhoto currentClass designation');
 
     res.status(200).json({
       success: true,
@@ -404,7 +404,7 @@ exports.getVibeLikes = async (req, res) => {
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
-        .populate('user', 'name role currentClass designation')
+        .populate('user', 'name role profilePhoto currentClass designation')
         .lean(),
       VibeLike.countDocuments({ vibe: req.params.id })
     ]);
@@ -446,7 +446,7 @@ exports.getVibeComments = async (req, res) => {
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
-        .populate('user', 'name role currentClass designation')
+        .populate('user', 'name role profilePhoto currentClass designation')
         .lean(),
       VibeComment.countDocuments({ vibe: req.params.id, isActive: true })
     ]);
@@ -502,7 +502,7 @@ exports.addVibeComment = async (req, res) => {
 
     await comment.save();
     await Vibe.findByIdAndUpdate(vibe._id, { $inc: { commentsCount: 1 } });
-    await comment.populate('user', 'name role currentClass designation');
+    await comment.populate('user', 'name role profilePhoto currentClass designation');
 
     res.status(201).json({
       success: true,
@@ -608,8 +608,8 @@ exports.getMyVibes = async (req, res) => {
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
-        .populate('author', 'name role')
-        .populate('reviewedBy', 'name role')
+        .populate('author', 'name role profilePhoto')
+        .populate('reviewedBy', 'name role profilePhoto')
         .lean(),
       Vibe.countDocuments(query),
       Vibe.aggregate([
@@ -661,7 +661,7 @@ exports.getMySavedVibes = async (req, res) => {
       .populate({
         path: 'vibe',
         match: { isActive: true, status: 'approved' },
-        populate: { path: 'author', select: 'name role currentClass designation' }
+        populate: { path: 'author', select: 'name role profilePhoto currentClass designation' }
       })
       .lean();
 
@@ -707,7 +707,7 @@ exports.listPendingVibes = async (req, res) => {
         .sort({ createdAt: 1 })
         .skip(skip)
         .limit(limit)
-        .populate('author', 'name role currentClass designation phone email')
+        .populate('author', 'name role profilePhoto currentClass designation phone email')
         .lean(),
       Vibe.countDocuments({ status: 'pending', isActive: true })
     ]);
@@ -746,7 +746,7 @@ exports.reviewVibe = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Action must be "approve" or "reject"' });
     }
 
-    const vibe = await Vibe.findOne({ _id: vibeId, isActive: true }).populate('author', 'name role');
+    const vibe = await Vibe.findOne({ _id: vibeId, isActive: true }).populate('author', 'name role profilePhoto');
     if (!vibe) {
       return res.status(404).json({ success: false, message: 'Vibe not found' });
     }
@@ -852,7 +852,7 @@ exports.getVibeHighlights = async (req, res) => {
       })
         .sort({ isSpotlight: -1, isPinned: -1, createdAt: -1 })
         .limit(5)
-        .populate('author', 'name role')
+        .populate('author', 'name role profilePhoto')
         .lean(),
 
       // Achievements
@@ -863,7 +863,7 @@ exports.getVibeHighlights = async (req, res) => {
       })
         .sort({ isSpotlight: -1, isPinned: -1, createdAt: -1 })
         .limit(5)
-        .populate('author', 'name role')
+        .populate('author', 'name role profilePhoto')
         .lean(),
 
       // Recent campus vibes from students & teachers
@@ -1009,7 +1009,7 @@ exports.getSpotlightVibe = async (req, res) => {
       isActive: true,
       isSpotlight: true
     })
-      .populate('author', 'name role currentClass designation')
+      .populate('author', 'name role profilePhoto currentClass designation')
       .lean();
 
     // Fallback: If no vibe is explicitly marked spotlight, pick top pinned vibe
@@ -1020,7 +1020,7 @@ exports.getSpotlightVibe = async (req, res) => {
         isPinned: true
       })
         .sort({ createdAt: -1 })
-        .populate('author', 'name role currentClass designation')
+        .populate('author', 'name role profilePhoto currentClass designation')
         .lean();
     }
 
@@ -1032,7 +1032,7 @@ exports.getSpotlightVibe = async (req, res) => {
         $or: [{ postAs: 'school' }, { category: 'achievement' }]
       })
         .sort({ createdAt: -1 })
-        .populate('author', 'name role currentClass designation')
+        .populate('author', 'name role profilePhoto currentClass designation')
         .lean();
     }
 
@@ -1073,7 +1073,7 @@ exports.getUserVibes = async (req, res) => {
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
-        .populate('author', 'name role currentClass designation')
+        .populate('author', 'name role profilePhoto currentClass designation')
         .lean(),
       Vibe.countDocuments(query)
     ]);
