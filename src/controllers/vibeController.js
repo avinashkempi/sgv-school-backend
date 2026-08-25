@@ -822,7 +822,7 @@ exports.reviewVibe = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Action must be "approve" or "reject"' });
     }
 
-    const vibe = await Vibe.findOne({ _id: vibeId, isActive: true }).populate('author', 'name role profilePhoto');
+    const vibe = await Vibe.findOne({ _id: vibeId, isActive: true }).populate('author', 'name role profilePhoto currentClass designation');
     if (!vibe) {
       return res.status(404).json({ success: false, message: 'Vibe not found' });
     }

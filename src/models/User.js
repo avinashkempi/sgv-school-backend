@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const toTitleCase = require('../utils/titleCase');
 
 const userSchema = new mongoose.Schema({
   name: {
@@ -6,7 +7,8 @@ const userSchema = new mongoose.Schema({
     required: [true, 'Name is required'],
     trim: true,
     minlength: [3, 'Name must be at least 3 characters long'],
-    maxlength: [50, 'Name cannot exceed 50 characters']
+    maxlength: [50, 'Name cannot exceed 50 characters'],
+    set: v => (typeof v === 'string' && v.trim()) ? toTitleCase(v.trim()) : v
   },
   phone: {
     type: String,
@@ -68,7 +70,8 @@ const userSchema = new mongoose.Schema({
   },
   guardianName: {
     type: String,
-    trim: true
+    trim: true,
+    set: v => (typeof v === 'string' && v.trim()) ? toTitleCase(v.trim()) : v
   },
   guardianPhone: {
     type: String,
@@ -160,7 +163,8 @@ const userSchema = new mongoose.Schema({
   },
   designation: {
     type: String,
-    trim: true
+    trim: true,
+    set: v => (typeof v === 'string' && v.trim()) ? toTitleCase(v.trim()) : v
   },
   subjects: [{
     type: mongoose.Schema.Types.ObjectId,

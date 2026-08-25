@@ -310,7 +310,7 @@ const getLeaveRequestsHandler = async (req, res) => {
         const query = andConditions.length > 0 ? { $and: andConditions } : {};
 
         let leaves = await LeaveRequest.find(query)
-            .populate('applicant', 'name role profilePhoto email phone currentClass')
+            .populate('applicant', 'name role profilePhoto email phone currentClass designation')
             .populate({
                 path: 'class',
                 select: 'name label value section branch academicYear',
@@ -550,7 +550,7 @@ router.get('/daily-stats', authenticateToken, checkRole(['admin', 'super admin']
 
         // Find approved leaves that overlap with targetDate
         let leaves = await LeaveRequest.find(query)
-            .populate('applicant', 'name role profilePhoto email phone currentClass')
+            .populate('applicant', 'name role profilePhoto email phone currentClass designation')
             .populate({
                 path: 'class',
                 select: 'name label value section branch academicYear',
