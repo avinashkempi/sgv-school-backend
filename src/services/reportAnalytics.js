@@ -167,7 +167,7 @@ const getStudentRankings = async (classId, academicYearId, examType = null) => {
         const students = await User.find({
             currentClass: classId,
             role: 'student'
-        }).select('name email').lean();
+        }).select('name email profilePhoto rollNumber').lean();
 
         const examIds = exams.map(e => e._id);
         const allMarks = await Marks.find({ exam: { $in: examIds } }).lean();
@@ -205,6 +205,8 @@ const getStudentRankings = async (classId, academicYearId, examType = null) => {
             return {
                 studentId: student._id,
                 studentName: student.name,
+                profilePhoto: student.profilePhoto || null,
+                rollNumber: student.rollNumber || null,
                 email: student.email,
                 totalObtained,
                 totalMax,

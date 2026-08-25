@@ -67,7 +67,7 @@ router.get('/all', auth, async (req, res) => {
             })
             .populate({
                 path: 'schedule.periods.teacher',
-                select: 'name'
+                select: 'name profilePhoto'
             });
 
         res.json(timetables);
@@ -89,7 +89,7 @@ router.get('/class/:classId', auth, async (req, res) => {
             })
             .populate({
                 path: 'schedule.periods.teacher',
-                select: 'name'
+                select: 'name profilePhoto'
             });
 
         if (!timetable) {
@@ -123,7 +123,7 @@ router.get('/my-timetable', auth, async (req, res) => {
                 })
                 .populate({
                     path: 'schedule.periods.teacher',
-                    select: 'name'
+                    select: 'name profilePhoto'
                 });
 
             if (timetable) {
@@ -140,7 +140,7 @@ router.get('/my-timetable', auth, async (req, res) => {
                 })
                 .populate({
                     path: 'schedule.periods.teacher',
-                    select: 'name'
+                    select: 'name profilePhoto'
                 });
 
             if (timetable) {

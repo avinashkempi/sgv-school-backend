@@ -265,7 +265,7 @@ router.post('/:id/content', auth, async (req, res) => {
         const savedContent = await newContent.save();
 
         // Populate author and subject for response
-        await savedContent.populate('author', 'name');
+        await savedContent.populate('author', 'name role profilePhoto');
         await savedContent.populate('subject', 'name');
 
         // Send push notification to students of this class
@@ -565,7 +565,7 @@ router.get('/:id/subjects/:subjectId/content', auth, async (req, res) => {
             class: req.params.id,
             subject: req.params.subjectId
         })
-            .populate('author', 'name')
+            .populate('author', 'name role profilePhoto')
             .sort({ createdAt: -1 });
         res.json(content);
     } catch (err) {

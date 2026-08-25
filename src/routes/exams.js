@@ -516,7 +516,7 @@ router.get('/performance/class/:classId', auth, async (req, res) => {
             .populate('subject', 'name')
             .lean();
         const students = await User.find({ currentClass: req.params.classId, role: 'student' })
-            .select('name rollNumber regNo satsNumber email phone gender')
+            .select('name rollNumber regNo satsNumber email phone gender profilePhoto')
             .lean();
         const examIds = exams.map(e => e._id);
         const allMarks = await Marks.find({ exam: { $in: examIds } }).lean();
@@ -802,6 +802,7 @@ router.get('/performance/class/:classId', auth, async (req, res) => {
                 studentId: student._id,
                 _id: student._id,
                 name: student.name,
+                profilePhoto: student.profilePhoto || null,
                 rollNumber: student.rollNumber || student.regNo || '',
                 regNo: student.regNo || '',
                 satsNumber: student.satsNumber || '',

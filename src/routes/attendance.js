@@ -517,7 +517,7 @@ router.get('/staff-list', [auth, yearContext], async (req, res) => {
         const academicYearId = req.academicYearContext;
 
         // Get all staff (teachers, staff, support_staff) — consistent with mark-staff endpoint
-        const teachers = await User.find({ role: { $in: ['teacher', 'staff', 'support_staff'] } }).select('name email phone role');
+        const teachers = await User.find({ role: { $in: ['teacher', 'staff', 'support_staff'] } }).select('name email phone role profilePhoto designation');
 
         // Get attendance for this date
         const attendance = await Attendance.find({

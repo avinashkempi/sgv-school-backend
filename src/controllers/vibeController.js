@@ -70,6 +70,8 @@ exports.listVibes = async (req, res) => {
 
     const enhancedVibes = vibes.map(vibe => ({
       ...vibe,
+      likesCount: Math.max(0, Number(vibe.likesCount) || 0),
+      commentsCount: Math.max(0, Number(vibe.commentsCount) || 0),
       isLiked: likedVibeIds.has(vibe._id.toString()),
       isBookmarked: bookmarkedVibeIds.has(vibe._id.toString())
     }));
@@ -127,6 +129,8 @@ exports.getVibe = async (req, res) => {
       success: true,
       data: {
         ...vibe,
+        likesCount: Math.max(0, Number(vibe.likesCount) || 0),
+        commentsCount: Math.max(0, Number(vibe.commentsCount) || 0),
         isLiked,
         isBookmarked
       }
@@ -347,10 +351,18 @@ exports.toggleLike = async (req, res) => {
       await VibeLike.deleteOne({ _id: existingLike._id });
       const updated = await Vibe.findByIdAndUpdate(
         vibeId,
-        { $inc: { likesCount: -1 } },
+        [
+          {
+            $set: {
+              likesCount: {
+                $max: [0, { $subtract: [{ $ifNull: ["$likesCount", 1] }, 1] }]
+              }
+            }
+          }
+        ],
         { new: true }
       );
-      updatedLikesCount = Math.max(updated ? updated.likesCount : 0, 0);
+      updatedLikesCount = updated ? Math.max(0, Number(updated.likesCount) || 0) : 0;
       isLiked = false;
     } else {
       try {
@@ -360,12 +372,12 @@ exports.toggleLike = async (req, res) => {
           { $inc: { likesCount: 1 } },
           { new: true }
         );
-        updatedLikesCount = updated ? updated.likesCount : 1;
+        updatedLikesCount = updated ? Math.max(0, Number(updated.likesCount) || 0) : 1;
         isLiked = true;
       } catch (err) {
         if (err.code === 11000) {
           isLiked = true;
-          updatedLikesCount = vibe.likesCount;
+          updatedLikesCount = Math.max(0, Number(vibe.likesCount) || 0);
         } else {
           throw err;
         }
@@ -501,12 +513,17 @@ exports.addVibeComment = async (req, res) => {
     });
 
     await comment.save();
-    await Vibe.findByIdAndUpdate(vibe._id, { $inc: { commentsCount: 1 } });
+    const updatedVibe = await Vibe.findByIdAndUpdate(
+      vibe._id,
+      { $inc: { commentsCount: 1 } },
+      { new: true }
+    );
     await comment.populate('user', 'name role profilePhoto currentClass designation');
 
     res.status(201).json({
       success: true,
       data: comment.toObject(),
+      commentsCount: updatedVibe ? Math.max(0, Number(updatedVibe.commentsCount) || 0) : 1,
       message: 'Comment added'
     });
   } catch (error) {
@@ -539,9 +556,25 @@ exports.deleteVibeComment = async (req, res) => {
 
     comment.isActive = false;
     await comment.save();
-    await Vibe.findByIdAndUpdate(comment.vibe, { $inc: { commentsCount: -1 } });
+    const updatedVibe = await Vibe.findByIdAndUpdate(
+      comment.vibe,
+      [
+        {
+          $set: {
+            commentsCount: {
+              $max: [0, { $subtract: [{ $ifNull: ["$commentsCount", 1] }, 1] }]
+            }
+          }
+        }
+      ],
+      { new: true }
+    );
 
-    res.status(200).json({ success: true, message: 'Comment deleted successfully' });
+    res.status(200).json({
+      success: true,
+      commentsCount: updatedVibe ? Math.max(0, Number(updatedVibe.commentsCount) || 0) : 0,
+      message: 'Comment deleted successfully'
+    });
   } catch (error) {
     logger.error('Error deleting comment:', error);
     res.status(500).json({ success: false, message: 'Server error while deleting comment' });
@@ -627,9 +660,15 @@ exports.getMyVibes = async (req, res) => {
       if (counts[c._id] !== undefined) counts[c._id] = c.count;
     });
 
+    const enhancedVibes = vibes.map(vibe => ({
+      ...vibe,
+      likesCount: Math.max(0, Number(vibe.likesCount) || 0),
+      commentsCount: Math.max(0, Number(vibe.commentsCount) || 0)
+    }));
+
     res.status(200).json({
       success: true,
-      data: vibes,
+      data: enhancedVibes,
       counts,
       pagination: {
         page,
@@ -667,6 +706,8 @@ exports.getMySavedVibes = async (req, res) => {
 
     const vibes = bookmarks.map(b => b.vibe).filter(Boolean).map(v => ({
       ...v,
+      likesCount: Math.max(0, Number(v.likesCount) || 0),
+      commentsCount: Math.max(0, Number(v.commentsCount) || 0),
       isBookmarked: true
     }));
 
@@ -1036,9 +1077,15 @@ exports.getSpotlightVibe = async (req, res) => {
         .lean();
     }
 
+    const enhancedSpotlight = spotlight ? {
+      ...spotlight,
+      likesCount: Math.max(0, Number(spotlight.likesCount) || 0),
+      commentsCount: Math.max(0, Number(spotlight.commentsCount) || 0)
+    } : null;
+
     res.status(200).json({
       success: true,
-      data: spotlight || null
+      data: enhancedSpotlight
     });
   } catch (error) {
     logger.error('Error fetching spotlight vibe:', error);
@@ -1078,9 +1125,15 @@ exports.getUserVibes = async (req, res) => {
       Vibe.countDocuments(query)
     ]);
 
+    const enhancedVibes = vibes.map(v => ({
+      ...v,
+      likesCount: Math.max(0, Number(v.likesCount) || 0),
+      commentsCount: Math.max(0, Number(v.commentsCount) || 0)
+    }));
+
     res.status(200).json({
       success: true,
-      data: vibes,
+      data: enhancedVibes,
       pagination: {
         page,
         limit,
