@@ -24,7 +24,8 @@ const {
   toggleSpotlightVibe,
   getVibeHighlights,
   getSpotlightVibe,
-  getUserVibes
+  getUserVibes,
+  recordVibeViews
 } = require('../controllers/vibeController');
 
 const router = express.Router();
@@ -32,6 +33,10 @@ const router = express.Router();
 // ── Highlights & Spotlight (Public / Authenticated) ──
 router.get('/highlights', optionalAuthenticateToken, getVibeHighlights);
 router.get('/spotlight', optionalAuthenticateToken, getSpotlightVibe);
+
+// ── Story Views Recording ──
+router.post('/views', authenticateToken, recordVibeViews);
+router.post('/:id/view', authenticateToken, recordVibeViews);
 
 // ── Admin Moderation Endpoints ──
 router.get('/admin/pending', authenticateToken, requireAdmin, listPendingVibes);

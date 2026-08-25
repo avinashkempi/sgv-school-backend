@@ -2,6 +2,7 @@ const Vibe = require('../models/Vibe');
 const VibeLike = require('../models/VibeLike');
 const VibeComment = require('../models/VibeComment');
 const VibeBookmark = require('../models/VibeBookmark');
+const VibeView = require('../models/VibeView');
 const logger = require('../utils/logger');
 
 // NOTE: Push notifications for Vibes are disabled for testing as requested.
@@ -827,26 +828,31 @@ exports.getVibeHighlights = async (req, res) => {
     ]);
 
     // Enhance with user interaction flags if logged in
+    // Enhance with user interaction flags and view status if logged in
     const currentUserId = req.user?.userId;
     let likedVibeIds = new Set();
     let bookmarkedVibeIds = new Set();
+    let viewedVibeIds = new Set();
 
     const allFetchedVibes = [...officialVibes, ...achievementVibes, ...recentCampusVibes];
     if (currentUserId && allFetchedVibes.length > 0) {
       const vibeIds = allFetchedVibes.map(v => v._id);
-      const [userLikes, userBookmarks] = await Promise.all([
+      const [userLikes, userBookmarks, userViews] = await Promise.all([
         VibeLike.find({ vibe: { $in: vibeIds }, user: currentUserId }).select('vibe').lean(),
-        VibeBookmark.find({ vibe: { $in: vibeIds }, user: currentUserId }).select('vibe').lean()
+        VibeBookmark.find({ vibe: { $in: vibeIds }, user: currentUserId }).select('vibe').lean(),
+        VibeView.find({ vibe: { $in: vibeIds }, user: currentUserId }).select('vibe').lean()
       ]);
 
       likedVibeIds = new Set(userLikes.map(l => l.vibe.toString()));
       bookmarkedVibeIds = new Set(userBookmarks.map(b => b.vibe.toString()));
+      viewedVibeIds = new Set(userViews.map(v => v.vibe.toString()));
     }
 
     const enhanceVibe = (vibe) => ({
       ...vibe,
       isLiked: likedVibeIds.has(vibe._id.toString()),
-      isBookmarked: bookmarkedVibeIds.has(vibe._id.toString())
+      isBookmarked: bookmarkedVibeIds.has(vibe._id.toString()),
+      isViewed: viewedVibeIds.has(vibe._id.toString())
     });
 
     const enhancedOfficial = officialVibes.map(enhanceVibe);
@@ -865,12 +871,18 @@ exports.getVibeHighlights = async (req, res) => {
           captionPreview: vibe.caption || '',
           category: vibe.category,
           storyCount: 1,
+          unviewedCount: vibe.isViewed ? 0 : 1,
+          isViewed: !!vibe.isViewed,
           createdAt: vibe.createdAt,
           vibes: [vibe]
         });
       } else {
         const item = authorStoriesMap.get(authorId);
         item.storyCount += 1;
+        if (!vibe.isViewed) {
+          item.unviewedCount += 1;
+          item.isViewed = false;
+        }
         item.vibes.push(vibe);
       }
     }
@@ -889,6 +901,47 @@ exports.getVibeHighlights = async (req, res) => {
   } catch (error) {
     logger.error('Error fetching vibe highlights:', error);
     res.status(500).json({ success: false, message: 'Server error while fetching highlights' });
+  }
+};
+
+/**
+ * POST /api/vibes/views or POST /api/vibes/:id/view
+ * Record that user viewed one or more vibes in story format.
+ */
+exports.recordVibeViews = async (req, res) => {
+  try {
+    const currentUserId = req.user?.userId;
+    if (!currentUserId) {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
+
+    let vibeIds = [];
+    if (req.params.id) {
+      vibeIds = [req.params.id];
+    } else if (Array.isArray(req.body.vibeIds)) {
+      vibeIds = req.body.vibeIds;
+    } else if (req.body.vibeId) {
+      vibeIds = [req.body.vibeId];
+    }
+
+    if (!vibeIds || vibeIds.length === 0) {
+      return res.status(400).json({ success: false, message: 'vibeId or vibeIds array is required' });
+    }
+
+    const operations = vibeIds.map(vibeId => ({
+      updateOne: {
+        filter: { user: currentUserId, vibe: vibeId },
+        update: { $setOnInsert: { user: currentUserId, vibe: vibeId, viewedAt: new Date() } },
+        upsert: true
+      }
+    }));
+
+    await VibeView.bulkWrite(operations, { ordered: false });
+
+    res.status(200).json({ success: true, message: 'Views recorded' });
+  } catch (error) {
+    logger.error('Error recording vibe views:', error);
+    res.status(500).json({ success: false, message: 'Server error while recording views' });
   }
 };
 
