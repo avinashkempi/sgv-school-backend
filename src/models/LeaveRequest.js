@@ -8,7 +8,7 @@ const leaveRequestSchema = new mongoose.Schema({
     },
     applicantRole: {
         type: String,
-        enum: ['student', 'teacher', 'admin', 'super admin'],
+        enum: ['student', 'teacher', 'staff', 'admin', 'super admin', 'support_staff', 'alumni'],
         required: true
     },
     class: {

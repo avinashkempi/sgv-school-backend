@@ -1,9 +1,12 @@
+const mongoose = require('mongoose');
 const Vibe = require('../models/Vibe');
 const VibeLike = require('../models/VibeLike');
 const VibeComment = require('../models/VibeComment');
 const VibeBookmark = require('../models/VibeBookmark');
 const VibeView = require('../models/VibeView');
 const logger = require('../utils/logger');
+
+const isValidObjectId = (id) => Boolean(id && id !== 'undefined' && id !== 'null' && mongoose.Types.ObjectId.isValid(id));
 
 // NOTE: Push notifications for Vibes are disabled for testing as requested.
 
@@ -94,6 +97,10 @@ exports.listVibes = async (req, res) => {
  */
 exports.getVibe = async (req, res) => {
   try {
+    if (!isValidObjectId(req.params.id)) {
+      return res.status(400).json({ success: false, message: 'Invalid vibe ID' });
+    }
+
     const vibe = await Vibe.findOne({ _id: req.params.id, isActive: true })
       .populate('author', 'name role currentClass designation')
       .populate('reviewedBy', 'name role')
@@ -239,6 +246,10 @@ exports.createVibe = async (req, res) => {
  */
 exports.updateVibe = async (req, res) => {
   try {
+    if (!isValidObjectId(req.params.id)) {
+      return res.status(400).json({ success: false, message: 'Invalid vibe ID' });
+    }
+
     const { caption, category, tags, location } = req.body;
     const vibe = await Vibe.findOne({ _id: req.params.id, isActive: true });
 
@@ -282,6 +293,10 @@ exports.updateVibe = async (req, res) => {
  */
 exports.deleteVibe = async (req, res) => {
   try {
+    if (!isValidObjectId(req.params.id)) {
+      return res.status(400).json({ success: false, message: 'Invalid vibe ID' });
+    }
+
     const vibe = await Vibe.findOne({ _id: req.params.id, isActive: true });
 
     if (!vibe) {
@@ -312,6 +327,10 @@ exports.deleteVibe = async (req, res) => {
 exports.toggleLike = async (req, res) => {
   try {
     const vibeId = req.params.id;
+    if (!isValidObjectId(vibeId)) {
+      return res.status(400).json({ success: false, message: 'Invalid vibe ID' });
+    }
+
     const userId = req.user.userId;
 
     const vibe = await Vibe.findOne({ _id: vibeId, isActive: true, status: 'approved' });
@@ -372,6 +391,10 @@ exports.toggleLike = async (req, res) => {
  */
 exports.getVibeLikes = async (req, res) => {
   try {
+    if (!isValidObjectId(req.params.id)) {
+      return res.status(400).json({ success: false, message: 'Invalid vibe ID' });
+    }
+
     const page = Math.max(parseInt(req.query.page) || 1, 1);
     const limit = Math.min(Math.max(parseInt(req.query.limit) || 20, 1), 50);
     const skip = (page - 1) * limit;
@@ -410,6 +433,10 @@ exports.getVibeLikes = async (req, res) => {
  */
 exports.getVibeComments = async (req, res) => {
   try {
+    if (!isValidObjectId(req.params.id)) {
+      return res.status(400).json({ success: false, message: 'Invalid vibe ID' });
+    }
+
     const page = Math.max(parseInt(req.query.page) || 1, 1);
     const limit = Math.min(Math.max(parseInt(req.query.limit) || 25, 1), 100);
     const skip = (page - 1) * limit;
@@ -446,6 +473,10 @@ exports.getVibeComments = async (req, res) => {
  */
 exports.addVibeComment = async (req, res) => {
   try {
+    if (!isValidObjectId(req.params.id)) {
+      return res.status(400).json({ success: false, message: 'Invalid vibe ID' });
+    }
+
     const { text, postAs = 'self', parentComment } = req.body;
     const user = req.user;
 
@@ -490,6 +521,10 @@ exports.addVibeComment = async (req, res) => {
  */
 exports.deleteVibeComment = async (req, res) => {
   try {
+    if (!isValidObjectId(req.params.commentId)) {
+      return res.status(400).json({ success: false, message: 'Invalid comment ID' });
+    }
+
     const comment = await VibeComment.findOne({ _id: req.params.commentId, isActive: true });
     if (!comment) {
       return res.status(404).json({ success: false, message: 'Comment not found' });
@@ -520,6 +555,10 @@ exports.deleteVibeComment = async (req, res) => {
 exports.toggleBookmark = async (req, res) => {
   try {
     const vibeId = req.params.id;
+    if (!isValidObjectId(vibeId)) {
+      return res.status(400).json({ success: false, message: 'Invalid vibe ID' });
+    }
+
     const userId = req.user.userId;
 
     const existingBookmark = await VibeBookmark.findOne({ vibe: vibeId, user: userId });
@@ -699,6 +738,10 @@ exports.reviewVibe = async (req, res) => {
     const { action, reason } = req.body;
     const vibeId = req.params.id;
 
+    if (!isValidObjectId(vibeId)) {
+      return res.status(400).json({ success: false, message: 'Invalid vibe ID' });
+    }
+
     if (!['approve', 'reject'].includes(action)) {
       return res.status(400).json({ success: false, message: 'Action must be "approve" or "reject"' });
     }
@@ -739,6 +782,10 @@ exports.reviewVibe = async (req, res) => {
  */
 exports.togglePinVibe = async (req, res) => {
   try {
+    if (!isValidObjectId(req.params.id)) {
+      return res.status(400).json({ success: false, message: 'Invalid vibe ID' });
+    }
+
     const vibe = await Vibe.findOne({ _id: req.params.id, isActive: true });
     if (!vibe) {
       return res.status(404).json({ success: false, message: 'Vibe not found' });
@@ -764,6 +811,10 @@ exports.togglePinVibe = async (req, res) => {
  */
 exports.toggleSpotlightVibe = async (req, res) => {
   try {
+    if (!isValidObjectId(req.params.id)) {
+      return res.status(400).json({ success: false, message: 'Invalid vibe ID' });
+    }
+
     const vibe = await Vibe.findOne({ _id: req.params.id, isActive: true });
     if (!vibe) {
       return res.status(404).json({ success: false, message: 'Vibe not found' });
@@ -924,8 +975,10 @@ exports.recordVibeViews = async (req, res) => {
       vibeIds = [req.body.vibeId];
     }
 
+    vibeIds = vibeIds.filter(id => isValidObjectId(id));
+
     if (!vibeIds || vibeIds.length === 0) {
-      return res.status(400).json({ success: false, message: 'vibeId or vibeIds array is required' });
+      return res.status(400).json({ success: false, message: 'Valid vibeId or vibeIds array is required' });
     }
 
     const operations = vibeIds.map(vibeId => ({
@@ -1000,6 +1053,11 @@ exports.getSpotlightVibe = async (req, res) => {
 exports.getUserVibes = async (req, res) => {
   try {
     const { userId } = req.params;
+
+    if (!isValidObjectId(userId)) {
+      return res.status(400).json({ success: false, message: 'Invalid or missing user ID' });
+    }
+
     const page = Math.max(parseInt(req.query.page) || 1, 1);
     const limit = Math.min(Math.max(parseInt(req.query.limit) || 20, 1), 50);
     const skip = (page - 1) * limit;
