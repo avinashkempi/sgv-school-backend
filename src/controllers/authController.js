@@ -66,6 +66,8 @@ const login = async (req, res) => {
         phone: user.phone,
         email: user.email,
         role: user.role,
+        profilePhoto: user.profilePhoto,
+        profilePhotoPublicId: user.profilePhotoPublicId,
         currentClass: user.currentClass,
         academicYear: user.academicYear,
         guardianName: user.guardianName,
@@ -118,6 +120,8 @@ const getMe = async (req, res) => {
         phone: user.phone,
         email: user.email,
         role: user.role,
+        profilePhoto: user.profilePhoto,
+        profilePhotoPublicId: user.profilePhotoPublicId,
         currentClass: user.currentClass,
         academicYear: user.academicYear,
         guardianName: user.guardianName,
@@ -212,8 +216,71 @@ const changePassword = async (req, res) => {
   }
 };
 
+const updateProfilePhoto = async (req, res) => {
+  try {
+    const { profilePhoto, profilePhotoPublicId } = req.body;
+
+    const user = await User.findById(req.user.userId)
+      .populate('currentClass', 'name branch');
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    user.profilePhoto = profilePhoto || null;
+    user.profilePhotoPublicId = profilePhotoPublicId || null;
+    await user.save();
+
+    // Invalidate user cache so changes take effect immediately
+    invalidateUserCache(user._id);
+
+    const userObj = {
+      id: user._id,
+      name: user.name,
+      phone: user.phone,
+      email: user.email,
+      role: user.role,
+      profilePhoto: user.profilePhoto,
+      profilePhotoPublicId: user.profilePhotoPublicId,
+      currentClass: user.currentClass,
+      academicYear: user.academicYear,
+      guardianName: user.guardianName,
+      guardianPhone: user.guardianPhone,
+      admissionDate: user.admissionDate,
+      joiningDate: user.joiningDate,
+      designation: user.designation,
+      gender: user.gender,
+      dateOfBirth: user.dateOfBirth,
+      address: user.address,
+      phone2: user.phone2,
+      bloodGroup: user.bloodGroup,
+      regNo: user.regNo,
+      satsNumber: user.satsNumber,
+      penNumber: user.penNumber,
+      apaarId: user.apaarId,
+      mustChangePassword: user.mustChangePassword || false
+    };
+
+    res.json({
+      success: true,
+      message: profilePhoto ? 'Profile photo updated successfully' : 'Profile photo removed',
+      user: userObj
+    });
+  } catch (error) {
+    console.error('Update profile photo error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error updating profile photo'
+    });
+  }
+};
+
 module.exports = {
   login,
   getMe,
-  changePassword
+  changePassword,
+  updateProfilePhoto
 };

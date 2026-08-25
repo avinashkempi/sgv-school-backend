@@ -50,6 +50,16 @@ const userSchema = new mongoose.Schema({
     type: Boolean,
     default: true
   },
+  profilePhoto: {
+    type: String,
+    default: null,
+    trim: true
+  },
+  profilePhotoPublicId: {
+    type: String,
+    default: null,
+    trim: true
+  },
 
   // Student specific fields
   admissionDate: {

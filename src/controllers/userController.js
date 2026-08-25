@@ -226,6 +226,8 @@ const createUser = async (req, res) => {
       joiningDate: sanitizeOptional(joiningDate),
       designation: sanitizeOptional(designation),
       subjects,
+      profilePhoto: sanitizeOptional(req.body.profilePhoto),
+      profilePhotoPublicId: sanitizeOptional(req.body.profilePhotoPublicId),
       mustChangePassword: true
     });
     await user.save();
@@ -348,6 +350,10 @@ const updateUser = async (req, res) => {
     if (joiningDate !== undefined) user.joiningDate = sanitizeOptional(joiningDate);
     if (designation !== undefined) user.designation = sanitizeOptional(designation);
     if (subjects !== undefined) user.subjects = subjects;
+
+    // Profile photo
+    if (req.body.profilePhoto !== undefined) user.profilePhoto = sanitizeOptional(req.body.profilePhoto) || null;
+    if (req.body.profilePhotoPublicId !== undefined) user.profilePhotoPublicId = sanitizeOptional(req.body.profilePhotoPublicId) || null;
 
     await user.save();
 
