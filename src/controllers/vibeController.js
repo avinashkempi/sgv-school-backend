@@ -160,7 +160,7 @@ exports.getVibe = async (req, res) => {
  */
 exports.createVibe = async (req, res) => {
   try {
-    const { caption, category = 'general', images, postAs = 'self', tags = [], location } = req.body;
+    const { caption, category = 'general', images, postAs = 'self', tags = [], location, isSpotlight = false } = req.body;
     const user = req.user;
 
     if (!images || !Array.isArray(images) || images.length === 0) {
@@ -241,6 +241,7 @@ exports.createVibe = async (req, res) => {
       status: initialStatus,
       tags: extractedTags,
       location: location ? location.trim() : '',
+      isSpotlight: isAdmin ? Boolean(isSpotlight) : false,
       reviewedBy: isAdmin ? user.userId : undefined,
       reviewedAt: isAdmin ? new Date() : undefined
     });
@@ -277,7 +278,7 @@ exports.updateVibe = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid vibe ID' });
     }
 
-    const { caption, category, tags, location } = req.body;
+    const { caption, category, tags, location, isSpotlight } = req.body;
     const vibe = await Vibe.findOne({ _id: req.params.id, isActive: true });
 
     if (!vibe) {
@@ -299,6 +300,9 @@ exports.updateVibe = async (req, res) => {
       vibe.tags = tags.map(t => t.toLowerCase().replace('#', ''));
     }
     if (location !== undefined) vibe.location = location.trim();
+    if (isAdmin && isSpotlight !== undefined) {
+      vibe.isSpotlight = Boolean(isSpotlight);
+    }
 
     await vibe.save();
     await vibe.populate({
@@ -1098,49 +1102,15 @@ exports.getSpotlightVibe = async (req, res) => {
       populate: { path: 'currentClass', select: 'label name section' }
     };
 
-    let spotlight = await Vibe.findOne({
+    // Strictly fetch vibe explicitly chosen by Admin for spotlight (no automatic fallback leaks)
+    const spotlight = await Vibe.findOne({
       status: 'approved',
       isActive: true,
       isSpotlight: true
     })
+      .sort({ updatedAt: -1, createdAt: -1 })
       .populate(populateAuthorObj)
       .lean();
-
-    // Fallback: If no vibe is explicitly marked spotlight, pick top pinned vibe
-    if (!spotlight) {
-      spotlight = await Vibe.findOne({
-        status: 'approved',
-        isActive: true,
-        isPinned: true
-      })
-        .sort({ createdAt: -1 })
-        .populate(populateAuthorObj)
-        .lean();
-    }
-
-    // Secondary fallback: Most recent official or achievement vibe
-    if (!spotlight) {
-      spotlight = await Vibe.findOne({
-        status: 'approved',
-        isActive: true,
-        $or: [{ postAs: 'school' }, { category: 'achievement' }]
-      })
-        .sort({ createdAt: -1 })
-        .populate(populateAuthorObj)
-        .lean();
-    }
-
-    // Tertiary fallback: Most recent approved vibe with media
-    if (!spotlight) {
-      spotlight = await Vibe.findOne({
-        status: 'approved',
-        isActive: true,
-        'images.0': { $exists: true }
-      })
-        .sort({ createdAt: -1 })
-        .populate(populateAuthorObj)
-        .lean();
-    }
 
     let enhancedSpotlight = null;
     if (spotlight) {
