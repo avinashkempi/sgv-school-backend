@@ -9,6 +9,7 @@ const Class = require('../models/Class');
 const Subject = require('../models/Subject');
 const LeaveRequest = require('../models/LeaveRequest');
 const Event = require('../models/Event');
+const AcademicYear = require('../models/AcademicYear');
 const { invalidateDashboardCaches } = require('../controllers/dashboardController');
 const {
     getISTDateString,
@@ -16,6 +17,47 @@ const {
     validateAttendanceDate,
     isISTSunday
 } = require('../utils/dateUtils');
+
+const getHolidaysForContext = async (academicYearId, startDate, endDate) => {
+    try {
+        const query = { isHoliday: true };
+        if (startDate || endDate) {
+            query.date = {};
+            if (startDate) {
+                const { startOfDay } = getISTDayBounds(startDate);
+                query.date.$gte = startOfDay;
+            }
+            if (endDate) {
+                const { endOfDay } = getISTDayBounds(endDate);
+                query.date.$lte = endOfDay;
+            }
+        } else if (academicYearId) {
+            const yearDoc = await AcademicYear.findById(academicYearId).select('startDate endDate').lean();
+            if (yearDoc?.startDate && yearDoc?.endDate) {
+                query.date = { $gte: yearDoc.startDate, $lte: yearDoc.endDate };
+            }
+        }
+        const holidays = await Event.find(query).sort({ date: 1 }).select('title date description isHoliday isSchoolEvent').lean();
+        return holidays.map(h => {
+            let desc = h.description || '';
+            if (!desc || desc.toLowerCase().includes('attendance dashboard') || desc.toLowerCase().includes('manually marked')) {
+                desc = 'Official school holiday declared by administration.';
+            }
+            return {
+                _id: h._id,
+                title: h.title,
+                date: h.date,
+                dateStr: getISTDateString(h.date),
+                description: desc,
+                isHoliday: true,
+                isSchoolEvent: Boolean(h.isSchoolEvent)
+            };
+        });
+    } catch (e) {
+        console.error('getHolidaysForContext error:', e);
+        return [];
+    }
+};
 
 const isAdminRole = (role) => role === 'admin' || role === 'super admin';
 const hasObjectIdMatch = (ids = [], userId) => ids.some((id) => id && id.toString() === userId);
@@ -314,12 +356,16 @@ router.get('/my-attendance', [auth, yearContext], async (req, res) => {
             percentage: ((monthlyStats[key].present / monthlyStats[key].total) * 100).toFixed(1)
         }));
 
+        // Fetch holidays for the active context
+        const holidays = await getHolidaysForContext(req.academicYearContext, startDate, endDate);
+
         // Paginate the attendance list
         const totalPages = Math.ceil(totalRecords / limit);
         const attendance = allAttendance.slice((page - 1) * limit, page * limit);
 
         res.json({
             attendance,
+            holidays,
             summary: {
                 total: totalRecords,
                 present: presentCount,
@@ -327,6 +373,7 @@ router.get('/my-attendance', [auth, yearContext], async (req, res) => {
                 late: allAttendance.filter(a => a.status === 'late').length,
                 excused: allAttendance.filter(a => a.status === 'excused').length,
                 halfDay: allAttendance.filter(a => a.status === 'half-day').length,
+                holidaysCount: holidays.length,
                 percentage: parseFloat(percentage),
                 monthlyBreakdown
             },
@@ -354,6 +401,9 @@ router.get('/student/:studentId/summary', [auth, yearContext], async (req, res) 
         if (!(await canAccessStudentAttendance(req.user, studentId))) {
             return res.status(403).json({ message: 'Not authorized to view this student attendance summary' });
         }
+
+        // Fetch declared holidays for academic year
+        const holidays = await getHolidaysForContext(academicYearId);
 
         // 1. Overall Stats
         const allAttendance = await Attendance.find({
@@ -423,10 +473,13 @@ router.get('/student/:studentId/summary', [auth, yearContext], async (req, res) 
             overall: {
                 total: totalClasses,
                 present: presentClasses,
+                absent: totalClasses - presentClasses,
+                holidaysCount: holidays.length,
                 percentage: overallPercentage
             },
             subjectWise,
-            monthlyBreakdown
+            monthlyBreakdown,
+            holidays
         });
 
     } catch (err) {
@@ -474,12 +527,16 @@ router.get('/student/:studentId', [auth, yearContext], async (req, res) => {
         const presentCount = allAttendance.filter(a => PRESENT_STATUSES.includes(a.status)).length;
         const percentage = totalRecords > 0 ? ((presentCount / totalRecords) * 100).toFixed(2) : 0;
 
+        // Fetch holidays for the context
+        const holidays = await getHolidaysForContext(academicYearId, startDate, endDate);
+
         // Paginate
         const totalPages = Math.ceil(totalRecords / limit);
         const attendance = allAttendance.slice((page - 1) * limit, page * limit);
 
         res.json({
             attendance,
+            holidays,
             summary: {
                 total: totalRecords,
                 present: presentCount,
@@ -487,6 +544,7 @@ router.get('/student/:studentId', [auth, yearContext], async (req, res) => {
                 late: allAttendance.filter(a => a.status === 'late').length,
                 excused: allAttendance.filter(a => a.status === 'excused').length,
                 halfDay: allAttendance.filter(a => a.status === 'half-day').length,
+                holidaysCount: holidays.length,
                 percentage: parseFloat(percentage)
             },
             pagination: {

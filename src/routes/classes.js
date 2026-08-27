@@ -234,10 +234,10 @@ router.delete('/:id', [auth, checkRole(['super admin'])], async (req, res) => {
 
 
 // @route   POST /api/classes/:id/content
-// @desc    Create content for a class
-// @access  Class Teacher or Admin
+// @desc    Create content for a class (Class Teacher, Subject Teacher, Admin, Super Admin)
+// @access  Private
 router.post('/:id/content', auth, async (req, res) => {
-    const { title, description, type, subject, link } = req.body;
+    const { title, description, type, subject, link, attachments } = req.body;
     const classId = req.params.id;
 
     try {
@@ -248,27 +248,46 @@ router.post('/:id/content', auth, async (req, res) => {
         const isAdmin = userRole === 'admin' || userRole === 'super admin';
         const isClassTeacher = classData.classTeacher && classData.classTeacher.toString() === req.user.userId;
 
-        if (!isAdmin && !isClassTeacher) {
-            return res.status(403).json({ msg: 'Not authorized' });
+        let isSubjectTeacher = false;
+        const targetSubjectId = (subject && subject !== '' && subject !== 'general') ? subject : null;
+
+        if (targetSubjectId) {
+            isSubjectTeacher = await Subject.exists({ _id: targetSubjectId, class: classId, teachers: req.user.userId });
+        } else if (userRole === 'teacher') {
+            isSubjectTeacher = await Subject.exists({ class: classId, teachers: req.user.userId });
+        }
+
+        if (!isAdmin && !isClassTeacher && !isSubjectTeacher) {
+            return res.status(403).json({ msg: 'Not authorized to post in this class or subject' });
+        }
+
+        // Normalize attachments (array of objects or URLs)
+        let normalizedAttachments = [];
+        if (Array.isArray(attachments) && attachments.length > 0) {
+            normalizedAttachments = attachments;
+        } else if (link && typeof link === 'string' && link.trim()) {
+            normalizedAttachments = [{ url: link.trim(), fileType: 'link', name: link.trim() }];
         }
 
         const newContent = new ClassContent({
-            title,
-            description,
-            type,
-            subject,
+            title: title ? title.trim() : '',
+            description: description ? description.trim() : '',
+            type: type || 'note',
+            subject: targetSubjectId,
             class: classId,
             author: req.user.userId,
-            attachments: link ? [link] : []
+            attachments: normalizedAttachments
         });
 
         const savedContent = await newContent.save();
 
         // Populate author and subject for response
-        await savedContent.populate('author', 'name role profilePhoto');
-        await savedContent.populate('subject', 'name');
+        await savedContent.populate('author', 'name role profilePhoto designation');
+        if (targetSubjectId) {
+            await savedContent.populate('subject', 'name code');
+        }
 
-        // Send push notification to students of this class
+        // Send push notification to active enrolled students of this class
         try {
             _notificationService.sendClassContentNotification(classId, savedContent);
         } catch (notifErr) {
@@ -281,6 +300,7 @@ router.post('/:id/content', auth, async (req, res) => {
         res.status(500).send('Server Error');
     }
 });
+
 
 
 
@@ -556,6 +576,92 @@ router.delete('/:id/subjects/:subjectId', auth, async (req, res) => {
     }
 });
 
+// @route   GET /api/classes/:id/content
+// @desc    Get all content for a class with optional filtering by type, subject, and search
+// @access  Private (Admin, Super Admin, Class/Subject Teacher, Enrolled Student)
+router.get('/:id/content', auth, async (req, res) => {
+    try {
+        const classId = req.params.id;
+        const userRole = req.user.role;
+
+        // Security check: If student, ensure they belong to this class
+        if (userRole === 'student') {
+            const user = await User.findById(req.user.userId).select('currentClass');
+            const studentClassId = user?.currentClass?.toString();
+            if (!studentClassId || studentClassId !== classId) {
+                return res.status(403).json({ msg: 'Access denied: You are not enrolled in this class' });
+            }
+        }
+
+        const { type, subjectId, search } = req.query;
+        const query = { class: classId };
+
+        if (type && type !== 'all') {
+            query.type = type;
+        }
+
+        if (subjectId && subjectId !== 'all') {
+            if (subjectId === 'general') {
+                query.subject = { $in: [null, undefined] };
+            } else {
+                query.subject = subjectId;
+            }
+        }
+
+        if (search && search.trim()) {
+            const searchRegex = new RegExp(search.trim(), 'i');
+            query.$or = [
+                { title: searchRegex },
+                { description: searchRegex }
+            ];
+        }
+
+        const content = await ClassContent.find(query)
+            .populate('author', 'name role profilePhoto designation')
+            .populate('subject', 'name code')
+            .sort({ createdAt: -1 });
+
+        res.json(content);
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).send('Server Error');
+    }
+});
+
+// @route   DELETE /api/classes/:id/content/:contentId
+// @desc    Delete a class content item
+// @access  Private (Admin, Super Admin, Class Teacher, or Author)
+router.delete('/:id/content/:contentId', auth, async (req, res) => {
+    try {
+        const { id: classId, contentId } = req.params;
+        const classData = await Class.findById(classId);
+        if (!classData) return res.status(404).json({ msg: 'Class not found' });
+
+        const contentItem = await ClassContent.findById(contentId);
+        if (!contentItem) return res.status(404).json({ msg: 'Content not found' });
+
+        // Ensure content belongs to this class
+        if (contentItem.class.toString() !== classId) {
+            return res.status(400).json({ msg: 'Content does not belong to this class' });
+        }
+
+        const userRole = req.user.role;
+        const isAdmin = userRole === 'admin' || userRole === 'super admin';
+        const isClassTeacher = classData.classTeacher && classData.classTeacher.toString() === req.user.userId;
+        const isAuthor = contentItem.author && contentItem.author.toString() === req.user.userId;
+
+        if (!isAdmin && !isClassTeacher && !isAuthor) {
+            return res.status(403).json({ msg: 'Not authorized to delete this content' });
+        }
+
+        await ClassContent.findByIdAndDelete(contentId);
+        res.json({ success: true, message: 'Content deleted successfully' });
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).send('Server Error');
+    }
+});
+
 // @route   GET /api/classes/:id/subjects/:subjectId/content
 // @desc    Get content for a specific subject
 // @access  Private
@@ -565,7 +671,8 @@ router.get('/:id/subjects/:subjectId/content', auth, async (req, res) => {
             class: req.params.id,
             subject: req.params.subjectId
         })
-            .populate('author', 'name role profilePhoto')
+            .populate('author', 'name role profilePhoto designation')
+            .populate('subject', 'name code')
             .sort({ createdAt: -1 });
         res.json(content);
     } catch (err) {
@@ -575,3 +682,4 @@ router.get('/:id/subjects/:subjectId/content', auth, async (req, res) => {
 });
 
 module.exports = router;
+

@@ -203,17 +203,19 @@ async function sendClassContentNotification(classId, content) {
             return { success: true, message: 'No tokens found for students' };
         }
 
-        const contentType = content.type || 'Content';
+        const typeLabel = content.type === 'homework' ? 'Homework' : content.type === 'news' ? 'Notice' : 'Study Note';
+        const subjTag = content.subject?.name ? ` [${content.subject.name}]` : '';
         const notification = {
-            title: `📚 New ${contentType}: ${content.title}`,
-            body: content.description ? content.description.substring(0, 100) : 'New content has been posted. Open the app to view it.',
+            title: `📚${subjTag} New ${typeLabel}: ${content.title}`,
+            body: content.description ? content.description.substring(0, 120) : 'New class material has been posted. Open the app to view it.',
         };
 
         const data = {
             type: 'class_content',
             contentId: content._id.toString(),
-            contentType: content.type,
-            classId: classId.toString()
+            contentType: content.type || 'note',
+            classId: classId.toString(),
+            subjectId: content.subject?._id ? content.subject._id.toString() : (content.subject ? content.subject.toString() : '')
         };
 
         return await sendBatchNotifications(tokens, notification, data);

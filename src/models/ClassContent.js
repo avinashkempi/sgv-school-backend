@@ -30,14 +30,16 @@ const classContentSchema = new mongoose.Schema({
         ref: 'User',
         required: true
     },
-    attachments: [{
-        type: String, // URLs to files/images
-        trim: true
-    }],
+    attachments: [mongoose.Schema.Types.Mixed],
     createdAt: {
         type: Date,
         default: Date.now
     }
 });
 
+classContentSchema.index({ class: 1, createdAt: -1 });
+classContentSchema.index({ class: 1, subject: 1, createdAt: -1 });
+classContentSchema.index({ class: 1, type: 1, createdAt: -1 });
+
 module.exports = mongoose.model('ClassContent', classContentSchema);
+
