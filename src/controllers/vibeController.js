@@ -28,7 +28,7 @@ exports.listVibes = async (req, res) => {
 
     if (category && category !== 'all') {
       if (category === 'official') {
-        query.postAs = 'school';
+        query.$or = [{ postAs: 'school' }, { category: 'official' }];
       } else if (['general', 'achievement', 'life', 'sports', 'arts'].includes(category)) {
         query.category = category;
       }
@@ -186,7 +186,7 @@ exports.createVibe = async (req, res) => {
       // Auto-generate Cloudinary poster thumbnail if omitted
       if (!thumbUrl && videoUrl && videoUrl.includes('cloudinary.com')) {
         thumbUrl = videoUrl
-          .replace(/\/video\/upload\/(?:[^\/]+\/)?/, '/video/upload/so_0,w_720,q_auto,f_auto/')
+          .replace(/\/video\/upload\/(?:[^/]+\/)?/, '/video/upload/so_0,w_720,q_auto,f_auto/')
           .replace(/\.(mp4|mov|webm|m4v|avi|3gp|mkv|flv|wmv|qt)(\?.*)?$/i, '.jpg');
       }
 
@@ -231,9 +231,13 @@ exports.createVibe = async (req, res) => {
       }
     }
 
+    const finalCategory = (postIdentity === 'school' || category === 'official')
+      ? 'official'
+      : (['general', 'achievement', 'life', 'sports', 'arts'].includes(category) ? category : 'general');
+
     const vibe = new Vibe({
       caption: caption ? caption.trim() : '',
-      category: ['general', 'achievement', 'life', 'sports', 'arts', 'official'].includes(category) ? category : 'general',
+      category: finalCategory,
       images: sanitizedMedia,
       author: user.userId,
       postAs: postIdentity,
@@ -305,7 +309,7 @@ exports.updateVibe = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid vibe ID' });
     }
 
-    const { caption, category, tags, location, isSpotlight } = req.body;
+    const { caption, category, images, postAs, tags, location, isSpotlight } = req.body;
     const vibe = await Vibe.findOne({ _id: req.params.id, isActive: true });
 
     if (!vibe) {
@@ -319,16 +323,83 @@ exports.updateVibe = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Not authorized to edit this vibe' });
     }
 
-    if (caption !== undefined) vibe.caption = caption.trim();
-    if (category !== undefined && ['general', 'achievement', 'life', 'sports', 'arts', 'official'].includes(category)) {
-      vibe.category = category;
+    if (caption !== undefined) {
+      vibe.caption = caption ? caption.trim() : '';
+      if (tags === undefined) {
+        const hashMatches = vibe.caption.match(/#[a-zA-Z0-9_]+/g);
+        if (hashMatches) {
+          vibe.tags = Array.from(new Set(hashMatches.map(t => t.slice(1).toLowerCase())));
+        } else {
+          vibe.tags = [];
+        }
+      }
     }
+
     if (tags !== undefined && Array.isArray(tags)) {
-      vibe.tags = tags.map(t => t.toLowerCase().replace('#', ''));
+      vibe.tags = Array.from(new Set(tags.map(t => t.toLowerCase().replace('#', '').trim()).filter(Boolean)));
     }
-    if (location !== undefined) vibe.location = location.trim();
+
+    if (isAdmin && postAs !== undefined) {
+      vibe.postAs = postAs === 'school' ? 'school' : 'self';
+    }
+
+    if (category !== undefined && ['general', 'achievement', 'life', 'sports', 'arts', 'official'].includes(category)) {
+      vibe.category = (vibe.postAs === 'school' || category === 'official') ? 'official' : category;
+    } else if (vibe.postAs === 'school') {
+      vibe.category = 'official';
+    }
+
+    if (location !== undefined) vibe.location = location ? location.trim() : '';
     if (isAdmin && isSpotlight !== undefined) {
       vibe.isSpotlight = Boolean(isSpotlight);
+    }
+
+    if (images !== undefined && Array.isArray(images) && images.length > 0) {
+      const isVideoMedia = (img) => {
+        if (!img) return false;
+        if (typeof img === 'object' && img.type === 'video') return true;
+        const url = typeof img === 'string' ? img : (img.url || '');
+        return /\.(mov|mp4|m4v|webm|avi|3gp|mkv|flv|wmv|qt)(\?.*)?$/i.test(url);
+      };
+
+      const hasVideo = images.some(img => isVideoMedia(img));
+
+      if (hasVideo) {
+        const videoItem = images.find(img => isVideoMedia(img)) || images[0];
+        const videoUrl = typeof videoItem === 'string' ? videoItem.trim() : (videoItem.url ? videoItem.url.trim() : '');
+        let thumbUrl = typeof videoItem === 'object' && videoItem.thumbnailUrl ? videoItem.thumbnailUrl.trim() : '';
+
+        if (!thumbUrl && videoUrl && videoUrl.includes('cloudinary.com')) {
+          thumbUrl = videoUrl
+            .replace(/\/video\/upload\/(?:[^/]+\/)?/, '/video/upload/so_0,w_720,q_auto,f_auto/')
+            .replace(/\.(mp4|mov|webm|m4v|avi|3gp|mkv|flv|wmv|qt)(\?.*)?$/i, '.jpg');
+        }
+
+        vibe.images = [{
+          type: 'video',
+          url: videoUrl,
+          thumbnailUrl: thumbUrl,
+          duration: typeof videoItem === 'object' ? Math.min(Math.max(Number(videoItem.duration) || 0, 0), 60) : 0,
+          publicId: typeof videoItem === 'object' ? (videoItem.publicId || '') : '',
+          width: typeof videoItem === 'object' && videoItem.width ? videoItem.width : 720,
+          height: typeof videoItem === 'object' && videoItem.height ? videoItem.height : 1280,
+          aspectRatio: typeof videoItem === 'object' && videoItem.aspectRatio ? videoItem.aspectRatio : 0.562
+        }];
+      } else {
+        vibe.images = images.slice(0, 5).map(img => {
+          if (typeof img === 'string') {
+            return { type: 'image', url: img.trim(), width: 1080, height: 1080, aspectRatio: 1 };
+          }
+          return {
+            type: 'image',
+            url: img.url ? img.url.trim() : '',
+            publicId: img.publicId || '',
+            width: img.width || 1080,
+            height: img.height || 1080,
+            aspectRatio: img.aspectRatio || (img.width && img.height ? Number((img.width / img.height).toFixed(3)) : 1)
+          };
+        });
+      }
     }
 
     await vibe.save();
@@ -609,7 +680,7 @@ exports.addVibeComment = async (req, res) => {
       user: user.userId,
       text: text.trim(),
       postAs: commentIdentity,
-      parentComment: parentComment || null
+      parentComment: (parentComment && isValidObjectId(parentComment)) ? parentComment : null
     });
 
     await comment.save();
@@ -854,10 +925,27 @@ exports.getMyVibes = async (req, res) => {
       if (counts[c._id] !== undefined) counts[c._id] = c.count;
     });
 
+    const currentUserId = req.user?.userId;
+    let likedVibeIds = new Set();
+    let bookmarkedVibeIds = new Set();
+
+    if (currentUserId && vibes.length > 0) {
+      const vibeIds = vibes.map(v => v._id);
+      const [userLikes, userBookmarks] = await Promise.all([
+        VibeLike.find({ vibe: { $in: vibeIds }, user: currentUserId }).select('vibe').lean(),
+        VibeBookmark.find({ vibe: { $in: vibeIds }, user: currentUserId }).select('vibe').lean()
+      ]);
+
+      likedVibeIds = new Set(userLikes.map(l => l.vibe.toString()));
+      bookmarkedVibeIds = new Set(userBookmarks.map(b => b.vibe.toString()));
+    }
+
     const enhancedVibes = vibes.map(vibe => ({
       ...vibe,
       likesCount: Math.max(0, Number(vibe.likesCount) || 0),
-      commentsCount: Math.max(0, Number(vibe.commentsCount) || 0)
+      commentsCount: Math.max(0, Number(vibe.commentsCount) || 0),
+      isLiked: likedVibeIds.has(vibe._id.toString()),
+      isBookmarked: bookmarkedVibeIds.has(vibe._id.toString())
     }));
 
     res.status(200).json({
@@ -898,10 +986,18 @@ exports.getMySavedVibes = async (req, res) => {
       })
       .lean();
 
+    const vibeIds = bookmarks.map(b => b.vibe?._id).filter(Boolean);
+    let likedVibeIds = new Set();
+    if (vibeIds.length > 0) {
+      const userLikes = await VibeLike.find({ vibe: { $in: vibeIds }, user: req.user.userId }).select('vibe').lean();
+      likedVibeIds = new Set(userLikes.map(l => l.vibe.toString()));
+    }
+
     const vibes = bookmarks.map(b => b.vibe).filter(Boolean).map(v => ({
       ...v,
       likesCount: Math.max(0, Number(v.likesCount) || 0),
       commentsCount: Math.max(0, Number(v.commentsCount) || 0),
+      isLiked: likedVibeIds.has(v._id.toString()),
       isBookmarked: true
     }));
 
@@ -1354,7 +1450,13 @@ exports.recordVibeViews = async (req, res) => {
       }
     }));
 
-    await VibeView.bulkWrite(operations, { ordered: false });
+    try {
+      await VibeView.bulkWrite(operations, { ordered: false });
+    } catch (bulkErr) {
+      if (bulkErr.code !== 11000 && !bulkErr.writeErrors?.every(e => e.code === 11000)) {
+        logger.warn('Non-duplicate bulkWrite error in recordVibeViews:', bulkErr);
+      }
+    }
 
     res.status(200).json({ success: true, message: 'Views recorded' });
   } catch (error) {
@@ -1387,6 +1489,19 @@ exports.getSpotlightVibe = async (req, res) => {
 
     let enhancedSpotlight = null;
     if (spotlight) {
+      const currentUserId = req.user?.userId;
+      let isLiked = false;
+      let isBookmarked = false;
+
+      if (currentUserId) {
+        const [userLike, userBookmark] = await Promise.all([
+          VibeLike.exists({ vibe: spotlight._id, user: currentUserId }),
+          VibeBookmark.exists({ vibe: spotlight._id, user: currentUserId })
+        ]);
+        isLiked = Boolean(userLike);
+        isBookmarked = Boolean(userBookmark);
+      }
+
       let sanitizedImages = spotlight.images || [];
       if (Array.isArray(sanitizedImages)) {
         sanitizedImages = sanitizedImages.map(img => {
@@ -1396,7 +1511,7 @@ exports.getSpotlightVibe = async (req, res) => {
             return {
               ...img,
               thumbnailUrl: img.url
-                .replace(/\/video\/upload\/(?:[^\/]+\/)?/, '/video/upload/so_0,w_720,q_auto,f_auto/')
+                .replace(/\/video\/upload\/(?:[^/]+\/)?/, '/video/upload/so_0,w_720,q_auto,f_auto/')
                 .replace(/\.(mp4|mov|webm|m4v|avi|3gp|mkv|flv|wmv|qt)(\?.*)?$/i, '.jpg')
             };
           }
@@ -1408,7 +1523,9 @@ exports.getSpotlightVibe = async (req, res) => {
         ...spotlight,
         images: sanitizedImages,
         likesCount: Math.max(0, Number(spotlight.likesCount) || 0),
-        commentsCount: Math.max(0, Number(spotlight.commentsCount) || 0)
+        commentsCount: Math.max(0, Number(spotlight.commentsCount) || 0),
+        isLiked,
+        isBookmarked
       };
     }
 
@@ -1458,10 +1575,27 @@ exports.getUserVibes = async (req, res) => {
       Vibe.countDocuments(query)
     ]);
 
+    const currentUserId = req.user?.userId;
+    let likedVibeIds = new Set();
+    let bookmarkedVibeIds = new Set();
+
+    if (currentUserId && vibes.length > 0) {
+      const vibeIds = vibes.map(v => v._id);
+      const [userLikes, userBookmarks] = await Promise.all([
+        VibeLike.find({ vibe: { $in: vibeIds }, user: currentUserId }).select('vibe').lean(),
+        VibeBookmark.find({ vibe: { $in: vibeIds }, user: currentUserId }).select('vibe').lean()
+      ]);
+
+      likedVibeIds = new Set(userLikes.map(l => l.vibe.toString()));
+      bookmarkedVibeIds = new Set(userBookmarks.map(b => b.vibe.toString()));
+    }
+
     const enhancedVibes = vibes.map(v => ({
       ...v,
       likesCount: Math.max(0, Number(v.likesCount) || 0),
-      commentsCount: Math.max(0, Number(v.commentsCount) || 0)
+      commentsCount: Math.max(0, Number(v.commentsCount) || 0),
+      isLiked: likedVibeIds.has(v._id.toString()),
+      isBookmarked: bookmarkedVibeIds.has(v._id.toString())
     }));
 
     res.status(200).json({
