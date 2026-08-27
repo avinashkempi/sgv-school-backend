@@ -28,6 +28,10 @@ const vibeCommentSchema = new mongoose.Schema({
     ref: 'VibeComment',
     default: null
   },
+  likes: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  }],
   likesCount: {
     type: Number,
     default: 0,

@@ -15,11 +15,13 @@ const {
   getVibeComments,
   addVibeComment,
   deleteVibeComment,
+  toggleCommentLike,
   toggleBookmark,
   getMyVibes,
   getMySavedVibes,
   listPendingVibes,
   reviewVibe,
+  batchReviewVibes,
   togglePinVibe,
   toggleSpotlightVibe,
   getVibeHighlights,
@@ -40,6 +42,7 @@ router.post('/:id/view', authenticateToken, recordVibeViews);
 
 // ── Admin Moderation Endpoints ──
 router.get('/admin/pending', authenticateToken, requireAdmin, listPendingVibes);
+router.post('/admin/batch-review', authenticateToken, requireAdmin, batchReviewVibes);
 router.patch('/admin/:id/review', authenticateToken, requireAdmin, reviewVibe);
 router.patch('/admin/:id/pin', authenticateToken, requireAdmin, togglePinVibe);
 router.patch('/admin/:id/spotlight', authenticateToken, requireAdmin, toggleSpotlightVibe);
@@ -65,6 +68,7 @@ router.get('/:id/likes', authenticateToken, getVibeLikes);
 router.get('/:id/comments', optionalAuthenticateToken, getVibeComments);
 router.post('/:id/comments', authenticateToken, addVibeComment);
 router.delete('/comments/:commentId', authenticateToken, deleteVibeComment);
+router.post('/comments/:commentId/like', authenticateToken, toggleCommentLike);
 
 router.post('/:id/bookmark', authenticateToken, toggleBookmark);
 

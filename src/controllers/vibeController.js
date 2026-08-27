@@ -4,11 +4,11 @@ const VibeLike = require('../models/VibeLike');
 const VibeComment = require('../models/VibeComment');
 const VibeBookmark = require('../models/VibeBookmark');
 const VibeView = require('../models/VibeView');
+const Notification = require('../models/Notification');
+const { sendTargetedNotification } = require('../services/notificationService');
 const logger = require('../utils/logger');
 
 const isValidObjectId = (id) => Boolean(id && id !== 'undefined' && id !== 'null' && mongoose.Types.ObjectId.isValid(id));
-
-// NOTE: Push notifications for Vibes are disabled for testing as requested.
 
 /**
  * GET /api/vibes
@@ -253,7 +253,34 @@ exports.createVibe = async (req, res) => {
       populate: { path: 'currentClass', select: 'label name section' }
     });
 
-    // NOTE: Notifications intentionally bypassed for testing
+    // Notify administrators if a non-admin user submitted a vibe for approval
+    if (!isAdmin) {
+      (async () => {
+        try {
+          const authorName = user.name || 'A community member';
+          const title = '✨ New Vibe Submitted for Review';
+          const message = `${authorName} submitted a new vibe: "${(caption || '').slice(0, 60)}"`;
+
+          await Notification.create({
+            title,
+            message,
+            type: 'General',
+            category: 'general',
+            targetRole: 'admin',
+            actionType: 'navigate',
+            actionData: '/admin/vibe-approvals'
+          }).catch(() => {});
+
+          await sendTargetedNotification('admin', null, {
+            title,
+            message,
+            type: 'General'
+          }).catch(() => {});
+        } catch (notifErr) {
+          logger.error('[Create Vibe] Admin notification error:', notifErr);
+        }
+      })();
+    }
 
     res.status(201).json({
       success: true,
@@ -405,6 +432,35 @@ exports.toggleLike = async (req, res) => {
         );
         updatedLikesCount = updated ? Math.max(0, Number(updated.likesCount) || 0) : 1;
         isLiked = true;
+
+        // Trigger notification to vibe author if liked by another user
+        if (vibe.author && vibe.author.toString() !== userId) {
+          (async () => {
+            try {
+              const likerName = req.user.name || 'Someone';
+              const title = '❤️ New Like on your Vibe';
+              const message = `${likerName} liked your vibe.`;
+
+              await Notification.create({
+                title,
+                message,
+                type: 'General',
+                category: 'general',
+                recipient: vibe.author,
+                actionType: 'navigate',
+                actionData: '/vibes'
+              }).catch(() => {});
+
+              await sendTargetedNotification('user', vibe.author, {
+                title,
+                message,
+                type: 'General'
+              }).catch(() => {});
+            } catch (notifErr) {
+              logger.error('[Vibe Like] Notification error:', notifErr);
+            }
+          })();
+        }
       } catch (err) {
         if (err.code === 11000) {
           isLiked = true;
@@ -484,19 +540,32 @@ exports.getVibeComments = async (req, res) => {
     const limit = Math.min(Math.max(parseInt(req.query.limit) || 25, 1), 100);
     const skip = (page - 1) * limit;
 
+    const currentUserId = req.user?.userId;
+
     const [comments, total] = await Promise.all([
       VibeComment.find({ vibe: req.params.id, isActive: true })
-        .sort({ createdAt: -1 })
+        .sort({ createdAt: 1 })
         .skip(skip)
         .limit(limit)
         .populate('user', 'name role profilePhoto currentClass designation')
+        .populate({
+          path: 'parentComment',
+          select: 'text user postAs',
+          populate: { path: 'user', select: 'name' }
+        })
         .lean(),
       VibeComment.countDocuments({ vibe: req.params.id, isActive: true })
     ]);
 
+    const enhancedComments = comments.map(c => ({
+      ...c,
+      likesCount: Math.max(0, Number(c.likesCount) || (Array.isArray(c.likes) ? c.likes.length : 0)),
+      isLiked: Boolean(currentUserId && Array.isArray(c.likes) && c.likes.some(u => u.toString() === currentUserId))
+    }));
+
     res.status(200).json({
       success: true,
-      data: comments,
+      data: enhancedComments,
       pagination: {
         page,
         limit,
@@ -550,10 +619,50 @@ exports.addVibeComment = async (req, res) => {
       { new: true }
     );
     await comment.populate('user', 'name role profilePhoto currentClass designation');
+    if (comment.parentComment) {
+      await comment.populate({
+        path: 'parentComment',
+        select: 'text user postAs',
+        populate: { path: 'user', select: 'name' }
+      });
+    }
+
+    // Trigger notification to vibe author (if commenter !== author)
+    if (vibe.author && vibe.author.toString() !== user.userId) {
+      (async () => {
+        try {
+          const commenterName = commentIdentity === 'school' ? 'SGV School' : (user.name || 'A community member');
+          const title = '💬 New Comment on your Vibe';
+          const message = `${commenterName}: "${text.slice(0, 80)}"`;
+
+          await Notification.create({
+            title,
+            message,
+            type: 'General',
+            category: 'general',
+            recipient: vibe.author,
+            actionType: 'navigate',
+            actionData: '/vibes'
+          }).catch(() => {});
+
+          await sendTargetedNotification('user', vibe.author, {
+            title,
+            message,
+            type: 'General'
+          }).catch(() => {});
+        } catch (notifErr) {
+          logger.error('[Vibe Comment] Notification error:', notifErr);
+        }
+      })();
+    }
+
+    const resComment = comment.toObject();
+    resComment.likesCount = 0;
+    resComment.isLiked = false;
 
     res.status(201).json({
       success: true,
-      data: comment.toObject(),
+      data: resComment,
       commentsCount: updatedVibe ? Math.max(0, Number(updatedVibe.commentsCount) || 0) : 1,
       message: 'Comment added'
     });
@@ -609,6 +718,56 @@ exports.deleteVibeComment = async (req, res) => {
   } catch (error) {
     logger.error('Error deleting comment:', error);
     res.status(500).json({ success: false, message: 'Server error while deleting comment' });
+  }
+};
+
+/**
+ * POST /api/vibes/comments/:commentId/like
+ * Toggle like on a specific comment.
+ */
+exports.toggleCommentLike = async (req, res) => {
+  try {
+    const { commentId } = req.params;
+    if (!isValidObjectId(commentId)) {
+      return res.status(400).json({ success: false, message: 'Invalid comment ID' });
+    }
+
+    const userId = req.user.userId;
+    const comment = await VibeComment.findOne({ _id: commentId, isActive: true });
+    if (!comment) {
+      return res.status(404).json({ success: false, message: 'Comment not found' });
+    }
+
+    if (!Array.isArray(comment.likes)) {
+      comment.likes = [];
+    }
+
+    const userObjId = new mongoose.Types.ObjectId(userId);
+    const existingIndex = comment.likes.findIndex(id => id.toString() === userId);
+    let isLiked = false;
+
+    if (existingIndex > -1) {
+      comment.likes.splice(existingIndex, 1);
+      comment.likesCount = Math.max(0, (comment.likesCount || 1) - 1);
+      isLiked = false;
+    } else {
+      comment.likes.push(userObjId);
+      comment.likesCount = (comment.likesCount || 0) + 1;
+      isLiked = true;
+    }
+
+    await comment.save();
+
+    res.status(200).json({
+      success: true,
+      data: {
+        isLiked,
+        likesCount: comment.likesCount
+      }
+    });
+  } catch (error) {
+    logger.error('Error toggling comment like:', error);
+    res.status(500).json({ success: false, message: 'Server error while toggling comment like' });
   }
 };
 
@@ -681,7 +840,7 @@ exports.getMyVibes = async (req, res) => {
         .lean(),
       Vibe.countDocuments(query),
       Vibe.aggregate([
-        { $match: { author: req.user.userId, isActive: true } },
+        { $match: { author: new mongoose.Types.ObjectId(req.user.userId), isActive: true } },
         { $group: { _id: '$status', count: { $sum: 1 } } }
       ])
     ]);
@@ -843,7 +1002,34 @@ exports.reviewVibe = async (req, res) => {
 
     await vibe.save();
 
-    // NOTE: Notifications intentionally bypassed for testing
+    // Trigger push & in-app notification to author
+    (async () => {
+      try {
+        const authorId = vibe.author?._id || vibe.author;
+        const title = action === 'approve' ? '✨ Vibe Approved!' : 'Vibe Submission Update';
+        const message = action === 'approve'
+          ? 'Your campus vibe has been approved and is now live on SGV Campus Feed!'
+          : `Your vibe submission was not approved: ${vibe.rejectionReason}`;
+
+        await Notification.create({
+          title,
+          message,
+          type: 'General',
+          category: 'general',
+          recipient: authorId,
+          actionType: 'navigate',
+          actionData: '/vibes'
+        }).catch(() => {});
+
+        await sendTargetedNotification('user', authorId, {
+          title,
+          message,
+          type: 'General'
+        }).catch(() => {});
+      } catch (notifErr) {
+        logger.error('[Vibe Review] Notification error:', notifErr);
+      }
+    })();
 
     res.status(200).json({
       success: true,
@@ -853,6 +1039,90 @@ exports.reviewVibe = async (req, res) => {
   } catch (error) {
     logger.error('Error reviewing vibe:', error);
     res.status(500).json({ success: false, message: 'Server error while reviewing vibe' });
+  }
+};
+
+/**
+ * POST /api/vibes/admin/batch-review
+ * Approve or Reject multiple pending vibes at once. Admin / Super Admin only.
+ */
+exports.batchReviewVibes = async (req, res) => {
+  try {
+    const { vibeIds, action, reason } = req.body;
+
+    if (!Array.isArray(vibeIds) || vibeIds.length === 0) {
+      return res.status(400).json({ success: false, message: 'vibeIds array is required' });
+    }
+
+    if (!['approve', 'reject'].includes(action)) {
+      return res.status(400).json({ success: false, message: 'Action must be "approve" or "reject"' });
+    }
+
+    const validIds = vibeIds.filter(id => isValidObjectId(id)).map(id => new mongoose.Types.ObjectId(id));
+    if (validIds.length === 0) {
+      return res.status(400).json({ success: false, message: 'No valid vibe IDs provided' });
+    }
+
+    const newStatus = action === 'approve' ? 'approved' : 'rejected';
+    const finalReason = reason ? reason.trim() : 'Does not follow school community guidelines';
+
+    const updateDoc = {
+      $set: {
+        status: newStatus,
+        reviewedBy: new mongoose.Types.ObjectId(req.user.userId),
+        reviewedAt: new Date(),
+        ...(action === 'reject' ? { rejectionReason: finalReason } : {})
+      }
+    };
+
+    if (action === 'approve') {
+      updateDoc.$unset = { rejectionReason: 1 };
+    }
+
+    await Vibe.updateMany(
+      { _id: { $in: validIds }, isActive: true },
+      updateDoc
+    );
+
+    // Trigger push & in-app notifications asynchronously
+    (async () => {
+      try {
+        const vibes = await Vibe.find({ _id: { $in: validIds } }).select('author caption category');
+        for (const v of vibes) {
+          if (!v.author) continue;
+          const title = action === 'approve' ? '✨ Vibe Approved!' : 'Vibe Submission Update';
+          const message = action === 'approve'
+            ? 'Your campus vibe has been approved and is now live on SGV Campus Feed!'
+            : `Your vibe submission was not approved: ${finalReason}`;
+
+          await Notification.create({
+            title,
+            message,
+            type: 'General',
+            category: 'general',
+            recipient: v.author,
+            actionType: 'navigate',
+            actionData: '/vibes'
+          }).catch(() => {});
+
+          await sendTargetedNotification('user', v.author, {
+            title,
+            message,
+            type: 'General'
+          }).catch(() => {});
+        }
+      } catch (notifErr) {
+        logger.error('[Batch Vibe Review] Notification error:', notifErr);
+      }
+    })();
+
+    res.status(200).json({
+      success: true,
+      message: `Successfully ${action === 'approve' ? 'approved' : 'rejected'} ${validIds.length} ${validIds.length === 1 ? 'vibe' : 'vibes'}!`
+    });
+  } catch (error) {
+    logger.error('Error batch reviewing vibes:', error);
+    res.status(500).json({ success: false, message: 'Server error while batch reviewing vibes' });
   }
 };
 
@@ -1067,16 +1337,19 @@ exports.recordVibeViews = async (req, res) => {
       vibeIds = [req.body.vibeId];
     }
 
-    vibeIds = vibeIds.filter(id => isValidObjectId(id));
+    const userObjId = new mongoose.Types.ObjectId(currentUserId);
+    const validObjIds = vibeIds
+      .filter(id => isValidObjectId(id))
+      .map(id => new mongoose.Types.ObjectId(id));
 
-    if (!vibeIds || vibeIds.length === 0) {
+    if (validObjIds.length === 0) {
       return res.status(400).json({ success: false, message: 'Valid vibeId or vibeIds array is required' });
     }
 
-    const operations = vibeIds.map(vibeId => ({
+    const operations = validObjIds.map(vibeObjId => ({
       updateOne: {
-        filter: { user: currentUserId, vibe: vibeId },
-        update: { $setOnInsert: { user: currentUserId, vibe: vibeId, viewedAt: new Date() } },
+        filter: { user: userObjId, vibe: vibeObjId },
+        update: { $setOnInsert: { user: userObjId, vibe: vibeObjId, viewedAt: new Date() } },
         upsert: true
       }
     }));
