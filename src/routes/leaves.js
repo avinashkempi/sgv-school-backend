@@ -9,9 +9,138 @@ const Event = require('../models/Event');
 const { authenticateToken, checkRole } = require('../middleware/auth');
 const notificationController = require('../controllers/notificationController');
 const toTitleCase = require('../utils/titleCase');
-const { isISTSunday, getISTDayBounds, getISTDateObject } = require('../utils/dateUtils');
+const {
+    isISTSunday,
+    getISTDayBounds,
+    getISTDateObject,
+    getISTDateString,
+    getISTToday
+} = require('../utils/dateUtils');
 
-// @desc    Apply for leave
+/**
+ * Helper to check for overlapping active (pending/approved) leaves in IST
+ * @param {string|mongoose.Types.ObjectId} applicantId
+ * @param {Date} startNormalized - normalized start date (UTC midnight representing IST date)
+ * @param {Date} endNormalized - normalized end date (UTC midnight representing IST date)
+ * @param {string} leaveType - 'full' | 'half'
+ * @param {string} halfDaySlot - 'morning' | 'afternoon'
+ * @param {string|mongoose.Types.ObjectId} [excludeLeaveId] - Optional leave ID to exclude (for editing)
+ * @returns {Promise<{ hasConflict: boolean, conflictingLeave?: object, message?: string }>}
+ */
+async function checkLeaveOverlap(applicantId, startNormalized, endNormalized, leaveType, halfDaySlot, excludeLeaveId = null) {
+    const query = {
+        applicant: applicantId,
+        status: { $in: ['pending', 'approved'] },
+        startDate: { $lte: endNormalized },
+        endDate: { $gte: startNormalized }
+    };
+
+    if (excludeLeaveId) {
+        query._id = { $ne: excludeLeaveId };
+    }
+
+    const overlappingLeaves = await LeaveRequest.find(query).lean();
+
+    for (const ex of overlappingLeaves) {
+        // If either the new leave or existing leave is 'full' day, they conflict across the overlapping dates
+        if (leaveType === 'full' || ex.leaveType === 'full') {
+            const startStr = getISTDateString(ex.startDate);
+            const endStr = getISTDateString(ex.endDate);
+            const rangeStr = startStr === endStr ? startStr : `${startStr} to ${endStr}`;
+            return {
+                hasConflict: true,
+                conflictingLeave: ex,
+                message: `You already have an active (${ex.status}) leave request for ${rangeStr}. You cannot apply for duplicate leaves on the same day. Please edit your existing leave request instead.`
+            };
+        }
+
+        // Both are 'half' day leaves
+        if (leaveType === 'half' && ex.leaveType === 'half') {
+            const newStartStr = getISTDateString(startNormalized);
+            const exStartStr = getISTDateString(ex.startDate);
+            // If on the same date and same slot (or if slot is undefined)
+            if (newStartStr === exStartStr) {
+                if (!halfDaySlot || !ex.halfDaySlot || halfDaySlot === ex.halfDaySlot) {
+                    return {
+                        hasConflict: true,
+                        conflictingLeave: ex,
+                        message: `You already have an active (${ex.status}) half-day (${ex.halfDaySlot || 'slot'}) leave request for ${newStartStr}. Please edit your existing leave request instead.`
+                    };
+                }
+            }
+        }
+    }
+
+    return { hasConflict: false };
+}
+
+/**
+ * Helper to send notifications when leave is applied or edited
+ */
+async function sendLeaveAppliedNotification(leaveRequest, user, start, end, isEdit = false) {
+    try {
+        const applicantName = toTitleCase(user.name);
+        const startDateStr = getISTDateString(start);
+        const endDateStr = getISTDateString(end);
+        const dateRangeStr = startDateStr === endDateStr ? startDateStr : `${startDateStr} to ${endDateStr}`;
+        const prefix = isEdit ? '✏️ Leave Request Updated' : '📋 New Leave Request';
+        const actionVerb = isEdit ? 'updated their leave request for' : 'requested leave for';
+
+        if (user.role === 'student') {
+            // Student leave: notify the class teacher of the student's class
+            const classObj = await Class.findById(leaveRequest.class).select('classTeacher').lean();
+            if (classObj?.classTeacher) {
+                notificationController.triggerNotification({
+                    title: prefix,
+                    message: `${applicantName} has ${actionVerb} ${dateRangeStr}. Please review and respond.`,
+                    type: 'General',
+                    category: 'leave',
+                    priority: 'high',
+                    target: 'user',
+                    targetId: classObj.classTeacher,
+                    metadata: { leaveId: leaveRequest._id }
+                });
+            } else {
+                // Fallback: If no class teacher is assigned to this class, notify all Admins
+                notificationController.triggerNotification({
+                    title: prefix,
+                    message: `${applicantName} (Student) has ${actionVerb} ${dateRangeStr}. Awaiting your approval.`,
+                    type: 'General',
+                    category: 'leave',
+                    priority: 'high',
+                    target: 'admin',
+                    metadata: { leaveId: leaveRequest._id }
+                });
+            }
+        } else if (['teacher', 'staff', 'support_staff'].includes(user.role)) {
+            // Teacher/Staff leave: notify all admins
+            const roleLabel = user.role === 'support_staff' ? 'Support Staff' : user.role === 'staff' ? 'Staff' : 'Teacher';
+            notificationController.triggerNotification({
+                title: prefix,
+                message: `${applicantName} (${roleLabel}) has ${actionVerb} ${dateRangeStr}. Awaiting your approval.`,
+                type: 'General',
+                category: 'leave',
+                priority: 'high',
+                target: 'admin',
+                metadata: { leaveId: leaveRequest._id }
+            });
+        } else if (['admin', 'super admin'].includes(user.role)) {
+            // Admin leave: notify all super admins
+            notificationController.triggerNotification({
+                title: prefix,
+                message: `${applicantName} (Admin) has ${actionVerb} ${dateRangeStr}. Awaiting your approval.`,
+                type: 'General',
+                category: 'leave',
+                priority: 'high',
+                target: 'super admin',
+                metadata: { leaveId: leaveRequest._id }
+            });
+        }
+    } catch (notifErr) {
+        console.error('[Leave Apply Notification] Error:', notifErr);
+    }
+}
+
 // @desc    Apply for leave
 // @route   POST /api/leaves/apply
 // @access  Private (All)
@@ -20,16 +149,16 @@ router.post('/apply', authenticateToken, async (req, res) => {
         const { startDate, endDate, reason, leaveType, halfDaySlot } = req.body;
 
         // Validate required fields
-        if (!startDate || !endDate || !reason) {
+        if (!startDate || !endDate || !reason || !reason.trim()) {
             return res.status(400).json({
                 success: false,
                 message: 'Missing required fields: startDate, endDate, and reason are required'
             });
         }
 
-        // Validate dates
-        const start = new Date(startDate);
-        const end = new Date(endDate);
+        const isHalf = leaveType === 'half';
+        const start = getISTDateObject(startDate);
+        const end = isHalf ? getISTDateObject(startDate) : getISTDateObject(endDate);
 
         if (isNaN(start.getTime()) || isNaN(end.getTime())) {
             return res.status(400).json({
@@ -42,6 +171,22 @@ router.post('/apply', authenticateToken, async (req, res) => {
             return res.status(400).json({
                 success: false,
                 message: 'End date cannot be before start date'
+            });
+        }
+
+        if (isHalf && !['morning', 'afternoon'].includes(halfDaySlot)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Half-day slot must be either morning or afternoon'
+            });
+        }
+
+        // Duplicate / Overlap Validation
+        const overlapResult = await checkLeaveOverlap(req.user.userId, start, end, leaveType || 'full', halfDaySlot);
+        if (overlapResult.hasConflict) {
+            return res.status(400).json({
+                success: false,
+                message: overlapResult.message
             });
         }
 
@@ -86,71 +231,179 @@ router.post('/apply', authenticateToken, async (req, res) => {
             academicYear: academicYearId,
             startDate: start,
             endDate: end,
-            reason,
-            leaveType: leaveType || 'full',
-            halfDaySlot: leaveType === 'half' ? halfDaySlot : undefined
+            reason: reason.trim(),
+            leaveType: isHalf ? 'half' : 'full',
+            halfDaySlot: isHalf ? halfDaySlot : undefined
         });
 
-        res.status(201).json({ success: true, data: leaveRequest });
+        res.status(201).json({
+            success: true,
+            data: leaveRequest,
+            message: 'Leave request submitted successfully'
+        });
 
-        // Trigger Notification — send only to the concerned approver(s)
-        try {
-            const applicantName = toTitleCase(user.name);
-            if (req.user.role === 'student') {
-                // Student leave: notify the class teacher of the student's class
-                const classObj = await Class.findById(classId).select('classTeacher').lean();
-                if (classObj?.classTeacher) {
-                    notificationController.triggerNotification({
-                        title: '📋 New Leave Request',
-                        message: `${applicantName} has requested leave from ${startDate} to ${endDate}. Please review and respond.`,
-                        type: 'General',
-                        category: 'leave',
-                        priority: 'high',
-                        target: 'user',
-                        targetId: classObj.classTeacher,
-                        metadata: { leaveId: leaveRequest._id }
-                    });
-                } else {
-                    // Fallback: If no class teacher is assigned to this class, notify all Admins
-                    notificationController.triggerNotification({
-                        title: '📋 New Leave Request',
-                        message: `${applicantName} (Student) has requested leave from ${startDate} to ${endDate}. Awaiting your approval.`,
-                        type: 'General',
-                        category: 'leave',
-                        priority: 'high',
-                        target: 'admin',
-                        metadata: { leaveId: leaveRequest._id }
-                    });
-                }
-            } else if (['teacher', 'staff', 'support_staff'].includes(req.user.role)) {
-                // Teacher/Staff leave: notify all admins
-                const roleLabel = req.user.role === 'support_staff' ? 'Support Staff' : req.user.role === 'staff' ? 'Staff' : 'Teacher';
-                notificationController.triggerNotification({
-                    title: '📋 New Leave Request',
-                    message: `${applicantName} (${roleLabel}) has requested leave from ${startDate} to ${endDate}. Awaiting your approval.`,
-                    type: 'General',
-                    category: 'leave',
-                    priority: 'high',
-                    target: 'admin',
-                    metadata: { leaveId: leaveRequest._id }
-                });
-            } else if (['admin', 'super admin'].includes(req.user.role)) {
-                // Admin leave: notify all super admins
-                notificationController.triggerNotification({
-                    title: '📋 New Leave Request',
-                    message: `${applicantName} (Admin) has requested leave from ${startDate} to ${endDate}. Awaiting your approval.`,
-                    type: 'General',
-                    category: 'leave',
-                    priority: 'high',
-                    target: 'super admin',
-                    metadata: { leaveId: leaveRequest._id }
-                });
-            }
-        } catch (notifErr) {
-            console.error('[Leave Apply] Notification error:', notifErr);
-        }
+        // Trigger Notification
+        await sendLeaveAppliedNotification(leaveRequest, user, start, end, false);
     } catch (error) {
         console.error('[Leave Apply] Error:', error);
+        res.status(500).json({ success: false, message: 'Server Error', error: error.message });
+    }
+});
+
+// @desc    Edit leave application (Applicant or Admin)
+// @route   PUT /api/leaves/:id
+// @access  Private (Applicant, Admin, Super Admin)
+router.put('/:id', authenticateToken, async (req, res) => {
+    try {
+        if (!req.params.id.match(/^[0-9a-fA-F]{24}$/)) {
+            return res.status(404).json({ success: false, message: 'Invalid leave request ID format' });
+        }
+
+        const leaveRequest = await LeaveRequest.findById(req.params.id);
+        if (!leaveRequest) {
+            return res.status(404).json({ success: false, message: 'Leave request not found' });
+        }
+
+        const isOwner = leaveRequest.applicant.toString() === req.user.userId.toString();
+        const isAdmin = ['admin', 'super admin'].includes(req.user.role);
+
+        if (!isOwner && !isAdmin) {
+            return res.status(403).json({ success: false, message: 'Not authorized to edit this leave request' });
+        }
+
+        // Only pending leave requests can be edited
+        if (leaveRequest.status !== 'pending') {
+            return res.status(400).json({
+                success: false,
+                message: `Only pending leave requests can be edited. This leave request has already been ${leaveRequest.status}.`
+            });
+        }
+
+        const { startDate, endDate, reason, leaveType, halfDaySlot } = req.body;
+
+        if (!startDate || !endDate || !reason || !reason.trim()) {
+            return res.status(400).json({
+                success: false,
+                message: 'Missing required fields: startDate, endDate, and reason are required'
+            });
+        }
+
+        const isHalf = leaveType === 'half';
+        const start = getISTDateObject(startDate);
+        const end = isHalf ? getISTDateObject(startDate) : getISTDateObject(endDate);
+
+        if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid date format. Please use YYYY-MM-DD format'
+            });
+        }
+
+        if (end < start) {
+            return res.status(400).json({
+                success: false,
+                message: 'End date cannot be before start date'
+            });
+        }
+
+        if (isHalf && !['morning', 'afternoon'].includes(halfDaySlot)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Half-day slot must be either morning or afternoon'
+            });
+        }
+
+        // Overlap Check (Excluding this current leave ID)
+        const overlapResult = await checkLeaveOverlap(
+            leaveRequest.applicant,
+            start,
+            end,
+            leaveType || 'full',
+            halfDaySlot,
+            leaveRequest._id
+        );
+
+        if (overlapResult.hasConflict) {
+            return res.status(400).json({
+                success: false,
+                message: overlapResult.message
+            });
+        }
+
+        leaveRequest.startDate = start;
+        leaveRequest.endDate = end;
+        leaveRequest.reason = reason.trim();
+        leaveRequest.leaveType = isHalf ? 'half' : 'full';
+        leaveRequest.halfDaySlot = isHalf ? halfDaySlot : undefined;
+
+        await leaveRequest.save();
+
+        res.status(200).json({
+            success: true,
+            data: leaveRequest,
+            message: 'Leave request updated successfully'
+        });
+
+        // Trigger Notification about update
+        const user = await User.findById(leaveRequest.applicant).select('name role').lean();
+        if (user) {
+            await sendLeaveAppliedNotification(leaveRequest, user, start, end, true);
+        }
+    } catch (error) {
+        console.error('[Leave Edit] Error:', error);
+        res.status(500).json({ success: false, message: 'Server Error', error: error.message });
+    }
+});
+
+// @desc    Cancel / Delete leave application (Applicant or Admin)
+// @route   DELETE /api/leaves/:id
+// @access  Private (Applicant, Admin, Super Admin)
+router.delete('/:id', authenticateToken, async (req, res) => {
+    try {
+        if (!req.params.id.match(/^[0-9a-fA-F]{24}$/)) {
+            return res.status(404).json({ success: false, message: 'Invalid leave request ID format' });
+        }
+
+        const leaveRequest = await LeaveRequest.findById(req.params.id);
+        if (!leaveRequest) {
+            return res.status(404).json({ success: false, message: 'Leave request not found' });
+        }
+
+        const isOwner = leaveRequest.applicant.toString() === req.user.userId.toString();
+        const isAdmin = ['admin', 'super admin'].includes(req.user.role);
+
+        if (!isOwner && !isAdmin) {
+            return res.status(403).json({ success: false, message: 'Not authorized to cancel this leave request' });
+        }
+
+        const previousStatus = leaveRequest.status;
+
+        // If approved, cleanly revert any marked attendance records in IST
+        if (previousStatus === 'approved') {
+            const startDate = new Date(leaveRequest.startDate);
+            const endDate = new Date(leaveRequest.endDate);
+            const activeYear = await AcademicYear.findOne({ isActive: true });
+
+            for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
+                const dateToMark = getISTDateObject(d);
+                const deleteFilter = {
+                    user: leaveRequest.applicant,
+                    date: dateToMark,
+                    remarks: 'On Leave (Approved)'
+                };
+                if (activeYear) deleteFilter.academicYear = activeYear._id;
+                await Attendance.deleteOne(deleteFilter);
+            }
+        }
+
+        await LeaveRequest.findByIdAndDelete(req.params.id);
+
+        res.status(200).json({
+            success: true,
+            message: 'Leave request cancelled and removed successfully'
+        });
+    } catch (error) {
+        console.error('[Leave Delete] Error:', error);
         res.status(500).json({ success: false, message: 'Server Error', error: error.message });
     }
 });
@@ -437,7 +690,7 @@ router.put('/:id/action', authenticateToken, checkRole(['teacher', 'admin', 'sup
 
         const activeYear = await AcademicYear.findOne({ isActive: true });
 
-        // Auto-mark attendance as absent if approved
+        // Auto-mark attendance as absent if approved in IST
         if (status === 'approved' && previousStatus !== 'approved') {
             if (!activeYear) {
                 console.error('No active academic year found for leave attendance marking');
@@ -490,12 +743,9 @@ router.put('/:id/action', authenticateToken, checkRole(['teacher', 'admin', 'sup
                 }
             }
         } else if (status === 'rejected' && previousStatus === 'approved') {
-            // Revert attendance (Delete the attendance record IF it was marked as Leave Approved)
-            // This is a simplified revert. If the user was actually absent, this might delete that record too if it matches.
-            // But generally, we want to remove the specific "Leave Approved" record.
+            // Revert attendance (Delete the attendance record marked as Leave Approved in IST)
             for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
-                const dateToMark = new Date(d);
-                dateToMark.setHours(0, 0, 0, 0);
+                const dateToMark = getISTDateObject(d);
 
                 const deleteFilter = {
                     user: leaveRequest.applicant._id,
@@ -513,9 +763,10 @@ router.put('/:id/action', authenticateToken, checkRole(['teacher', 'admin', 'sup
         // Trigger Notification for applicant
         const statusLabel = status.charAt(0).toUpperCase() + status.slice(1);
         const statusEmoji = status === 'approved' ? '✅' : status === 'rejected' ? '❌' : '📋';
+        const leaveDateStr = getISTDateString(leaveRequest.startDate);
         notificationController.triggerNotification({
             title: `${statusEmoji} Leave Request ${statusLabel}`,
-            message: `Your leave request for ${leaveRequest.startDate.toDateString()} has been ${status}. ${status === 'approved' ? 'Enjoy your time off!' : 'Please contact your teacher for more details.'}`,
+            message: `Your leave request for ${leaveDateStr} has been ${status}. ${status === 'approved' ? 'Enjoy your time off!' : 'Please contact your teacher for more details.'}`,
             type: 'General',
             category: 'leave',
             priority: 'high',
@@ -529,18 +780,18 @@ router.put('/:id/action', authenticateToken, checkRole(['teacher', 'admin', 'sup
     }
 });
 
-// @desc    Get daily leave stats (Who is on leave today)
+// @desc    Get daily leave stats (Who is on leave today in IST)
 // @route   GET /api/leaves/daily-stats
 // @access  Private (Admin, Super Admin)
 router.get('/daily-stats', authenticateToken, checkRole(['admin', 'super admin']), async (req, res) => {
     try {
-        const dateStr = req.query.date; // YYYY-MM-DD
+        const dateStr = req.query.date; // YYYY-MM-DD in IST
         const { academicYear } = req.query;
-        let targetDate = dateStr ? new Date(dateStr) : new Date();
+        const { startOfDay, endOfDay } = getISTDayBounds(dateStr || new Date());
 
         let query = {
-            startDate: { $lte: targetDate },
-            endDate: { $gte: targetDate },
+            startDate: { $lte: endOfDay },
+            endDate: { $gte: startOfDay },
             status: 'approved'
         };
 
@@ -548,7 +799,7 @@ router.get('/daily-stats', authenticateToken, checkRole(['admin', 'super admin']
             query.academicYear = academicYear;
         }
 
-        // Find approved leaves that overlap with targetDate
+        // Find approved leaves that overlap with targetDate in IST
         let leaves = await LeaveRequest.find(query)
             .populate('applicant', 'name role profilePhoto email phone currentClass designation')
             .populate({
@@ -575,38 +826,48 @@ router.get('/daily-stats', authenticateToken, checkRole(['admin', 'super admin']
 
         res.status(200).json({ success: true, data: leaves });
     } catch (error) {
-        console.error(error);
+        console.error('[Daily Stats] Error:', error);
         res.status(500).json({ success: false, message: 'Server Error' });
     }
 });
 
-// @desc    Get leave balance
+// @desc    Get leave balance (IST & Academic Year aware)
 // @route   GET /api/leaves/balance
 // @access  Private (Teacher, Admin, Super Admin)
 router.get('/balance', authenticateToken, async (req, res) => {
     try {
-        // Simple calculation: Total allowed (e.g., 12) - Approved Leaves this year
-        // In a real app, "Total allowed" might come from a settings/policy collection
         const TOTAL_ALLOWED = 12;
 
-        const currentYear = new Date().getFullYear();
-        const startOfYear = new Date(currentYear, 0, 1);
-        const endOfYear = new Date(currentYear, 11, 31);
+        // Determine date range: Active Academic Year or current calendar year in IST
+        const activeYearDoc = await AcademicYear.findOne({ isActive: true }).lean();
+        let startBound, endBound;
+
+        if (activeYearDoc && activeYearDoc.startDate && activeYearDoc.endDate) {
+            startBound = getISTDateObject(activeYearDoc.startDate);
+            endBound = getISTDateObject(activeYearDoc.endDate);
+        } else {
+            const todayISTStr = getISTToday();
+            const yearStr = todayISTStr.split('-')[0];
+            startBound = getISTDateObject(`${yearStr}-01-01`);
+            endBound = getISTDateObject(`${yearStr}-12-31`);
+        }
 
         const approvedLeaves = await LeaveRequest.find({
             applicant: req.user.userId,
             status: 'approved',
-            startDate: { $gte: startOfYear },
-            endDate: { $lte: endOfYear }
-        });
+            startDate: { $lte: endBound },
+            endDate: { $gte: startBound }
+        }).lean();
 
         let usedDays = 0;
         approvedLeaves.forEach(leave => {
             if (leave.leaveType === 'half') {
                 usedDays += 0.5;
             } else {
-                // Calculate days difference
-                const diffTime = Math.abs(leave.endDate - leave.startDate);
+                // Calculate days difference clamped to boundary
+                const s = new Date(Math.max(new Date(leave.startDate).getTime(), startBound.getTime()));
+                const e = new Date(Math.min(new Date(leave.endDate).getTime(), endBound.getTime()));
+                const diffTime = Math.abs(e - s);
                 const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
                 usedDays += diffDays;
             }
@@ -617,11 +878,11 @@ router.get('/balance', authenticateToken, async (req, res) => {
             data: {
                 total: TOTAL_ALLOWED,
                 used: usedDays,
-                remaining: TOTAL_ALLOWED - usedDays
+                remaining: Math.max(0, TOTAL_ALLOWED - usedDays)
             }
         });
     } catch (error) {
-        console.error(error);
+        console.error('[Leave Balance] Error:', error);
         res.status(500).json({ success: false, message: 'Server Error' });
     }
 });
