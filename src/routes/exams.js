@@ -10,6 +10,7 @@ const Subject = require('../models/Subject');
 const Class = require('../models/Class');
 const AcademicYear = require('../models/AcademicYear');
 const { sendTargetedNotification } = require('../services/notificationService');
+const { invalidateDashboardCaches } = require('../controllers/dashboardController');
 
 const hasObjectIdMatch = (ids = [], userId) => ids.some((id) => id && id.toString() === userId);
 
@@ -150,6 +151,7 @@ router.post('/standardized', auth, async (req, res) => {
         });
 
         await exam.save();
+        invalidateDashboardCaches().catch(() => {});
 
         const populatedExam = await Exam.findById(exam._id)
             .populate('class', 'name section')
@@ -240,6 +242,7 @@ router.post('/standardized/bulk', auth, async (req, res) => {
                 type: 'Exam'
             });
         }
+        invalidateDashboardCaches().catch(() => {});
 
         res.json(results);
     } catch (err) {
@@ -356,6 +359,7 @@ router.post('/school-wide/init', auth, async (req, res) => {
                     type: 'Exam'
                 });
             }
+            invalidateDashboardCaches().catch(() => {});
         }
 
         res.json({
@@ -429,6 +433,7 @@ router.put('/:id', auth, async (req, res) => {
         if (instructions !== undefined) exam.instructions = instructions;
         if (duration) exam.duration = duration;
         await exam.save();
+        invalidateDashboardCaches().catch(() => {});
         res.json(await Exam.findById(exam._id).populate('class subject createdBy'));
     } catch (err) {
         console.error(err.message);
@@ -447,6 +452,7 @@ router.delete('/:id', auth, async (req, res) => {
         }
         await Marks.deleteMany({ exam: req.params.id });
         await Exam.findByIdAndDelete(req.params.id);
+        invalidateDashboardCaches().catch(() => {});
         res.json({ message: 'Exam and associated marks deleted' });
     } catch (err) {
         console.error(err.message);
@@ -459,11 +465,11 @@ router.get('/schedule/student', [auth, yearContext], async (req, res) => {
     try {
         const user = await User.findById(req.user.userId);
         if (!user || user.role !== 'student') return res.status(403).json({ message: 'Not authorized' });
+        const ayId = req.academicYearContext || user.academicYear;
         const exams = await Exam.find({
             class: user.currentClass,
-            academicYear: req.academicYearContext,
-            isStandardized: true
-        }).populate('subject class').sort({ date: 1 }).lean();
+            ...(ayId ? { academicYear: ayId } : {})
+        }).populate('subject class').sort({ date: 1, examDate: 1 }).lean();
         res.json(exams);
     } catch (err) {
         console.error(err.message);
@@ -1242,6 +1248,7 @@ router.post('/quick-init', [auth, yearContext, requireOpenYear], async (req, res
                 await exam.save(); results.push({ type, status: 'created', exam });
             } else results.push({ type, status: 'exists', exam });
         }
+        invalidateDashboardCaches().catch(() => {});
         res.json({ message: 'Quick initialization complete', results });
     } catch (err) {
         console.error(err.message);

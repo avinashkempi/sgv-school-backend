@@ -110,7 +110,7 @@ router.get('/:id', auth, async (req, res) => {
         if (!req.params.id.match(/^[0-9a-fA-F]{24}$/)) {
             return res.status(404).json({ msg: 'Invalid class ID format' });
         }
-        const classData = await Class.findById(req.params.id).populate('classTeacher', 'name email profilePhoto');
+        const classData = await Class.findById(req.params.id).populate('classTeacher', 'name email profilePhoto role phone phone2 designation address joiningDate remarks');
         if (!classData) {
             return res.status(404).json({ msg: 'Class not found' });
         }
@@ -130,8 +130,8 @@ router.get('/:id', auth, async (req, res) => {
 router.get('/:id/full-details', auth, async (req, res) => {
     try {
         const [classData, subjects, students] = await Promise.all([
-            Class.findById(req.params.id).populate('classTeacher', 'name email profilePhoto'),
-            Subject.find({ class: req.params.id }).populate('teachers', 'name email profilePhoto').sort({ name: 1 }),
+            Class.findById(req.params.id).populate('classTeacher', 'name email profilePhoto role phone phone2 designation address joiningDate remarks'),
+            Subject.find({ class: req.params.id }).populate('teachers', 'name email profilePhoto role phone phone2 designation').sort({ name: 1 }),
             User.find({ currentClass: req.params.id, role: 'student' })
                 .select('-password')
                 .populate('currentClass', 'name')

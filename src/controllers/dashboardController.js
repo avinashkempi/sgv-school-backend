@@ -740,14 +740,22 @@ exports.getStudentStats = async (req, res) => {
                 }
             ]),
             // Next exam filtered to student's class
-            classId
-                ? Exam.findOne({
-                    examDate: { $gte: new Date() },
-                    class: classId
-                }).sort({ examDate: 1 }).select('examDate name').lean()
-                : Exam.findOne({
-                    examDate: { $gte: new Date() }
-                }).sort({ examDate: 1 }).select('examDate name').lean()
+            (() => {
+                const todayStart = new Date();
+                todayStart.setHours(0, 0, 0, 0);
+                const query = {
+                    $or: [
+                        { date: { $gte: todayStart } },
+                        { examDate: { $gte: todayStart } }
+                    ],
+                    ...(classId ? { class: classId } : {})
+                };
+                return Exam.findOne(query)
+                    .sort({ date: 1, examDate: 1 })
+                    .select('date examDate name standardizedType subject')
+                    .populate('subject', 'name')
+                    .lean();
+            })()
         ]);
 
         // 1. Attendance % (academic year)
@@ -772,9 +780,13 @@ exports.getStudentStats = async (req, res) => {
                 subjectCount: recentMarks.find(m => m._id === type)?.subjectCount || 0
             }));
 
-        // 4. Next Exam Date
-        const nextExamDate = nextExam
-            ? getISTDateString(nextExam.examDate)
+        // 4. Next Exam Date & Name
+        const examDateVal = nextExam?.date || nextExam?.examDate;
+        const nextExamDate = examDateVal
+            ? getISTDateString(examDateVal)
+            : null;
+        const nextExamName = nextExam
+            ? (nextExam.subject?.name || nextExam.name || nextExam.standardizedType || null)
             : null;
 
         const responseData = {
@@ -787,7 +799,7 @@ exports.getStudentStats = async (req, res) => {
                 concession: studentFeeRecord?.concession || 0,
                 totalPaid: studentFeeRecord?.totalPaid || 0,
                 nextExamDate,
-                nextExamName: nextExam?.name || null
+                nextExamName
             },
             charts: {
                 performanceTrend
