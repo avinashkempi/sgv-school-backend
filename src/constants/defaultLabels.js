@@ -262,6 +262,8 @@ const DEFAULT_LABELS = {
     "resetPassword": "Reset Password",
     "contactInfo": "CONTACT INFO",
     "studentDetails": "STUDENT DETAILS",
+    "teacherDetails": "TEACHER DETAILS",
+    "academicAndPersonalDetails": "ACADEMIC & PERSONAL DETAILS",
     "staffDetails": "STAFF DETAILS",
     "personalDetails": "PERSONAL DETAILS",
     "academicIds": "ACADEMIC IDs",

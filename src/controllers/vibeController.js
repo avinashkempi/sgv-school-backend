@@ -231,9 +231,9 @@ exports.createVibe = async (req, res) => {
       }
     }
 
-    const finalCategory = (postIdentity === 'school' || category === 'official')
-      ? 'official'
-      : (['general', 'achievement', 'life', 'sports', 'arts'].includes(category) ? category : 'general');
+    const finalCategory = isAdmin
+      ? ((postIdentity === 'school' || category === 'official') ? 'official' : (['general', 'achievement', 'life', 'sports', 'arts'].includes(category) ? category : 'general'))
+      : (['achievement', 'life', 'sports', 'arts'].includes(category) ? category : 'general');
 
     const vibe = new Vibe({
       caption: caption ? caption.trim() : '',
@@ -343,16 +343,30 @@ exports.updateVibe = async (req, res) => {
       vibe.postAs = postAs === 'school' ? 'school' : 'self';
     }
 
-    if (category !== undefined && ['general', 'achievement', 'life', 'sports', 'arts', 'official'].includes(category)) {
-      vibe.category = (vibe.postAs === 'school' || category === 'official') ? 'official' : category;
-    } else if (vibe.postAs === 'school') {
-      vibe.category = 'official';
+    if (isAdmin) {
+      if (category !== undefined && ['general', 'achievement', 'life', 'sports', 'arts', 'official'].includes(category)) {
+        vibe.category = (vibe.postAs === 'school' || category === 'official') ? 'official' : category;
+      } else if (vibe.postAs === 'school') {
+        vibe.category = 'official';
+      }
+      if (isSpotlight !== undefined) {
+        vibe.isSpotlight = Boolean(isSpotlight);
+      }
+    } else {
+      // Non-admin cannot post as official or change spotlight
+      if (category !== undefined && ['general', 'achievement', 'life', 'sports', 'arts'].includes(category)) {
+        vibe.category = category;
+      }
+      vibe.isSpotlight = false;
+
+      // Reset status to pending for moderation when edited by non-admin
+      vibe.status = 'pending';
+      vibe.reviewedBy = undefined;
+      vibe.reviewedAt = undefined;
+      vibe.rejectionReason = undefined;
     }
 
     if (location !== undefined) vibe.location = location ? location.trim() : '';
-    if (isAdmin && isSpotlight !== undefined) {
-      vibe.isSpotlight = Boolean(isSpotlight);
-    }
 
     if (images !== undefined && Array.isArray(images) && images.length > 0) {
       const isVideoMedia = (img) => {
@@ -409,10 +423,39 @@ exports.updateVibe = async (req, res) => {
       populate: { path: 'currentClass', select: 'label name section' }
     });
 
+    // Notify administrators if a non-admin user updated a vibe and sent it for review
+    if (!isAdmin) {
+      (async () => {
+        try {
+          const authorName = req.user.name || 'A community member';
+          const title = '✨ Edited Vibe Submitted for Review';
+          const message = `${authorName} updated their vibe: "${(vibe.caption || '').slice(0, 60)}"`;
+
+          await Notification.create({
+            title,
+            message,
+            type: 'General',
+            category: 'general',
+            targetRole: 'admin',
+            actionType: 'navigate',
+            actionData: '/admin/vibe-approvals'
+          }).catch(() => {});
+
+          await sendTargetedNotification('admin', null, {
+            title,
+            message,
+            type: 'General'
+          }).catch(() => {});
+        } catch (notifErr) {
+          logger.error('[Update Vibe] Admin notification error:', notifErr);
+        }
+      })();
+    }
+
     res.status(200).json({
       success: true,
       data: vibe.toObject(),
-      message: 'Vibe updated successfully'
+      message: isAdmin ? 'Vibe updated successfully' : 'Vibe updated and submitted for admin review!'
     });
   } catch (error) {
     logger.error('Error updating vibe:', error);
@@ -444,7 +487,12 @@ exports.deleteVibe = async (req, res) => {
     }
 
     vibe.isActive = false;
+    vibe.isSpotlight = false;
+    vibe.isPinned = false;
     await vibe.save();
+
+    // Clean up associated bookmarks
+    await VibeBookmark.deleteMany({ vibe: vibe._id }).catch(() => {});
 
     res.status(200).json({ success: true, message: 'Vibe deleted successfully' });
   } catch (error) {
@@ -974,34 +1022,115 @@ exports.getMySavedVibes = async (req, res) => {
     const page = Math.max(parseInt(req.query.page) || 1, 1);
     const limit = Math.min(Math.max(parseInt(req.query.limit) || 15, 1), 50);
     const skip = (page - 1) * limit;
+    const userObjId = new mongoose.Types.ObjectId(req.user.userId);
 
-    const bookmarks = await VibeBookmark.find({ user: req.user.userId })
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit)
-      .populate({
-        path: 'vibe',
-        match: { isActive: true, status: 'approved' },
-        populate: { path: 'author', select: 'name role profilePhoto currentClass designation' }
-      })
-      .lean();
+    const matchPipeline = [
+      { $match: { user: userObjId } },
+      {
+        $lookup: {
+          from: 'vibes',
+          localField: 'vibe',
+          foreignField: '_id',
+          as: 'vibeDoc'
+        }
+      },
+      { $unwind: '$vibeDoc' },
+      {
+        $match: {
+          'vibeDoc.isActive': true,
+          'vibeDoc.status': 'approved'
+        }
+      }
+    ];
 
-    const vibeIds = bookmarks.map(b => b.vibe?._id).filter(Boolean);
+    const [savedResults, countResult] = await Promise.all([
+      VibeBookmark.aggregate([
+        ...matchPipeline,
+        { $sort: { createdAt: -1 } },
+        { $skip: skip },
+        { $limit: limit },
+        {
+          $lookup: {
+            from: 'users',
+            localField: 'vibeDoc.author',
+            foreignField: '_id',
+            as: 'authorDoc'
+          }
+        },
+        {
+          $unwind: {
+            path: '$authorDoc',
+            preserveNullAndEmptyArrays: true
+          }
+        },
+        {
+          $lookup: {
+            from: 'classes',
+            localField: 'authorDoc.currentClass',
+            foreignField: '_id',
+            as: 'classDoc'
+          }
+        },
+        {
+          $unwind: {
+            path: '$classDoc',
+            preserveNullAndEmptyArrays: true
+          }
+        },
+        {
+          $project: {
+            _id: '$vibeDoc._id',
+            caption: '$vibeDoc.caption',
+            category: '$vibeDoc.category',
+            images: '$vibeDoc.images',
+            author: {
+              _id: '$authorDoc._id',
+              name: '$authorDoc.name',
+              role: '$authorDoc.role',
+              profilePhoto: '$authorDoc.profilePhoto',
+              designation: '$authorDoc.designation',
+              currentClass: {
+                _id: '$classDoc._id',
+                label: '$classDoc.label',
+                name: '$classDoc.name',
+                section: '$classDoc.section'
+              }
+            },
+            postAs: '$vibeDoc.postAs',
+            authorRole: '$vibeDoc.authorRole',
+            status: '$vibeDoc.status',
+            tags: '$vibeDoc.tags',
+            location: '$vibeDoc.location',
+            likesCount: '$vibeDoc.likesCount',
+            commentsCount: '$vibeDoc.commentsCount',
+            isPinned: '$vibeDoc.isPinned',
+            isSpotlight: '$vibeDoc.isSpotlight',
+            createdAt: '$vibeDoc.createdAt',
+            updatedAt: '$vibeDoc.updatedAt'
+          }
+        }
+      ]),
+      VibeBookmark.aggregate([
+        ...matchPipeline,
+        { $count: 'total' }
+      ])
+    ]);
+
+    const total = countResult[0]?.total || 0;
+    const vibeIds = savedResults.map(v => v._id);
     let likedVibeIds = new Set();
     if (vibeIds.length > 0) {
       const userLikes = await VibeLike.find({ vibe: { $in: vibeIds }, user: req.user.userId }).select('vibe').lean();
       likedVibeIds = new Set(userLikes.map(l => l.vibe.toString()));
     }
 
-    const vibes = bookmarks.map(b => b.vibe).filter(Boolean).map(v => ({
+    const vibes = savedResults.map(v => ({
       ...v,
       likesCount: Math.max(0, Number(v.likesCount) || 0),
       commentsCount: Math.max(0, Number(v.commentsCount) || 0),
       isLiked: likedVibeIds.has(v._id.toString()),
       isBookmarked: true
     }));
-
-    const total = await VibeBookmark.countDocuments({ user: req.user.userId });
 
     res.status(200).json({
       success: true,
@@ -1010,7 +1139,8 @@ exports.getMySavedVibes = async (req, res) => {
         page,
         limit,
         total,
-        hasMore: skip + bookmarks.length < total
+        totalPages: Math.ceil(total / limit),
+        hasMore: skip + vibes.length < total
       }
     });
   } catch (error) {
