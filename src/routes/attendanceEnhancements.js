@@ -148,11 +148,11 @@ router.get('/calendar/:classId', auth, async (req, res) => {
 });
 
 // @route   GET /api/attendance/low-attendance-alerts
-// @desc    Get students with attendance below threshold
+// @desc    Get students with attendance below threshold (default 90%)
 // @access  Private (Teacher/Admin)
 router.get('/low-attendance-alerts', auth, async (req, res) => {
     try {
-        const { classId, threshold = 75, days = 30 } = req.query;
+        const { classId, threshold = 90, days = 30 } = req.query;
 
         const startDate = new Date();
         startDate.setDate(startDate.getDate() - parseInt(days));
@@ -204,7 +204,7 @@ router.get('/low-attendance-alerts', auth, async (req, res) => {
                         absentDays: totalDays - presentDays,
                         percentage: percentage.toFixed(1)
                     },
-                    severity: percentage < 50 ? 'critical' : percentage < 65 ? 'high' : 'medium'
+                    severity: percentage < 75 ? 'critical' : percentage < 85 ? 'high' : 'medium'
                 });
             }
         }

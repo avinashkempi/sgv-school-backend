@@ -415,7 +415,7 @@ exports.getTeacherStats = async (req, res) => {
                 date: getISTDateString(today)
             };
 
-            // 4. Low Attendance Students (< 75%) — last 30 days
+            // 4. Low Attendance Students (< 90%) — last 30 days
             const { startDate: low30Start, endDate: low30End } = getDateRange('last30Days');
 
             const lowAttFilter = {
@@ -444,7 +444,7 @@ exports.getTeacherStats = async (req, res) => {
 
             lowAttendanceCount = attendanceStats.filter(stat => {
                 const pct = stat.total > 0 ? (stat.present / stat.total) * 100 : 0;
-                return pct < 75;
+                return pct < 90;
             }).length;
 
             // 5. Attendance Trend — Last 7 working days
