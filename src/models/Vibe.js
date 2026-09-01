@@ -9,7 +9,7 @@ const vibeSchema = new mongoose.Schema({
   },
   category: {
     type: String,
-    enum: ['general', 'achievement', 'life', 'sports', 'arts', 'official'],
+    trim: true,
     default: 'general'
   },
   images: [{

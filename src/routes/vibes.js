@@ -7,6 +7,7 @@ const {
 const {
   listVibes,
   getVibe,
+  getCategories,
   createVibe,
   updateVibe,
   deleteVibe,
@@ -31,6 +32,9 @@ const {
 } = require('../controllers/vibeController');
 
 const router = express.Router();
+
+// ── Categories ──
+router.get('/categories', optionalAuthenticateToken, getCategories);
 
 // ── Highlights & Spotlight (Public / Authenticated) ──
 router.get('/highlights', optionalAuthenticateToken, getVibeHighlights);

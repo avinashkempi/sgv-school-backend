@@ -6,9 +6,26 @@ const VibeBookmark = require('../models/VibeBookmark');
 const VibeView = require('../models/VibeView');
 const Notification = require('../models/Notification');
 const { sendTargetedNotification } = require('../services/notificationService');
+const { VIBE_CATEGORIES } = require('../constants/vibeCategories');
 const logger = require('../utils/logger');
 
 const isValidObjectId = (id) => Boolean(id && id !== 'undefined' && id !== 'null' && mongoose.Types.ObjectId.isValid(id));
+
+/**
+ * GET /api/vibes/categories
+ * Fetch available vibe categories.
+ */
+exports.getCategories = async (req, res) => {
+  try {
+    res.status(200).json({
+      success: true,
+      data: VIBE_CATEGORIES
+    });
+  } catch (error) {
+    logger.error('Error fetching vibe categories:', error);
+    res.status(500).json({ success: false, message: 'Server error while fetching categories' });
+  }
+};
 
 /**
  * GET /api/vibes
@@ -29,7 +46,7 @@ exports.listVibes = async (req, res) => {
     if (category && category !== 'all') {
       if (category === 'official') {
         query.$or = [{ postAs: 'school' }, { category: 'official' }];
-      } else if (['general', 'achievement', 'life', 'sports', 'arts'].includes(category)) {
+      } else {
         query.category = category;
       }
     }
@@ -231,9 +248,10 @@ exports.createVibe = async (req, res) => {
       }
     }
 
+    const rawCat = (category && typeof category === 'string') ? category.trim() : 'general';
     const finalCategory = isAdmin
-      ? ((postIdentity === 'school' || category === 'official') ? 'official' : (['general', 'achievement', 'life', 'sports', 'arts'].includes(category) ? category : 'general'))
-      : (['achievement', 'life', 'sports', 'arts'].includes(category) ? category : 'general');
+      ? ((postIdentity === 'school' || rawCat === 'official') ? 'official' : (rawCat || 'general'))
+      : (rawCat === 'official' ? 'general' : (rawCat || 'general'));
 
     const vibe = new Vibe({
       caption: caption ? caption.trim() : '',
@@ -344,8 +362,9 @@ exports.updateVibe = async (req, res) => {
     }
 
     if (isAdmin) {
-      if (category !== undefined && ['general', 'achievement', 'life', 'sports', 'arts', 'official'].includes(category)) {
-        vibe.category = (vibe.postAs === 'school' || category === 'official') ? 'official' : category;
+      if (category !== undefined) {
+        const rawCat = (typeof category === 'string') ? category.trim() : 'general';
+        vibe.category = (vibe.postAs === 'school' || rawCat === 'official') ? 'official' : rawCat;
       } else if (vibe.postAs === 'school') {
         vibe.category = 'official';
       }
@@ -354,8 +373,9 @@ exports.updateVibe = async (req, res) => {
       }
     } else {
       // Non-admin cannot post as official or change spotlight
-      if (category !== undefined && ['general', 'achievement', 'life', 'sports', 'arts'].includes(category)) {
-        vibe.category = category;
+      if (category !== undefined) {
+        const rawCat = (typeof category === 'string') ? category.trim() : 'general';
+        vibe.category = rawCat === 'official' ? 'general' : rawCat;
       }
       vibe.isSpotlight = false;
 
