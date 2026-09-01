@@ -345,7 +345,7 @@ router.get('/analytics/class/:classId', [auth, yearContext], async (req, res) =>
         const students = await User.find({
             currentClass: req.params.classId,
             role: 'student'
-        }).select('name email');
+        }).select('name email profilePhoto');
 
         // Get all marks
         const examIds = exams.map(e => e._id);
@@ -376,6 +376,7 @@ router.get('/analytics/class/:classId', [auth, yearContext], async (req, res) =>
                 studentId: student._id,
                 studentName: student.name,
                 email: student.email,
+                profilePhoto: student.profilePhoto || null,
                 totalObtained,
                 totalMax,
                 percentage: parseFloat(percentage),
