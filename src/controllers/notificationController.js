@@ -64,7 +64,7 @@ exports.getNotifications = async (req, res) => {
         // Fetch paginated notifications and counts in parallel using aggregate
         const [notifications, countStats] = await Promise.all([
             Notification.find(query)
-                .select('-actionData -metadata')
+                .select('-__v')
                 .sort({ createdAt: -1 })
                 .skip(skip)
                 .limit(limit)
@@ -352,7 +352,11 @@ exports.sendNotification = async (req, res) => {
             message,
             type,
             category,
-            priority
+            priority,
+            actionType,
+            actionData,
+            metadata,
+            _id: notification._id
         }, sendToPublic || false);
 
         res.status(201).json({ success: true, notification });
@@ -440,6 +444,10 @@ exports.triggerNotification = async (data) => {
             type: type || 'General',
             category: category || 'general',
             priority: priority || 'medium',
+            actionType: actionType || 'none',
+            actionData,
+            metadata,
+            _id: notification._id
         });
 
         return notification;

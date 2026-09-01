@@ -212,10 +212,13 @@ async function sendClassContentNotification(classId, content) {
 
         const data = {
             type: 'class_content',
-            contentId: content._id.toString(),
+            contentId: content._id ? content._id.toString() : '',
             contentType: content.type || 'note',
-            classId: classId.toString(),
-            subjectId: content.subject?._id ? content.subject._id.toString() : (content.subject ? content.subject.toString() : '')
+            classId: classId ? classId.toString() : '',
+            subjectId: content.subject?._id ? content.subject._id.toString() : (content.subject ? content.subject.toString() : ''),
+            category: content.type === 'homework' ? 'homework' : 'class_content',
+            actionType: 'navigate',
+            actionData: '/student/class',
         };
 
         return await sendBatchNotifications(tokens, notification, data);
@@ -372,10 +375,21 @@ async function sendTargetedNotification(target, targetId, notificationData, send
         };
 
         const data = {
-            type: 'general',
+            type: (notificationData.type || 'general').toLowerCase(),
             notificationType: notificationData.type || 'General',
-            target: target,
+            category: notificationData.category || 'general',
+            target: target || 'all',
             targetId: targetId ? targetId.toString() : '',
+            actionType: notificationData.actionType || 'none',
+            actionData: notificationData.actionData
+                ? (typeof notificationData.actionData === 'object' ? JSON.stringify(notificationData.actionData) : String(notificationData.actionData))
+                : '',
+            metadata: notificationData.metadata
+                ? (typeof notificationData.metadata === 'object' ? JSON.stringify(notificationData.metadata) : String(notificationData.metadata))
+                : '',
+            ...(notificationData._id ? { notificationId: notificationData._id.toString() } : {}),
+            ...(notificationData.eventId ? { eventId: notificationData.eventId.toString() } : {}),
+            ...(notificationData.route ? { route: String(notificationData.route) } : {}),
         };
 
         return await sendBatchNotifications(filteredTokens, notification, data);
