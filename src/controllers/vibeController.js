@@ -491,8 +491,13 @@ exports.deleteVibe = async (req, res) => {
     vibe.isPinned = false;
     await vibe.save();
 
-    // Clean up associated bookmarks
-    await VibeBookmark.deleteMany({ vibe: vibe._id }).catch(() => {});
+    // Clean up associated bookmarks, likes, views, and comments
+    await Promise.all([
+      VibeBookmark.deleteMany({ vibe: vibe._id }),
+      VibeLike.deleteMany({ vibe: vibe._id }),
+      VibeView.deleteMany({ vibe: vibe._id }),
+      VibeComment.updateMany({ vibe: vibe._id }, { isActive: false })
+    ]).catch(() => {});
 
     res.status(200).json({ success: true, message: 'Vibe deleted successfully' });
   } catch (error) {
@@ -1450,11 +1455,12 @@ exports.getVibeHighlights = async (req, res) => {
         })
         .lean(),
 
-      // Recent campus vibes from students & teachers
+      // Recent campus vibes from students & teachers (excluding official announcements to prevent duplication)
       Vibe.find({
         status: 'approved',
         isActive: true,
-        postAs: 'self'
+        postAs: 'self',
+        category: { $ne: 'official' }
       })
         .sort({ createdAt: -1 })
         .limit(15)
@@ -1501,7 +1507,8 @@ exports.getVibeHighlights = async (req, res) => {
     // Group recent campus vibes by unique author for circular story bubbles
     const authorStoriesMap = new Map();
     for (const vibe of enhancedRecentCampus) {
-      const authorId = vibe.author?._id?.toString() || 'unknown';
+      if (!vibe.author || !vibe.author._id) continue;
+      const authorId = vibe.author._id.toString();
       if (!authorStoriesMap.has(authorId)) {
         authorStoriesMap.set(authorId, {
           author: vibe.author,
