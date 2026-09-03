@@ -8,8 +8,8 @@ const router = express.Router();
 // POST /api/events - Add a new event and create a notification immediately (admin only)
 router.post('/', authenticateToken, requireAdmin, createEventValidation, createEvent);
 
-// GET /api/events/:id - Get a specific event by ID (admin only)
-router.get('/:id', authenticateToken, requireAdmin, getEventById);
+// GET /api/events/:id - Get a specific event by ID (accessible to all authenticated and public users)
+router.get('/:id', getEventById);
 
 // Get all the events (public - no authentication required)
 router.get('/', getEvent);

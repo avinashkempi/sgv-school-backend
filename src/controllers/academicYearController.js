@@ -284,7 +284,7 @@ exports.executeTransition = async (req, res) => {
                             presentDays: {
                                 $sum: {
                                     $cond: [
-                                        { $in: ['$status', ['present', 'late', 'excused']] },
+                                        { $in: ['$status', ['present', 'half-day']] },
                                         1,
                                         0
                                     ]
@@ -701,7 +701,7 @@ exports.getReports = async (req, res) => {
                         totalDays: { $sum: 1 },
                         presentDays: {
                             $sum: {
-                                $cond: [{ $in: ['$status', ['present', 'late', 'excused']] }, 1, 0]
+                                $cond: [{ $in: ['$status', ['present', 'half-day']] }, 1, 0]
                             }
                         },
                         absentDays: {
@@ -709,19 +709,9 @@ exports.getReports = async (req, res) => {
                                 $cond: [{ $eq: ['$status', 'absent'] }, 1, 0]
                             }
                         },
-                        lateDays: {
-                            $sum: {
-                                $cond: [{ $eq: ['$status', 'late'] }, 1, 0]
-                            }
-                        },
                         halfDays: {
                             $sum: {
                                 $cond: [{ $eq: ['$status', 'half-day'] }, 1, 0]
-                            }
-                        },
-                        excusedDays: {
-                            $sum: {
-                                $cond: [{ $eq: ['$status', 'excused'] }, 1, 0]
                             }
                         }
                     }

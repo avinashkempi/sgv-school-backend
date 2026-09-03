@@ -27,17 +27,24 @@ exports.globalSearch = async (req, res) => {
 
         const searchTasks = [];
 
+        const userRole = req.user?.role;
+        const isAdmin = userRole === 'admin' || userRole === 'super admin';
+
         // Search Users (students, teachers, staff)
         if (searchEntities.includes('users')) {
+            const userFields = isAdmin
+                ? 'name email phone role currentClass profilePhoto'
+                : 'name email role currentClass profilePhoto';
+
             searchTasks.push(
                 User.find({
                     $or: [
                         { name: searchRegex },
                         { email: searchRegex },
-                        { phone: searchRegex }
+                        ...(isAdmin ? [{ phone: searchRegex }] : [])
                     ]
                 })
-                    .select('name email phone role currentClass profilePhoto')
+                    .select(userFields)
                     .populate('currentClass', 'name section')
                     .limit(parsedLimit)
                     .lean()
@@ -88,15 +95,21 @@ exports.globalSearch = async (req, res) => {
             );
         }
 
-        // Search Complaints
+        // Search Complaints (Admins see all; students see only their own)
         if (searchEntities.includes('complaints')) {
+            const complaintQuery = {
+                $or: [
+                    { title: searchRegex },
+                    { description: searchRegex }
+                ]
+            };
+
+            if (!isAdmin) {
+                complaintQuery.student = req.user.userId;
+            }
+
             searchTasks.push(
-                Complaint.find({
-                    $or: [
-                        { title: searchRegex },
-                        { description: searchRegex }
-                    ]
-                })
+                Complaint.find(complaintQuery)
                     .populate('student', 'name')
                     .limit(parsedLimit)
                     .lean()
@@ -197,7 +210,7 @@ exports.filterStudents = async (req, res) => {
                         _id: '$user',
                         totalDays: { $sum: 1 },
                         presentDays: {
-                            $sum: { $cond: [{ $in: ['$status', ['present', 'late', 'excused']] }, 1, 0] }
+                            $sum: { $cond: [{ $in: ['$status', ['present', 'half-day']] }, 1, 0] }
                         }
                     }
                 }
@@ -351,7 +364,13 @@ exports.filterComplaints = async (req, res) => {
             limit = 20
         } = req.query;
 
+        const userRole = req.user?.role;
+        const isAdmin = userRole === 'admin' || userRole === 'super admin';
+
         const query = {};
+        if (!isAdmin) {
+            query.student = req.user.userId;
+        }
 
         // Status filter
         if (status && status !== 'all') {

@@ -3,6 +3,7 @@ const router = express.Router();
 const { authenticateToken: auth, checkRole } = require('../middleware/auth');
 const FeePayment = require('../models/FeePayment');
 const FeeStructure = require('../models/FeeStructure');
+const StudentFee = require('../models/StudentFee');
 const User = require('../models/User');
 const { triggerNotification } = require('../controllers/notificationController');
 const { isAdminRole, requireFeeReceiptAccess } = require('../middleware/accessControl');
@@ -23,23 +24,40 @@ router.get('/export-arrears/:academicYearId', [auth, checkRole(['admin', 'super 
         for (const student of students) {
             if (!student.currentClass) continue;
 
-            const feeStructure = await FeeStructure.findOne({
-                class: student.currentClass._id,
-                academicYear: academicYearId,
-                type: 'class_default'
-            });
+            let totalFees = 0;
+            let paidAmount = 0;
+            let pendingAmount = 0;
 
-            if (!feeStructure) continue;
-
-            const payments = await FeePayment.find({
+            // 1. Check for imported fee record (StudentFee) first
+            const studentFee = await StudentFee.findOne({
                 student: student._id,
-                academicYear: academicYearId,
-                status: 'success'
+                academicYear: academicYearId
             }).lean();
 
-            const totalFees = feeStructure.totalAmount;
-            const paidAmount = payments.reduce((sum, p) => sum + p.amount, 0);
-            const pendingAmount = totalFees - paidAmount;
+            if (studentFee) {
+                totalFees = studentFee.toPay || studentFee.totalFees || 0;
+                paidAmount = studentFee.totalPaid || 0;
+                pendingAmount = studentFee.pendingAmount !== undefined ? studentFee.pendingAmount : Math.max(0, totalFees - paidAmount);
+            } else {
+                // 2. Fallback to FeeStructure and FeePayment
+                const feeStructure = await FeeStructure.findOne({
+                    class: student.currentClass._id,
+                    academicYear: academicYearId,
+                    type: 'class_default'
+                });
+
+                if (!feeStructure) continue;
+
+                const payments = await FeePayment.find({
+                    student: student._id,
+                    academicYear: academicYearId,
+                    status: 'success'
+                }).lean();
+
+                totalFees = feeStructure.totalAmount || 0;
+                paidAmount = payments.reduce((sum, p) => sum + (p.amount || 0), 0);
+                pendingAmount = Math.max(0, totalFees - paidAmount);
+            }
 
             if (pendingAmount > 0) {
                 defaulters.push({
@@ -91,37 +109,54 @@ router.get('/defaulters', [auth, checkRole(['admin', 'super admin'])], async (re
         for (const student of students) {
             if (!student.currentClass || !student.academicYear) continue;
 
-            // Get fee structure
-            const feeStructure = await FeeStructure.findOne({
-                class: student.currentClass._id,
-                academicYear: student.academicYear._id,
-                type: 'class_default'
-            });
+            let totalFees = 0;
+            let paidAmount = 0;
+            let pendingAmount = 0;
+            let paymentSchedule = [];
 
-            if (!feeStructure) continue;
+            // 1. Check StudentFee first
+            const studentFee = await StudentFee.findOne({
+                student: student._id,
+                academicYear: student.academicYear._id
+            }).lean();
 
-            // Get payments
             const payments = await FeePayment.find({
                 student: student._id,
                 academicYear: student.academicYear._id,
                 status: 'success'
             }).lean();
 
-            const totalFees = feeStructure.totalAmount;
-            const paidAmount = payments.reduce((sum, p) => sum + p.amount, 0);
-            const pendingAmount = totalFees - paidAmount;
+            const feeStructure = await FeeStructure.findOne({
+                class: student.currentClass._id,
+                academicYear: student.academicYear._id,
+                type: 'class_default'
+            }).lean();
+
+            if (feeStructure?.paymentSchedule) {
+                paymentSchedule = feeStructure.paymentSchedule;
+            }
+
+            if (studentFee) {
+                totalFees = studentFee.toPay || studentFee.totalFees || 0;
+                paidAmount = studentFee.totalPaid || 0;
+                pendingAmount = studentFee.pendingAmount !== undefined ? studentFee.pendingAmount : Math.max(0, totalFees - paidAmount);
+            } else if (feeStructure) {
+                totalFees = feeStructure.totalAmount || 0;
+                paidAmount = payments.reduce((sum, p) => sum + (p.amount || 0), 0);
+                pendingAmount = Math.max(0, totalFees - paidAmount);
+            } else {
+                continue;
+            }
 
             if (pendingAmount > parseFloat(minAmount)) {
                 // Calculate fine if payment is overdue
                 let fine = 0;
                 const today = new Date();
 
-                if (feeStructure.paymentSchedule && feeStructure.paymentSchedule.length > 0) {
-                    // Check for overdue installments
-                    feeStructure.paymentSchedule.forEach(schedule => {
+                if (paymentSchedule.length > 0) {
+                    paymentSchedule.forEach(schedule => {
                         const dueDate = new Date(schedule.dueDate);
                         if (dueDate < today) {
-                            // Simple fine: 1% per month overdue
                             const monthsOverdue = Math.floor((today - dueDate) / (30 * 24 * 60 * 60 * 1000));
                             if (monthsOverdue > 0) {
                                 fine += (schedule.amount * 0.01 * monthsOverdue);
@@ -146,8 +181,8 @@ router.get('/defaulters', [auth, checkRole(['admin', 'super admin'])], async (re
                         totalDue: pendingAmount + Math.round(fine)
                     },
                     lastPaymentDate: payments.length > 0
-                        ? payments.sort((a, b) => b.paymentDate - a.paymentDate)[0].paymentDate
-                        : null
+                        ? payments.sort((a, b) => new Date(b.paymentDate) - new Date(a.paymentDate))[0].paymentDate
+                        : (studentFee?.payments?.length > 0 ? studentFee.payments[studentFee.payments.length - 1].date : null)
                 });
             }
         }
@@ -207,28 +242,33 @@ router.get('/collection-summary', [auth, checkRole(['admin', 'super admin'])], a
                     total: { $sum: '$amount' }
                 }
             },
-            { $sort: { '_id': 1 } }
+            { $sort: { _id: 1 } }
         ]);
 
         // Aggregate by class
         const byClass = await FeePayment.aggregate([
             { $match: matchQuery },
             {
+                $group: {
+                    _id: '$class',
+                    count: { $sum: 1 },
+                    total: { $sum: '$amount' }
+                }
+            },
+            {
                 $lookup: {
                     from: 'classes',
-                    localField: 'class',
+                    localField: '_id',
                     foreignField: '_id',
                     as: 'classInfo'
                 }
             },
             { $unwind: '$classInfo' },
             {
-                $group: {
-                    _id: '$class',
-                    className: { $first: '$classInfo.name' },
-                    section: { $first: '$classInfo.section' },
-                    count: { $sum: 1 },
-                    total: { $sum: '$amount' }
+                $project: {
+                    className: { $concat: ['$classInfo.name', ' ', '$classInfo.section'] },
+                    count: 1,
+                    total: 1
                 }
             }
         ]);
@@ -279,25 +319,38 @@ router.post('/send-reminders', [auth, checkRole(['admin', 'super admin'])], asyn
         for (const student of students) {
             if (!student.currentClass || !student.academicYear) continue;
 
-            // Get fee structure
-            const feeStructure = await FeeStructure.findOne({
-                class: student.currentClass,
-                academicYear: student.academicYear,
-                type: 'class_default'
-            });
+            let totalFees = 0;
+            let paidAmount = 0;
+            let pendingAmount = 0;
 
-            if (!feeStructure) continue;
-
-            // Get payments
-            const payments = await FeePayment.find({
+            const studentFee = await StudentFee.findOne({
                 student: student._id,
-                academicYear: student.academicYear,
-                status: 'success'
+                academicYear: student.academicYear
             }).lean();
 
-            const totalFees = feeStructure.totalAmount;
-            const paidAmount = payments.reduce((sum, p) => sum + p.amount, 0);
-            const pendingAmount = totalFees - paidAmount;
+            if (studentFee) {
+                totalFees = studentFee.toPay || studentFee.totalFees || 0;
+                paidAmount = studentFee.totalPaid || 0;
+                pendingAmount = studentFee.pendingAmount !== undefined ? studentFee.pendingAmount : Math.max(0, totalFees - paidAmount);
+            } else {
+                const feeStructure = await FeeStructure.findOne({
+                    class: student.currentClass,
+                    academicYear: student.academicYear,
+                    type: 'class_default'
+                });
+
+                if (!feeStructure) continue;
+
+                const payments = await FeePayment.find({
+                    student: student._id,
+                    academicYear: student.academicYear,
+                    status: 'success'
+                }).lean();
+
+                totalFees = feeStructure.totalAmount || 0;
+                paidAmount = payments.reduce((sum, p) => sum + (p.amount || 0), 0);
+                pendingAmount = Math.max(0, totalFees - paidAmount);
+            }
 
             if (pendingAmount >= minPendingAmount) {
                 // Send notification
@@ -349,13 +402,19 @@ router.get('/installments/:studentId', auth, async (req, res) => {
             type: 'class_default'
         }).lean();
 
-        if (!feeStructure || !feeStructure.paymentSchedule) {
+        if (!feeStructure || !feeStructure.paymentSchedule || feeStructure.paymentSchedule.length === 0) {
             return res.json({
                 success: true,
                 installments: [],
                 message: 'No installment schedule found'
             });
         }
+
+        // Check for imported fee record first
+        const studentFee = await StudentFee.findOne({
+            student: studentId,
+            academicYear: student.academicYear
+        }).lean();
 
         // Get payments
         const payments = await FeePayment.find({
@@ -364,35 +423,33 @@ router.get('/installments/:studentId', auth, async (req, res) => {
             status: 'success'
         }).sort({ paymentDate: 1 }).lean();
 
-        let totalPaid = payments.reduce((sum, p) => sum + (p.amount || 0), 0);
+        let totalPaid = 0;
+        if (studentFee && studentFee.totalPaid !== undefined) {
+            totalPaid = studentFee.totalPaid;
+        } else {
+            totalPaid = payments.reduce((sum, p) => sum + (p.amount || 0), 0);
+        }
+
+        let remainingPaidToAllocate = totalPaid;
         const installments = feeStructure.paymentSchedule.map((schedule, index) => {
-            const installmentAmount = schedule.amount;
-            const dueDate = new Date(schedule.dueDate);
+            const installmentAmount = schedule.amount || 0;
+            const dueDate = schedule.dueDate ? new Date(schedule.dueDate) : null;
             const today = new Date();
 
-            // Calculate how much is paid for this installment
-            let paidForThis = 0;
-            if (totalPaid < installmentAmount * (index + 1)) {
-                const remainingForPrevious = installmentAmount * index - totalPaid;
-                if (remainingForPrevious < 0) {
-                    paidForThis = Math.min(-remainingForPrevious, installmentAmount);
-                }
-            } else {
-                paidForThis = installmentAmount;
-            }
-
-            totalPaid += paidForThis;
+            // Correctly allocate remaining paid amount without mutating totalPaid in loop
+            const paidForThis = Math.min(Math.max(0, remainingPaidToAllocate), installmentAmount);
+            remainingPaidToAllocate -= paidForThis;
 
             const status = paidForThis >= installmentAmount ? 'paid' :
-                dueDate < today ? 'overdue' : 'pending';
+                (dueDate && dueDate < today) ? 'overdue' : (paidForThis > 0 ? 'partial' : 'pending');
 
             return {
-                installmentNumber: index + 1,
+                installmentNumber: schedule.installmentNumber || index + 1,
                 amount: installmentAmount,
                 dueDate: schedule.dueDate,
-                label: schedule.label || `Installment ${index + 1}`,
+                label: schedule.label || schedule.description || `Installment ${index + 1}`,
                 paidAmount: paidForThis,
-                pendingAmount: installmentAmount - paidForThis,
+                pendingAmount: Math.max(0, installmentAmount - paidForThis),
                 status,
                 isOverdue: status === 'overdue'
             };

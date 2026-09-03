@@ -63,7 +63,7 @@ router.get('/student/:studentId/report-card', [auth, requireStudentAccessParam('
         }).lean();
 
         const totalDays = attendanceRecords.length;
-        const presentDays = attendanceRecords.filter(a => ['present', 'late', 'excused'].includes(a.status)).length;
+        const presentDays = attendanceRecords.filter(a => ['present', 'half-day'].includes(a.status)).length;
         const attendancePercentage = totalDays > 0 ? ((presentDays / totalDays) * 100).toFixed(1) : 0;
 
         // Get class rank (if applicable)
@@ -446,7 +446,7 @@ router.get('/yoy-performance', [auth, checkRole(['super admin'])], async (req, r
 
             // Average attendance calculation
             const totalAttRecords = attendanceRecords.length;
-            const presentRecords = attendanceRecords.filter(a => ['present', 'late', 'excused'].includes(a.status)).length;
+            const presentRecords = attendanceRecords.filter(a => ['present', 'half-day'].includes(a.status)).length;
             const avgAttendance = totalAttRecords > 0 ? parseFloat(((presentRecords / totalAttRecords) * 100).toFixed(1)) : 0;
 
             // Average final grade from history

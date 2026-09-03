@@ -181,17 +181,17 @@ exports.getAdminStats = async (req, res) => {
             })
         ]);
 
-        const presentCount = attendanceToday.filter(a => ['present', 'late', 'excused'].includes(a.status)).length;
+        const presentCount = attendanceToday.filter(a => ['present', 'half-day'].includes(a.status)).length;
         const absentCount = attendanceToday.filter(a => a.status === 'absent').length;
         const attendancePercentage = totalStudents > 0
             ? ((presentCount / totalStudents) * 100).toFixed(1)
             : 0;
 
-        const teacherPresentCount = attendanceTodayTeacher.filter(a => ['present', 'late', 'excused'].includes(a.status)).length;
+        const teacherPresentCount = attendanceTodayTeacher.filter(a => ['present', 'half-day'].includes(a.status)).length;
         const teacherAbsentCount = attendanceTodayTeacher.filter(a => a.status === 'absent').length;
 
         // Calculate attendance trend
-        const prevPresentCount = prevAttendance.filter(a => ['present', 'late', 'excused'].includes(a.status)).length;
+        const prevPresentCount = prevAttendance.filter(a => ['present', 'half-day'].includes(a.status)).length;
         const prevAttendancePercentage = totalStudents > 0
             ? ((prevPresentCount / totalStudents) * 100)
             : 0;
@@ -400,16 +400,14 @@ exports.getTeacherStats = async (req, res) => {
 
             const todayAttendance = await Attendance.find(todayFilter).lean();
 
-            const presentCount = todayAttendance.filter(a => ['present', 'late', 'excused'].includes(a.status)).length;
+            const presentCount = todayAttendance.filter(a => ['present', 'half-day'].includes(a.status)).length;
             const absentCount = todayAttendance.filter(a => a.status === 'absent').length;
-            const lateCount = todayAttendance.filter(a => a.status === 'late').length;
-            const excusedCount = todayAttendance.filter(a => a.status === 'excused').length;
+            const halfDayCount = todayAttendance.filter(a => a.status === 'half-day').length;
 
             classAttendance = {
                 present: presentCount,
                 absent: absentCount,
-                late: lateCount,
-                excused: excusedCount,
+                halfDay: halfDayCount,
                 total: myStudentCount,
                 marked: todayAttendance.length,
                 date: getISTDateString(today)
@@ -435,7 +433,7 @@ exports.getTeacherStats = async (req, res) => {
                         total: { $sum: 1 },
                         present: {
                             $sum: {
-                                $cond: [{ $in: ["$status", ["present", "late", "excused"]] }, 1, 0]
+                                $cond: [{ $in: ["$status", ["present", "half-day"]] }, 1, 0]
                             }
                         }
                     }
@@ -478,7 +476,7 @@ exports.getTeacherStats = async (req, res) => {
                         _id: { $dateToString: { format: "%Y-%m-%d", date: "$date" } },
                         presentCount: {
                             $sum: {
-                                $cond: [{ $in: ["$status", ["present", "late", "excused"]] }, 1, 0]
+                                $cond: [{ $in: ["$status", ["present", "half-day"]] }, 1, 0]
                             }
                         },
                         totalCount: { $sum: 1 }

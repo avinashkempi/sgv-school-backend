@@ -327,9 +327,8 @@ router.get('/my-attendance', [auth, yearContext], async (req, res) => {
             .lean();
 
         // Calculate summary over all records
-        // Count late, excused, half-day as present to match the monthly breakdown calculation
         const totalRecords = allAttendance.length;
-        const PRESENT_STATUSES = ['present', 'late', 'excused', 'half-day'];
+        const PRESENT_STATUSES = ['present', 'half-day'];
         const presentCount = allAttendance.filter(a => PRESENT_STATUSES.includes(a.status)).length;
         const percentage = totalRecords > 0 ? ((presentCount / totalRecords) * 100).toFixed(2) : 0;
 
@@ -344,7 +343,7 @@ router.get('/my-attendance', [auth, yearContext], async (req, res) => {
             }
 
             monthlyStats[monthKey].total++;
-            if (['present', 'late', 'excused', 'half-day'].includes(record.status)) {
+            if (['present', 'half-day'].includes(record.status)) {
                 monthlyStats[monthKey].present++;
             }
         });
@@ -370,8 +369,6 @@ router.get('/my-attendance', [auth, yearContext], async (req, res) => {
                 total: totalRecords,
                 present: presentCount,
                 absent: allAttendance.filter(a => a.status === 'absent').length,
-                late: allAttendance.filter(a => a.status === 'late').length,
-                excused: allAttendance.filter(a => a.status === 'excused').length,
                 halfDay: allAttendance.filter(a => a.status === 'half-day').length,
                 holidaysCount: holidays.length,
                 percentage: parseFloat(percentage),
@@ -411,7 +408,7 @@ router.get('/student/:studentId/summary', [auth, yearContext], async (req, res) 
             academicYear: academicYearId
         });
         const totalClasses = allAttendance.length;
-        const presentClasses = allAttendance.filter(a => ['present', 'late', 'excused', 'half-day'].includes(a.status)).length;
+        const presentClasses = allAttendance.filter(a => ['present', 'half-day'].includes(a.status)).length;
         const overallPercentage = totalClasses > 0 ? ((presentClasses / totalClasses) * 100).toFixed(1) : 0;
 
         // 2. Subject-wise Stats
@@ -438,7 +435,7 @@ router.get('/student/:studentId/summary', [auth, yearContext], async (req, res) 
             }
 
             subjectStats[subjectId].total++;
-            if (['present', 'late', 'excused', 'half-day'].includes(record.status)) {
+            if (['present', 'half-day'].includes(record.status)) {
                 subjectStats[subjectId].present++;
             }
         });
@@ -459,7 +456,7 @@ router.get('/student/:studentId/summary', [auth, yearContext], async (req, res) 
             }
 
             monthlyStats[monthKey].total++;
-            if (['present', 'late', 'excused', 'half-day'].includes(record.status)) {
+            if (['present', 'half-day'].includes(record.status)) {
                 monthlyStats[monthKey].present++;
             }
         });
@@ -523,7 +520,7 @@ router.get('/student/:studentId', [auth, yearContext], async (req, res) => {
             .lean();
 
         const totalRecords = allAttendance.length;
-        const PRESENT_STATUSES = ['present', 'late', 'excused', 'half-day'];
+        const PRESENT_STATUSES = ['present', 'half-day'];
         const presentCount = allAttendance.filter(a => PRESENT_STATUSES.includes(a.status)).length;
         const percentage = totalRecords > 0 ? ((presentCount / totalRecords) * 100).toFixed(2) : 0;
 
@@ -541,8 +538,6 @@ router.get('/student/:studentId', [auth, yearContext], async (req, res) => {
                 total: totalRecords,
                 present: presentCount,
                 absent: allAttendance.filter(a => a.status === 'absent').length,
-                late: allAttendance.filter(a => a.status === 'late').length,
-                excused: allAttendance.filter(a => a.status === 'excused').length,
                 halfDay: allAttendance.filter(a => a.status === 'half-day').length,
                 holidaysCount: holidays.length,
                 percentage: parseFloat(percentage)
@@ -641,7 +636,7 @@ router.get('/school-summary', [auth, yearContext], async (req, res) => {
         // Map attendance to find who is present/absent
         attendanceRecords.forEach(record => {
             if (record.role === 'student') {
-                if (['present', 'late', 'excused', 'half-day'].includes(record.status)) {
+                if (['present', 'half-day'].includes(record.status)) {
                     studentPresent++;
                 } else if (record.status === 'absent') {
                     absentList.push({
@@ -656,7 +651,7 @@ router.get('/school-summary', [auth, yearContext], async (req, res) => {
                     });
                 }
             } else if (record.role === 'teacher') {
-                if (['present', 'late', 'excused', 'half-day'].includes(record.status)) {
+                if (['present', 'half-day'].includes(record.status)) {
                     teacherPresent++;
                 } else if (record.status === 'absent') {
                     absentList.push({

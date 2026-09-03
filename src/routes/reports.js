@@ -117,7 +117,7 @@ router.get('/student/:studentId', [auth, yearContext, requireStudentAccessParam(
             }
             const attRecords = await Attendance.find(attQuery).select('status').lean();
             const totalDays = attRecords.length;
-            const presentDays = attRecords.filter(a => ['present', 'late', 'excused'].includes(a.status)).length;
+            const presentDays = attRecords.filter(a => ['present', 'half-day'].includes(a.status)).length;
             attendanceSummary = {
                 percentage: totalDays > 0 ? parseFloat(((presentDays / totalDays) * 100).toFixed(1)) : 0,
                 presentDays,

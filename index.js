@@ -96,6 +96,7 @@ app.use('/api/teachers', require('./src/routes/teachers'));
 app.use('/api/attendance', require('./src/routes/attendance'));
 // Mount examsNew before exams to prevent /:id shadowing
 app.use('/api/exams', require('./src/routes/exams'));
+app.use('/api/marks', require('./src/routes/marksImport'));
 app.use('/api/marks', require('./src/routes/marks'));
 app.use('/api/timetable', require('./src/routes/timetable'));
 app.use('/api/leaves', require('./src/routes/leaves'));

@@ -126,14 +126,46 @@ router.get('/:id', auth, async (req, res) => {
 
 // @route   GET /api/classes/:id/full-details
 // @desc    Get class details, subjects, and students
-// @access  Private
+// @access  Private (Admin, Class/Subject Teacher, Enrolled Student)
 router.get('/:id/full-details', auth, async (req, res) => {
     try {
+        const classId = req.params.id;
+        if (!classId.match(/^[0-9a-fA-F]{24}$/)) {
+            return res.status(404).json({ msg: 'Invalid class ID format' });
+        }
+
+        const userRole = req.user.role;
+        const isAdmin = userRole === 'admin' || userRole === 'super admin';
+
+        // Check if student belongs to this class or if teacher teaches this class
+        if (userRole === 'student') {
+            const user = await User.findById(req.user.userId).select('currentClass');
+            const studentClassId = user?.currentClass?.toString();
+            if (!studentClassId || studentClassId !== classId) {
+                return res.status(403).json({ msg: 'Access denied: You are not enrolled in this class' });
+            }
+        } else if (userRole === 'teacher') {
+            const isClassTeacher = await Class.exists({ _id: classId, classTeacher: req.user.userId });
+            const isSubjectTeacher = await Subject.exists({ class: classId, teachers: req.user.userId });
+            if (!isClassTeacher && !isSubjectTeacher && !isAdmin) {
+                return res.status(403).json({ msg: 'Access denied: You do not teach this class' });
+            }
+        }
+
+        // PII sanitation: exclude personal contact / address / remarks details unless admin or class teacher
+        const teacherSelect = isAdmin
+            ? 'name email profilePhoto role phone phone2 designation address joiningDate remarks'
+            : 'name email profilePhoto role designation';
+
+        const studentSelect = isAdmin
+            ? '-password'
+            : 'name rollNumber profileImage currentClass academicYear gender';
+
         const [classData, subjects, students] = await Promise.all([
-            Class.findById(req.params.id).populate('classTeacher', 'name email profilePhoto role phone phone2 designation address joiningDate remarks'),
-            Subject.find({ class: req.params.id }).populate('teachers', 'name email profilePhoto role phone phone2 designation').sort({ name: 1 }),
-            User.find({ currentClass: req.params.id, role: 'student' })
-                .select('-password')
+            Class.findById(classId).populate('classTeacher', teacherSelect),
+            Subject.find({ class: classId }).populate('teachers', teacherSelect).sort({ name: 1 }),
+            User.find({ currentClass: classId, role: 'student' })
+                .select(studentSelect)
                 .populate('currentClass', 'name')
                 .populate('academicYear', 'name')
                 .sort({ name: 1 })

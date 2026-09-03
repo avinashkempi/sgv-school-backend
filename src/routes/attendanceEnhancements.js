@@ -23,11 +23,11 @@ router.post('/bulk-quick-mark', [auth, yearContext, requireOpenYear], async (req
             return res.status(403).json({ success: false, message: 'Not authorized to mark attendance for this class' });
         }
 
-        if (!['present', 'absent', 'late', 'excused', 'half-day'].includes(defaultStatus)) {
+        if (!['present', 'absent', 'half-day'].includes(defaultStatus)) {
             return res.status(400).json({ success: false, message: 'Invalid default attendance status' });
         }
 
-        const invalidException = exceptions?.find(e => !['present', 'absent', 'late', 'excused', 'half-day'].includes(e.status));
+        const invalidException = exceptions?.find(e => !['present', 'absent', 'half-day'].includes(e.status));
         if (invalidException) {
             return res.status(400).json({ success: false, message: 'Invalid exception attendance status' });
         }
@@ -118,13 +118,14 @@ router.get('/calendar/:classId', auth, async (req, res) => {
                     total: 0,
                     present: 0,
                     absent: 0,
-                    late: 0,
-                    excused: 0
+                    halfDay: 0
                 };
             }
 
             calendar[dateKey].total++;
-            calendar[dateKey][record.status]++;
+            if (calendar[dateKey][record.status] !== undefined) {
+                calendar[dateKey][record.status]++;
+            }
         });
 
         // Calculate percentages
@@ -184,7 +185,7 @@ router.get('/low-attendance-alerts', auth, async (req, res) => {
             if (totalDays === 0) continue;
 
             const presentDays = attendanceRecords.filter(a =>
-                ['present', 'late', 'excused', 'half-day'].includes(a.status)
+                ['present', 'half-day'].includes(a.status)
             ).length;
 
             const percentage = (presentDays / totalDays) * 100;
@@ -251,7 +252,7 @@ router.get('/trends/:studentId', [auth, requireStudentAccessParam('studentId')],
                 }
 
                 weeklyData[weekKey].total++;
-                if (['present', 'late', 'excused', 'half-day'].includes(record.status)) {
+                if (['present', 'half-day'].includes(record.status)) {
                     weeklyData[weekKey].present++;
                 }
             });
@@ -277,7 +278,7 @@ router.get('/trends/:studentId', [auth, requireStudentAccessParam('studentId')],
                 }
 
                 monthlyData[monthKey].total++;
-                if (['present', 'late', 'excused', 'half-day'].includes(record.status)) {
+                if (['present', 'half-day'].includes(record.status)) {
                     monthlyData[monthKey].present++;
                 }
             });
@@ -298,7 +299,7 @@ router.get('/trends/:studentId', [auth, requireStudentAccessParam('studentId')],
                 }
 
                 yearlyData[yearKey].total++;
-                if (['present', 'late', 'excused', 'half-day'].includes(record.status)) {
+                if (['present', 'half-day'].includes(record.status)) {
                     yearlyData[yearKey].present++;
                 }
             });

@@ -524,17 +524,31 @@ const revertStudentPromotion = async (req, res) => {
     }
 
     // Now, we need to map the old class (from the archived year) to the equivalent class in the student's current year
-    const oldClassName = latestHistory.class.name;
-    const oldClassSection = latestHistory.class.section;
+    const oldClassName = latestHistory.class.name || '';
+    const oldClassSection = latestHistory.class.section || '';
     const oldClassBranch = latestHistory.class.branch;
 
     // Find equivalent class in the current active year that the student is mapped to
-    const targetClass = await Class.findOne({
+    const query = {
       academicYear: user.academicYear,
-      name: oldClassName,
-      section: oldClassSection,
-      branch: oldClassBranch
-    });
+      name: { $regex: new RegExp(`^${oldClassName.trim()}$`, 'i') }
+    };
+    if (oldClassSection && oldClassSection.trim()) {
+      query.section = { $regex: new RegExp(`^${oldClassSection.trim()}$`, 'i') };
+    }
+    if (oldClassBranch) {
+      query.branch = oldClassBranch;
+    }
+
+    let targetClass = await Class.findOne(query);
+
+    // Fallback: match by class name within the academic year if only 1 matching section exists
+    if (!targetClass && oldClassName) {
+      targetClass = await Class.findOne({
+        academicYear: user.academicYear,
+        name: { $regex: new RegExp(`^${oldClassName.trim()}$`, 'i') }
+      });
+    }
 
     if (!targetClass) {
       return res.status(404).json({
