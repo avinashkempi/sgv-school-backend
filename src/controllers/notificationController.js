@@ -437,6 +437,15 @@ exports.triggerNotification = async (data) => {
 
         await notification.save();
 
+        // Invalidate unread counts so badge updates immediately
+        const targetRecipient = recipient || (target === 'user' ? targetId : null);
+        if (targetRecipient) {
+            cacheDel(`unreadCount:${targetRecipient}`).catch(() => {});
+        } else {
+            // Broadcast, class, or role notification: invalidate all unread counts
+            cacheInvalidatePattern('unreadCount:*').catch(() => {});
+        }
+
         // Push notification (preference-aware)
         await sendTargetedNotification(target, targetId, {
             title: notificationTitle,

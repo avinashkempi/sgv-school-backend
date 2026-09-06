@@ -3,13 +3,51 @@ const router = express.Router();
 const GlobalSubject = require('../models/GlobalSubject');
 const Subject = require('../models/Subject');
 const { authenticateToken: auth, checkRole } = require('../middleware/auth');
+const { cacheGet, cacheSet, cacheDel } = require('../config/redis');
+
+// In-memory cache for subjects (10-minute TTL)
+let cachedSubjects = null;
+let subjectsCachedAt = 0;
+const SUBJECTS_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const REDIS_KEY_SUBJECTS = 'subjects:list';
+const SUBJECTS_REDIS_TTL = 600; // 10 minutes
+
+const invalidateSubjectsCache = async () => {
+    cachedSubjects = null;
+    subjectsCachedAt = 0;
+    try {
+        await cacheDel(REDIS_KEY_SUBJECTS);
+    } catch (_) {}
+};
 
 // @route   GET /api/subjects
 // @desc    Get all global subjects
 // @access  Private
 router.get('/', auth, async (req, res) => {
     try {
-        const subjects = await GlobalSubject.find().sort({ code: 1, name: 1 });
+        const now = Date.now();
+        // 1. In-memory check (<0.01ms)
+        if (cachedSubjects && (now - subjectsCachedAt < SUBJECTS_CACHE_TTL_MS)) {
+            return res.json(cachedSubjects);
+        }
+
+        // 2. Redis check (~1ms)
+        try {
+            const redisData = await cacheGet(REDIS_KEY_SUBJECTS);
+            if (redisData) {
+                cachedSubjects = redisData;
+                subjectsCachedAt = now;
+                return res.json(redisData);
+            }
+        } catch (_) {}
+
+        // 3. Database lookup
+        const subjects = await GlobalSubject.find().sort({ code: 1, name: 1 }).lean();
+
+        cachedSubjects = subjects;
+        subjectsCachedAt = now;
+        cacheSet(REDIS_KEY_SUBJECTS, subjects, SUBJECTS_REDIS_TTL).catch(() => {});
+
         res.json(subjects);
     } catch (err) {
         console.error(err.message);
@@ -36,6 +74,7 @@ router.post('/', [auth, checkRole(['admin', 'super admin'])], async (req, res) =
         });
 
         await subject.save();
+        invalidateSubjectsCache().catch(() => {});
         res.json(subject);
     } catch (err) {
         console.error(err.message);
@@ -66,6 +105,7 @@ router.put('/:id', [auth, checkRole(['admin', 'super admin'])], async (req, res)
         subject.type = type || subject.type;
 
         await subject.save();
+        invalidateSubjectsCache().catch(() => {});
         res.json(subject);
     } catch (err) {
         console.error(err.message);
@@ -89,6 +129,7 @@ router.delete('/:id', [auth, checkRole(['admin', 'super admin'])], async (req, r
         }
 
         await GlobalSubject.findByIdAndDelete(req.params.id);
+        invalidateSubjectsCache().catch(() => {});
         res.json({ msg: 'Subject deleted successfully' });
     } catch (err) {
         console.error('Error deleting subject:', err);

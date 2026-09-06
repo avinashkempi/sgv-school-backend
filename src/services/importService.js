@@ -81,7 +81,7 @@ const processImport = async (csvData, options = { wipe: false }) => {
         await wipeNonAdminData({ confirmed: true, academicYearId: academicYear?._id });
     }
 
-    // 3. Extract and Create Classes from CSV, scoped by branch and academic year.
+    // 3. Extract and Cache/Create Classes from CSV, scoped by branch and academic year.
     const uniqueClassEntries = new Map();
     for (const row of csvData) {
         const className = row['Class'] ? row['Class'].toString().toUpperCase().trim() : '';
@@ -91,11 +91,35 @@ const processImport = async (csvData, options = { wipe: false }) => {
     }
     console.log(`Found ${uniqueClassEntries.size} unique class/branch entries in CSV`);
 
+    // Pre-populate classMap from all existing classes in the academic year
+    const classes = await Class.find(academicYear ? { academicYear: academicYear._id } : {});
+    const classMap = new Map();
+    for (const c of classes) {
+        if (c.name) classMap.set(classMapKey(c.academicYear, c.branch, c.name), c._id);
+        if (c.value) classMap.set(classMapKey(c.academicYear, c.branch, c.value), c._id);
+        if (c.label) classMap.set(classMapKey(c.academicYear, c.branch, c.label), c._id);
+    }
+
     for (const { className, branch } of uniqueClassEntries.values()) {
+        const key = classMapKey(academicYear?._id, branch, className);
+        if (classMap.has(key)) continue;
+
         const classValue = className.toLowerCase().replace(/\s+/g, '_');
-        const existingClass = await Class.findOne({ name: className, branch, academicYear: academicYear?._id });
+        const escapedName = className.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+        const escapedValue = classValue.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+
+        let existingClass = await Class.findOne({
+            branch,
+            academicYear: academicYear?._id,
+            $or: [
+                { name: { $regex: new RegExp(`^${escapedName}$`, 'i') } },
+                { value: { $regex: new RegExp(`^${escapedValue}$`, 'i') } },
+                { label: { $regex: new RegExp(`^${escapedName}$`, 'i') } }
+            ]
+        });
+
         if (!existingClass) {
-            await Class.create({
+            existingClass = await Class.create({
                 name: className,
                 value: classValue,
                 label: className,
@@ -103,11 +127,13 @@ const processImport = async (csvData, options = { wipe: false }) => {
                 academicYear: academicYear ? academicYear._id : undefined
             });
         }
-    }
 
-    // 4. Cache Classes for the target academic year only.
-    const classes = await Class.find(academicYear ? { academicYear: academicYear._id } : {});
-    const classMap = new Map(classes.map(c => [classMapKey(c.academicYear, c.branch, c.name), c._id]));
+        // Map variations to this class ID
+        classMap.set(key, existingClass._id);
+        if (existingClass.name) classMap.set(classMapKey(academicYear?._id, branch, existingClass.name), existingClass._id);
+        if (existingClass.value) classMap.set(classMapKey(academicYear?._id, branch, existingClass.value), existingClass._id);
+        if (existingClass.label) classMap.set(classMapKey(academicYear?._id, branch, existingClass.label), existingClass._id);
+    }
 
     // 5. Pre-fetch existing users in one query
     const phoneNumbers = [];

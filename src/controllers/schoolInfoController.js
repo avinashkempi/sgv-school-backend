@@ -1,4 +1,20 @@
 const SchoolInfo = require('../models/SchoolInfo');
+const { cacheGet, cacheSet, cacheDel } = require('../config/redis');
+
+// In-memory cache for school info (10-minute TTL)
+let cachedSchoolInfo = null;
+let schoolInfoCachedAt = 0;
+const SCHOOL_INFO_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const REDIS_KEY_SCHOOL_INFO = 'schoolInfo:data';
+const SCHOOL_INFO_REDIS_TTL = 600; // 10 minutes
+
+const invalidateSchoolInfoCache = async () => {
+  cachedSchoolInfo = null;
+  schoolInfoCachedAt = 0;
+  try {
+    await cacheDel(REDIS_KEY_SCHOOL_INFO);
+  } catch (_) {}
+};
 
 // Helper to normalize photo URLs into an array of strings
 const normalizePhotos = (data) => {
@@ -24,7 +40,29 @@ const normalizePhotos = (data) => {
 // Get school info (public endpoint)
 const getSchoolInfo = async (req, res) => {
   try {
-    // Always query MongoDB directly to ensure pull-to-refresh gets fresh updates immediately
+    const now = Date.now();
+    // 1. Fast in-memory check (<0.01ms)
+    if (cachedSchoolInfo && (now - schoolInfoCachedAt < SCHOOL_INFO_CACHE_TTL_MS)) {
+      return res.status(200).json({
+        success: true,
+        data: cachedSchoolInfo
+      });
+    }
+
+    // 2. Redis check (~1ms)
+    try {
+      const redisData = await cacheGet(REDIS_KEY_SCHOOL_INFO);
+      if (redisData) {
+        cachedSchoolInfo = redisData;
+        schoolInfoCachedAt = now;
+        return res.status(200).json({
+          success: true,
+          data: redisData
+        });
+      }
+    } catch (_) {}
+
+    // 3. Fallback to MongoDB
     const schoolInfo = await SchoolInfo.findOne().lean();
 
     if (!schoolInfo) {
@@ -38,6 +76,11 @@ const getSchoolInfo = async (req, res) => {
     const photos = normalizePhotos(schoolInfo);
     schoolInfo.photoUrl = photos;
     schoolInfo.photoUrls = photos;
+
+    // Cache in RAM and Redis
+    cachedSchoolInfo = schoolInfo;
+    schoolInfoCachedAt = now;
+    cacheSet(REDIS_KEY_SCHOOL_INFO, schoolInfo, SCHOOL_INFO_REDIS_TTL).catch(() => {});
 
     res.status(200).json({
       success: true,
@@ -80,6 +123,9 @@ const createOrUpdateSchoolInfo = async (req, res) => {
     const photos = normalizePhotos(responseData);
     responseData.photoUrl = photos;
     responseData.photoUrls = photos;
+
+    // Invalidate cached school info across memory and Redis
+    invalidateSchoolInfoCache().catch(() => {});
 
     res.status(200).json({
       success: true,

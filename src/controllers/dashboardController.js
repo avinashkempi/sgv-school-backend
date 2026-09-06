@@ -11,15 +11,75 @@ const AcademicYear = require('../models/AcademicYear');
 const { getISTDateString } = require('../utils/dateUtils');
 const { cacheGet, cacheSet, cacheInvalidatePattern } = require('../config/redis');
 
-// In-memory fallback caches
-const adminStatsCache = new Map();
-const teacherStatsCache = new Map();
-const studentStatsCache = new Map();
+/**
+ * Bounded in-memory cache with size limits, LRU eviction, and TTL checks.
+ * Prevents memory leaks under high concurrent users while providing <0.01ms reads.
+ */
+class BoundedCache {
+    constructor(maxSize = 200, ttlMs = 60 * 1000) {
+        this.maxSize = maxSize;
+        this.ttlMs = ttlMs;
+        this.map = new Map();
+    }
+
+    get(key) {
+        const item = this.map.get(key);
+        if (!item) return null;
+        if (Date.now() - item.ts > this.ttlMs) {
+            this.map.delete(key);
+            return null;
+        }
+        // Refresh recency for LRU
+        this.map.delete(key);
+        this.map.set(key, item);
+        return item;
+    }
+
+    set(key, value) {
+        if (this.map.has(key)) {
+            this.map.delete(key);
+        } else if (this.map.size >= this.maxSize) {
+            const oldestKey = this.map.keys().next().value;
+            if (oldestKey !== undefined) {
+                this.map.delete(oldestKey);
+            }
+        }
+        const entry = (value && typeof value === 'object' && 'data' in value && 'ts' in value)
+            ? value
+            : { data: value, ts: Date.now() };
+        this.map.set(key, entry);
+    }
+
+    delete(key) {
+        this.map.delete(key);
+    }
+
+    deletePrefix(prefix) {
+        for (const key of this.map.keys()) {
+            if (key.startsWith(prefix)) {
+                this.map.delete(key);
+            }
+        }
+    }
+
+    clear() {
+        this.map.clear();
+    }
+
+    keys() {
+        return this.map.keys();
+    }
+}
 
 const MEMORY_CACHE_TTL = 60 * 1000; // 60 seconds local fallback
 const ADMIN_STATS_REDIS_TTL = 120; // 2 minutes
 const TEACHER_STATS_REDIS_TTL = 120; // 2 minutes
 const STUDENT_STATS_REDIS_TTL = 300; // 5 minutes
+
+// In-memory fallback caches bounded to prevent memory leaks
+const adminStatsCache = new BoundedCache(50, MEMORY_CACHE_TTL);
+const teacherStatsCache = new BoundedCache(200, MEMORY_CACHE_TTL);
+const studentStatsCache = new BoundedCache(500, MEMORY_CACHE_TTL);
 
 // Helper to calculate date range
 const getDateRange = (range) => {
@@ -350,16 +410,22 @@ exports.getTeacherStats = async (req, res) => {
         today.setHours(0, 0, 0, 0);
         const currentDay = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Kolkata', weekday: 'long' }).format(new Date());
 
+        const activeYear = req.activeYear || (req.academicYearContext ? { _id: req.academicYearContext } : await AcademicYear.findOne({ isActive: true }).lean());
+        const yearId = req.academicYearContext || activeYear?._id;
+
+        const classTeacherQuery = { classTeacher: teacherId };
+        if (yearId) {
+            classTeacherQuery.academicYear = yearId;
+        }
+
         // 1. Fetch My Class (as class teacher) & all timetables in parallel
         const Timetable = require('../models/Timetable');
         const [myClass, allTeacherTimetables] = await Promise.all([
-            Class.findOne({ classTeacher: teacherId }).lean(),
+            Class.findOne(classTeacherQuery).lean(),
             Timetable.find({
                 "schedule.periods.teacher": teacherId
             }).populate('class', 'name section').lean()
         ]);
-
-        const activeYear = req.activeYear;
 
         // Calculate classes today & total distinct classes from single query result
         let classesTodayCount = 0;
@@ -831,12 +897,24 @@ exports.invalidateDashboardCaches = async () => {
 };
 
 /**
+ * Invalidate admin dashboard caches only
+ */
+exports.invalidateAdminDashboard = async () => {
+    adminStatsCache.clear();
+    try {
+        await cacheInvalidatePattern('adminStats:*');
+    } catch (_) {}
+};
+
+/**
  * Invalidate specific teacher dashboard cache
  */
 exports.invalidateTeacherDashboard = async (teacherId) => {
-    teacherStatsCache.clear();
+    if (!teacherId) return;
+    const idStr = teacherId.toString();
+    teacherStatsCache.deletePrefix(`teacherStats:${idStr}:`);
     try {
-        await cacheInvalidatePattern(`teacherStats:${teacherId}:*`);
+        await cacheInvalidatePattern(`teacherStats:${idStr}:*`);
     } catch (_) {}
 };
 
@@ -844,8 +922,27 @@ exports.invalidateTeacherDashboard = async (teacherId) => {
  * Invalidate specific student dashboard cache
  */
 exports.invalidateStudentDashboard = async (studentId) => {
-    studentStatsCache.clear();
+    if (!studentId) return;
+    const idStr = studentId.toString();
+    studentStatsCache.deletePrefix(`studentStats:${idStr}:`);
     try {
-        await cacheInvalidatePattern(`studentStats:${studentId}:*`);
+        await cacheInvalidatePattern(`studentStats:${idStr}:*`);
+    } catch (_) {}
+};
+
+/**
+ * Invalidate dashboards for multiple students (e.g. for class attendance or marks updates)
+ */
+exports.invalidateMultipleStudentDashboards = async (studentIds) => {
+    if (!studentIds || !Array.isArray(studentIds) || studentIds.length === 0) return;
+    const promises = [];
+    for (const studentId of studentIds) {
+        if (!studentId) continue;
+        const idStr = studentId.toString();
+        studentStatsCache.deletePrefix(`studentStats:${idStr}:`);
+        promises.push(cacheInvalidatePattern(`studentStats:${idStr}:*`));
+    }
+    try {
+        await Promise.all(promises);
     } catch (_) {}
 };

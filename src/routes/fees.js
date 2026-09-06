@@ -11,7 +11,7 @@ const User = require('../models/User');
 const Class = require('../models/Class');
 const { sendTargetedNotification } = require('../services/notificationService');
 const { isAdminRole } = require('../middleware/accessControl');
-const { invalidateDashboardCaches } = require('../controllers/dashboardController');
+const { invalidateDashboardCaches, invalidateAdminDashboard, invalidateStudentDashboard, invalidateMultipleStudentDashboards } = require('../controllers/dashboardController');
 
 // Helper to generate receipt number atomically.
 const generateReceiptNumber = async () => {
@@ -92,8 +92,15 @@ router.post('/structure', [auth, checkRole(['admin', 'super admin']), yearContex
 
         await feeStructure.save();
 
-        // Invalidate dashboard caches
-        invalidateDashboardCaches().catch(() => {});
+        // Invalidate dashboard caches (admin stats + affected students only)
+        invalidateAdminDashboard().catch(() => {});
+        if (type === 'student_specific' && students && students.length > 0) {
+            invalidateMultipleStudentDashboards(students).catch(() => {});
+        } else if (type === 'class_default' && classId) {
+            User.find({ role: 'student', currentClass: classId }).select('_id').lean()
+                .then(stus => invalidateMultipleStudentDashboards(stus.map(s => s._id)))
+                .catch(() => {});
+        }
 
         // Notify relevant users
         if (type === 'class_default') {
@@ -243,8 +250,9 @@ router.post('/payment', [auth, checkRole(['admin', 'super admin']), yearContext,
             type: 'Fee'
         });
 
-        // Invalidate dashboard caches so fee stats update immediately
-        invalidateDashboardCaches().catch(() => {});
+        // Invalidate admin dashboard and this specific student's dashboard
+        invalidateAdminDashboard().catch(() => {});
+        invalidateStudentDashboard(studentId).catch(() => {});
 
         res.json(payment);
     } catch (err) {

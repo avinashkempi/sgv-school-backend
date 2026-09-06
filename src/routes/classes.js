@@ -10,15 +10,52 @@ const Timetable = require('../models/Timetable');
 const { authenticateToken: auth, checkRole } = require('../middleware/auth');
 const { yearContext } = require('../middleware/yearContext');
 const _notificationService = require('../services/notificationService');
+const { cacheGet, cacheSet, cacheInvalidatePattern } = require('../config/redis');
+
+// In-memory cache for classes list (5-minute TTL)
+const classesListCache = new Map();
+const CLASSES_CACHE_TTL_MS = 5 * 60 * 1000;
+const CLASSES_REDIS_TTL = 300; // 5 minutes
+
+const invalidateClassesCache = async () => {
+    classesListCache.clear();
+    try {
+        await cacheInvalidatePattern('classes:list:*');
+    } catch (_) {}
+};
 
 // @route   GET /api/classes
 // @desc    Get all classes
 // @access  Private
 router.get('/', [auth, yearContext], async (req, res) => {
     try {
+        const yearCtx = req.academicYearContext || 'all';
+        const cacheKey = `classes:list:${yearCtx}`;
+
+        // 1. In-memory check (<0.01ms)
+        const mem = classesListCache.get(cacheKey);
+        if (mem && Date.now() - mem.ts < CLASSES_CACHE_TTL_MS) {
+            return res.json(mem.data);
+        }
+
+        // 2. Redis check (~1ms)
+        try {
+            const redisData = await cacheGet(cacheKey);
+            if (redisData) {
+                classesListCache.set(cacheKey, { data: redisData, ts: Date.now() });
+                return res.json(redisData);
+            }
+        } catch (_) {}
+
+        // 3. Database lookup
         const classes = await Class.find({ academicYear: req.academicYearContext })
             .populate('classTeacher', 'name email profilePhoto')
-            .sort({ name: 1 });
+            .sort({ name: 1 })
+            .lean();
+
+        classesListCache.set(cacheKey, { data: classes, ts: Date.now() });
+        cacheSet(cacheKey, classes, CLASSES_REDIS_TTL).catch(() => {});
+
         res.json(classes);
     } catch (err) {
         console.error(err.message);
@@ -198,15 +235,27 @@ router.post('/', [auth, checkRole(['super admin']), yearContext], async (req, re
     const { name, section, branch, classTeacher } = req.body;
 
     try {
+        const trimmedName = (name || '').trim();
+        const trimmedSection = (section || '').trim();
+        const classValue = trimmedName.toLowerCase().replace(/\s+/g, '_');
+        const classLabel = trimmedSection ? `${trimmedName} - ${trimmedSection}` : trimmedName;
+
         const newClass = new Class({
-            name,
-            section,
-            branch,
-            classTeacher,
+            name: trimmedName,
+            value: classValue,
+            label: classLabel,
+            section: trimmedSection,
+            branch: branch || 'Main',
+            classTeacher: (classTeacher && typeof classTeacher === 'string' && classTeacher.trim())
+                ? classTeacher.trim()
+                : (classTeacher && typeof classTeacher === 'object' && classTeacher._id)
+                    ? classTeacher._id
+                    : null,
             academicYear: req.academicYearContext
         });
 
         const savedClass = await newClass.save();
+        invalidateClassesCache().catch(() => {});
         res.json(savedClass);
     } catch (err) {
         console.error(err.message);
@@ -224,12 +273,31 @@ router.put('/:id', [auth, checkRole(['super admin'])], async (req, res) => {
         let classData = await Class.findById(req.params.id);
         if (!classData) return res.status(404).json({ msg: 'Class not found' });
 
-        classData.name = name || classData.name;
-        classData.section = section !== undefined ? section : classData.section;
-        classData.branch = branch || classData.branch;
-        classData.classTeacher = classTeacher || classData.classTeacher;
+        if (name !== undefined) {
+            classData.name = (name || '').trim();
+        }
+        if (section !== undefined) {
+            classData.section = (section || '').trim();
+        }
+        if (branch !== undefined) {
+            classData.branch = branch;
+        }
+
+        const finalName = classData.name || '';
+        const finalSection = classData.section || '';
+        classData.value = finalName.toLowerCase().replace(/\s+/g, '_');
+        classData.label = finalSection ? `${finalName} - ${finalSection}` : finalName;
+
+        if (classTeacher !== undefined) {
+            classData.classTeacher = (classTeacher && typeof classTeacher === 'string' && classTeacher.trim())
+                ? classTeacher.trim()
+                : (classTeacher && typeof classTeacher === 'object' && classTeacher._id)
+                    ? classTeacher._id
+                    : null;
+        }
 
         await classData.save();
+        invalidateClassesCache().catch(() => {});
         res.json(classData);
     } catch (err) {
         console.error(err.message);
@@ -255,6 +323,7 @@ router.delete('/:id', [auth, checkRole(['super admin'])], async (req, res) => {
 
         // Delete associated timetable
         await Timetable.findOneAndDelete({ class: req.params.id });
+        invalidateClassesCache().catch(() => {});
 
         res.json({ msg: 'Class removed' });
     } catch (err) {

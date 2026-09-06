@@ -1623,6 +1623,77 @@ exports.recordVibeViews = async (req, res) => {
 };
 
 /**
+ * GET /api/vibes/:id/viewers
+ * Get list of users who viewed the story / vibe.
+ * Restricted to Super Admin, Admin, or the vibe author.
+ */
+exports.getVibeViewers = async (req, res) => {
+  try {
+    if (!isValidObjectId(req.params.id)) {
+      return res.status(400).json({ success: false, message: 'Invalid vibe ID' });
+    }
+
+    const vibe = await Vibe.findById(req.params.id).select('author').lean();
+    if (!vibe) {
+      return res.status(404).json({ success: false, message: 'Vibe not found' });
+    }
+
+    const currentUserId = req.user?.userId;
+    const currentUserRole = req.user?.role;
+    const isSuperAdminOrAdmin = currentUserRole === 'super admin' || currentUserRole === 'admin';
+    const isAuthor = currentUserId && vibe.author && vibe.author.toString() === currentUserId.toString();
+
+    if (!isSuperAdminOrAdmin && !isAuthor) {
+      return res.status(403).json({ success: false, message: 'Only admins or the story author can see who viewed this story' });
+    }
+
+    const page = Math.max(parseInt(req.query.page) || 1, 1);
+    const limit = Math.min(Math.max(parseInt(req.query.limit) || 20, 1), 100);
+    const skip = (page - 1) * limit;
+
+    const [views, total] = await Promise.all([
+      VibeView.find({ vibe: req.params.id })
+        .sort({ viewedAt: -1, createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .populate({
+          path: 'user',
+          select: 'name role profilePhoto currentClass designation',
+          populate: { path: 'currentClass', select: 'label name section' }
+        })
+        .lean(),
+      VibeView.countDocuments({ vibe: req.params.id })
+    ]);
+
+    const viewers = views
+      .filter(v => v.user)
+      .map(v => ({
+        _id: v.user._id,
+        name: v.user.name,
+        role: v.user.role,
+        profilePhoto: v.user.profilePhoto,
+        currentClass: v.user.currentClass,
+        designation: v.user.designation,
+        viewedAt: v.viewedAt || v.createdAt
+      }));
+
+    res.status(200).json({
+      success: true,
+      data: viewers,
+      pagination: {
+        total,
+        page,
+        pages: Math.ceil(total / limit) || 1,
+        hasNextPage: skip + limit < total
+      }
+    });
+  } catch (error) {
+    logger.error('Error fetching vibe viewers:', error);
+    res.status(500).json({ success: false, message: 'Server error while fetching story viewers' });
+  }
+};
+
+/**
  * GET /api/vibes/spotlight
  * Returns the top spotlighted/pinned vibe for the Home Page hero banner.
  */

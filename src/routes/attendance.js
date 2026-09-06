@@ -10,7 +10,7 @@ const Subject = require('../models/Subject');
 const LeaveRequest = require('../models/LeaveRequest');
 const Event = require('../models/Event');
 const AcademicYear = require('../models/AcademicYear');
-const { invalidateDashboardCaches } = require('../controllers/dashboardController');
+const { invalidateDashboardCaches, invalidateAdminDashboard, invalidateTeacherDashboard, invalidateMultipleStudentDashboards } = require('../controllers/dashboardController');
 const {
     getISTDateString,
     getISTDayBounds,
@@ -160,8 +160,16 @@ router.post('/mark', [auth, yearContext, requireOpenYear], async (req, res) => {
             await Attendance.bulkWrite(bulkOps, { ordered: false });
         }
 
-        // Invalidate dashboard caches so stats update immediately
-        invalidateDashboardCaches().catch(() => {});
+        // Invalidate dashboard caches (admin, class teacher, and marked students only)
+        invalidateAdminDashboard().catch(() => {});
+        invalidateTeacherDashboard(req.user.userId).catch(() => {});
+        if (classData?.classTeacher && classData.classTeacher.toString() !== req.user.userId) {
+            invalidateTeacherDashboard(classData.classTeacher).catch(() => {});
+        }
+        const studentIds = attendanceRecords.map(r => r.studentId || r.student).filter(Boolean);
+        if (studentIds.length > 0) {
+            invalidateMultipleStudentDashboards(studentIds).catch(() => {});
+        }
 
         res.json({ message: 'Attendance marked successfully' });
     } catch (err) {
@@ -225,8 +233,11 @@ router.post('/mark-staff', [auth, yearContext, requireOpenYear], async (req, res
             await Attendance.bulkWrite(bulkOps, { ordered: false });
         }
 
-        // Invalidate dashboard caches so stats update immediately
-        invalidateDashboardCaches().catch(() => {});
+        // Invalidate admin and affected teachers/staff dashboards
+        invalidateAdminDashboard().catch(() => {});
+        if (userIds && userIds.length > 0) {
+            userIds.forEach(uId => invalidateTeacherDashboard(uId).catch(() => {}));
+        }
 
         res.json({ message: 'Staff attendance marked successfully' });
     } catch (err) {
@@ -752,8 +763,12 @@ router.get('/missing-tracker', [auth, yearContext], async (req, res) => {
         }
 
         if (req.user.role === 'teacher' || req.user.role === 'staff' || req.user.role === 'support_staff') {
-            // Find class where teacher is classTeacher
-            const assignedClass = await Class.findOne({ classTeacher: req.user.userId }).lean();
+            // Find class where teacher is classTeacher in active academic year
+            const classFilter = { classTeacher: req.user.userId };
+            if (req.academicYearContext) {
+                classFilter.academicYear = req.academicYearContext;
+            }
+            const assignedClass = await Class.findOne(classFilter).lean();
             if (!assignedClass) {
                 return res.json({ success: true, missingDays: [] });
             }

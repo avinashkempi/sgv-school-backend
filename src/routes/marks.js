@@ -10,6 +10,7 @@ const GradeConfig = require('../models/GradeConfig');
 const User = require('../models/User');
 const AcademicYear = require('../models/AcademicYear');
 const notificationController = require('../controllers/notificationController');
+const { invalidateStudentDashboard, invalidateMultipleStudentDashboards, invalidateTeacherDashboard } = require('../controllers/dashboardController');
 
 const hasObjectIdMatch = (ids = [], userId) => ids.some((id) => id && id.toString() === userId);
 
@@ -143,6 +144,15 @@ router.post('/bulk', [auth, yearContext, requireOpenYear], async (req, res) => {
                     metadata: { examId: exam._id, marksId: marks._id }
                 });
             }
+
+            // Invalidate dashboards for affected students and teachers
+            if (validStudentIds.length > 0) {
+                invalidateMultipleStudentDashboards(validStudentIds).catch(() => {});
+            }
+            if (exam.class?.classTeacher) {
+                invalidateTeacherDashboard(exam.class.classTeacher).catch(() => {});
+            }
+            invalidateTeacherDashboard(req.user.userId).catch(() => {});
         }
 
         res.json({ message: 'Bulk marks entry completed', results });
@@ -236,6 +246,18 @@ router.post('/grid-update', [auth, yearContext, requireOpenYear], async (req, re
                 console.error("BulkWrite error:", error);
                 errors.push({ error: "Some records failed to update" });
             }
+
+            // Invalidate dashboards for affected students and teachers
+            if (gridData && gridData.length > 0) {
+                const studentIds = gridData.map(d => d.studentId).filter(Boolean);
+                if (studentIds.length > 0) {
+                    invalidateMultipleStudentDashboards(studentIds).catch(() => {});
+                }
+                if (exam.class?.classTeacher) {
+                    invalidateTeacherDashboard(exam.class.classTeacher).catch(() => {});
+                }
+                invalidateTeacherDashboard(req.user.userId).catch(() => {});
+            }
         }
 
         res.json({ message: 'Grid marks update completed', updated, created, errors });
@@ -302,6 +324,13 @@ router.post('/', [auth, yearContext, requireOpenYear], async (req, res) => {
             });
             await marks.save();
         }
+
+        // Invalidate dashboards for student and teachers
+        invalidateStudentDashboard(studentId).catch(() => {});
+        if (exam.class?.classTeacher) {
+            invalidateTeacherDashboard(exam.class.classTeacher).catch(() => {});
+        }
+        invalidateTeacherDashboard(req.user.userId).catch(() => {});
 
         const populatedMarks = await Marks.findById(marks._id)
             .populate('student', 'name email')
