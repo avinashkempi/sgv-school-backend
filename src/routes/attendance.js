@@ -768,6 +768,9 @@ router.get('/missing-tracker', [auth, yearContext], async (req, res) => {
             if (req.academicYearContext) {
                 classFilter.academicYear = req.academicYearContext;
             }
+            if (req.query.classId) {
+                classFilter._id = req.query.classId;
+            }
             const assignedClass = await Class.findOne(classFilter).lean();
             if (!assignedClass) {
                 return res.json({ success: true, missingDays: [] });

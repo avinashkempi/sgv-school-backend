@@ -8,6 +8,7 @@ const Marks = require('../models/Marks');
 const Class = require('../models/Class');
 const Exam = require('../models/Exam');
 const AcademicYear = require('../models/AcademicYear');
+const Subject = require('../models/Subject');
 const { getISTDateString } = require('../utils/dateUtils');
 const { cacheGet, cacheSet, cacheInvalidatePattern } = require('../config/redis');
 
@@ -389,7 +390,8 @@ exports.getTeacherStats = async (req, res) => {
         const teacherId = req.user.userId;
         const range = req.query.range || 'thisWeek';
         const yearCtx = req.academicYearContext || (req.activeYear ? req.activeYear._id.toString() : 'default');
-        const cacheKey = `teacherStats:${teacherId}:${range}:${yearCtx}`;
+        const requestedClassId = req.query.classId;
+        const cacheKey = `teacherStats:${teacherId}:${range}:${yearCtx}:${requestedClassId || 'default'}`;
 
         // 1. Fast local memory cache check
         const memCached = teacherStatsCache.get(cacheKey);
@@ -418,14 +420,24 @@ exports.getTeacherStats = async (req, res) => {
             classTeacherQuery.academicYear = yearId;
         }
 
-        // 1. Fetch My Class (as class teacher) & all timetables in parallel
+        // 1. Fetch ALL Classes where user is class teacher & all timetables in parallel
         const Timetable = require('../models/Timetable');
-        const [myClass, allTeacherTimetables] = await Promise.all([
-            Class.findOne(classTeacherQuery).lean(),
+        const [myClasses, allTeacherTimetables] = await Promise.all([
+            Class.find(classTeacherQuery).sort({ name: 1, section: 1 }).lean(),
             Timetable.find({
                 "schedule.periods.teacher": teacherId
             }).populate('class', 'name section').lean()
         ]);
+
+        // Select the active class for class-teacher metrics
+        let myClass = null;
+        if (myClasses && myClasses.length > 0) {
+            if (requestedClassId) {
+                myClass = myClasses.find(c => c._id.toString() === requestedClassId) || myClasses[0];
+            } else {
+                myClass = myClasses[0];
+            }
+        }
 
         // Calculate classes today & total distinct classes from single query result
         let classesTodayCount = 0;
@@ -564,13 +576,58 @@ exports.getTeacherStats = async (req, res) => {
             });
         }
 
-        // 6. Performance Charts (Avg Marks per Subject)
-        const teacherUser = await User.findById(teacherId).populate('subjects');
+        // Calculate total students across all classes the teacher is class teacher of
+        let totalMyStudents = myStudentCount;
+        if (myClasses && myClasses.length > 1) {
+            const allMyClassIds = myClasses.map(c => c._id);
+            totalMyStudents = await User.countDocuments({ currentClass: { $in: allMyClassIds }, role: 'student' });
+        }
+
+        // 6. Performance Charts (Percentage-based performance per subject)
         let subjectPerformanceLabels = [];
         let subjectPerformanceData = [];
 
-        if (teacherUser && teacherUser.subjects && teacherUser.subjects.length > 0) {
-            const subjectIds = teacherUser.subjects.map(s => s._id);
+        // Query active subjects taught by this teacher in the active academic year
+        const subjectFilter = { teachers: teacherId };
+        if (yearId) {
+            subjectFilter.academicYear = yearId;
+        }
+
+        let subjectsTaught = await Subject.find(subjectFilter)
+            .populate('class', 'name section branch')
+            .lean();
+
+        // Fallback: If not found in Subject.teachers, check teacher's user.subjects
+        if (!subjectsTaught || subjectsTaught.length === 0) {
+            const teacherUser = await User.findById(teacherId).populate({
+                path: 'subjects',
+                populate: { path: 'class', select: 'name section branch' }
+            }).lean();
+
+            if (teacherUser && teacherUser.subjects && teacherUser.subjects.length > 0) {
+                subjectsTaught = teacherUser.subjects.filter(s =>
+                    s && (!yearId || !s.academicYear || s.academicYear.toString() === yearId.toString())
+                );
+                if (subjectsTaught.length === 0) {
+                    subjectsTaught = teacherUser.subjects.filter(Boolean);
+                }
+            }
+        }
+
+        if (subjectsTaught && subjectsTaught.length > 0) {
+            const subjectIds = subjectsTaught.map(s => s._id);
+
+            const examMatch = {
+                'examDetails.subject': { $in: subjectIds },
+                'examDetails.totalMarks': { $gt: 0 }
+            };
+            if (yearId) {
+                try {
+                    examMatch['examDetails.academicYear'] = new mongoose.Types.ObjectId(yearId);
+                } catch (_) {
+                    examMatch['examDetails.academicYear'] = yearId;
+                }
+            }
 
             const marksStats = await Marks.aggregate([
                 {
@@ -582,43 +639,64 @@ exports.getTeacherStats = async (req, res) => {
                     }
                 },
                 { $unwind: '$examDetails' },
+                { $match: examMatch },
                 {
-                    $match: {
-                        'examDetails.subject': { $in: subjectIds }
+                    $project: {
+                        subject: '$examDetails.subject',
+                        percentage: {
+                            $multiply: [
+                                { $divide: ['$marksObtained', '$examDetails.totalMarks'] },
+                                100
+                            ]
+                        }
                     }
                 },
                 {
                     $group: {
-                        _id: '$examDetails.subject',
-                        avgMarks: { $avg: '$marksObtained' }
+                        _id: '$subject',
+                        avgPercentage: { $avg: '$percentage' }
                     }
                 }
             ]);
 
-            const subjectMap = new Map();
-            teacherUser.subjects.forEach(sub => {
+            // Track duplicate subject names across different classes
+            const nameCountMap = {};
+            subjectsTaught.forEach(sub => {
+                const cleanName = sub.name ? sub.name.trim() : 'Subject';
+                nameCountMap[cleanName] = (nameCountMap[cleanName] || 0) + 1;
+            });
+
+            // Map each taught subject to its percentage average with class disambiguation if needed
+            subjectsTaught.forEach(sub => {
                 const stat = marksStats.find(m => m._id.toString() === sub._id.toString());
-                if (stat) {
+                if (stat && stat.avgPercentage !== undefined && stat.avgPercentage !== null) {
                     const cleanName = sub.name ? sub.name.trim() : 'Subject';
-                    if (!subjectMap.has(cleanName)) {
-                        subjectMap.set(cleanName, { total: stat.avgMarks, count: 1 });
-                    } else {
-                        const existing = subjectMap.get(cleanName);
-                        existing.total += stat.avgMarks;
-                        existing.count += 1;
+                    let label = cleanName;
+                    // If teacher teaches this subject across multiple classes, disambiguate with class label
+                    if (nameCountMap[cleanName] > 1 && sub.class) {
+                        const secStr = sub.class.section ? ` ${sub.class.section}` : '';
+                        label = `${cleanName} (${sub.class.name}${secStr})`;
                     }
+                    subjectPerformanceLabels.push(label);
+                    subjectPerformanceData.push(Math.round(stat.avgPercentage));
                 }
             });
 
-            subjectMap.forEach((val, name) => {
-                subjectPerformanceLabels.push(name);
-                subjectPerformanceData.push(Math.round(val.total / val.count));
-            });
-
         } else if (myClass) {
-            // Fallback: Show class performance across subjects
+            // Fallback: Show class performance across subjects for class teacher's class
             const students = await User.find({ currentClass: myClass._id, role: 'student' }).select('_id');
             const studentIds = students.map(s => s._id);
+
+            const fallbackExamMatch = {
+                'examDetails.totalMarks': { $gt: 0 }
+            };
+            if (yearId) {
+                try {
+                    fallbackExamMatch['examDetails.academicYear'] = new mongoose.Types.ObjectId(yearId);
+                } catch (_) {
+                    fallbackExamMatch['examDetails.academicYear'] = yearId;
+                }
+            }
 
             const classStats = await Marks.aggregate([
                 { $match: { student: { $in: studentIds } } },
@@ -631,6 +709,7 @@ exports.getTeacherStats = async (req, res) => {
                     }
                 },
                 { $unwind: '$examDetails' },
+                { $match: fallbackExamMatch },
                 {
                     $lookup: {
                         from: 'subjects',
@@ -641,17 +720,28 @@ exports.getTeacherStats = async (req, res) => {
                 },
                 { $unwind: '$subjectDetails' },
                 {
-                    $group: {
-                        _id: '$subjectDetails.name',
-                        avgMarks: { $avg: '$marksObtained' }
+                    $project: {
+                        subjectName: '$subjectDetails.name',
+                        percentage: {
+                            $multiply: [
+                                { $divide: ['$marksObtained', '$examDetails.totalMarks'] },
+                                100
+                            ]
+                        }
                     }
                 },
-                { $limit: 5 }
+                {
+                    $group: {
+                        _id: '$subjectName',
+                        avgPercentage: { $avg: '$percentage' }
+                    }
+                },
+                { $limit: 6 }
             ]);
 
             classStats.forEach(stat => {
                 subjectPerformanceLabels.push(stat._id);
-                subjectPerformanceData.push(Math.round(stat.avgMarks));
+                subjectPerformanceData.push(Math.round(stat.avgPercentage));
             });
         }
 
@@ -660,8 +750,17 @@ exports.getTeacherStats = async (req, res) => {
                 classesToday: classesTodayCount,
                 totalClassesTaught: totalClassesTaught,
                 myStudents: myStudentCount,
+                totalMyStudents: totalMyStudents,
                 lowAttendanceCount: lowAttendanceCount,
-                className: className
+                className: className,
+                classId: myClass ? myClass._id : null,
+                classes: (myClasses || []).map(c => ({
+                    _id: c._id,
+                    name: c.name,
+                    section: c.section,
+                    className: `${c.name} ${c.section || ''}`.trim()
+                })),
+                selectedClassId: myClass ? myClass._id : null
             },
             classAttendance: classAttendance,
             charts: {
