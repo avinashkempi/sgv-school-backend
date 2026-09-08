@@ -45,7 +45,10 @@ exports.listVibes = async (req, res) => {
 
     if (category && category !== 'all') {
       if (category === 'official') {
-        query.$or = [{ postAs: 'school' }, { category: 'official' }];
+        query.$or = [
+          { category: 'official' },
+          { postAs: 'school', category: { $in: [null, undefined, '', 'official'] } }
+        ];
       } else {
         query.category = category;
       }
@@ -248,9 +251,9 @@ exports.createVibe = async (req, res) => {
       }
     }
 
-    const rawCat = (category && typeof category === 'string') ? category.trim() : 'general';
+    const rawCat = (category && typeof category === 'string') ? category.trim() : '';
     const finalCategory = isAdmin
-      ? ((postIdentity === 'school' || rawCat === 'official') ? 'official' : (rawCat || 'general'))
+      ? (rawCat || (postIdentity === 'school' ? 'official' : 'general'))
       : (rawCat === 'official' ? 'general' : (rawCat || 'general'));
 
     const vibe = new Vibe({
@@ -364,9 +367,7 @@ exports.updateVibe = async (req, res) => {
     if (isAdmin) {
       if (category !== undefined) {
         const rawCat = (typeof category === 'string') ? category.trim() : 'general';
-        vibe.category = (vibe.postAs === 'school' || rawCat === 'official') ? 'official' : rawCat;
-      } else if (vibe.postAs === 'school') {
-        vibe.category = 'official';
+        vibe.category = rawCat || 'general';
       }
       if (isSpotlight !== undefined) {
         vibe.isSpotlight = Boolean(isSpotlight);
@@ -375,15 +376,28 @@ exports.updateVibe = async (req, res) => {
       // Non-admin cannot post as official or change spotlight
       if (category !== undefined) {
         const rawCat = (typeof category === 'string') ? category.trim() : 'general';
-        vibe.category = rawCat === 'official' ? 'general' : rawCat;
+        vibe.category = rawCat === 'official' ? 'general' : (rawCat || 'general');
       }
       vibe.isSpotlight = false;
 
-      // Reset status to pending for moderation when edited by non-admin
-      vibe.status = 'pending';
-      vibe.reviewedBy = undefined;
-      vibe.reviewedAt = undefined;
-      vibe.rejectionReason = undefined;
+      // Only reset status to pending for moderation if non-admin changed media or caption
+      const captionActuallyChanged = caption !== undefined && caption.trim() !== (vibe.caption || '').trim();
+      const imagesActuallyChanged = images !== undefined && (
+        images.length !== (vibe.images || []).length ||
+        images.some((img, idx) => {
+          const prevImg = vibe.images?.[idx];
+          const newUrl = typeof img === 'string' ? img : img?.url;
+          const oldUrl = prevImg?.url;
+          return newUrl !== oldUrl;
+        })
+      );
+
+      if (captionActuallyChanged || imagesActuallyChanged) {
+        vibe.status = 'pending';
+        vibe.reviewedBy = undefined;
+        vibe.reviewedAt = undefined;
+        vibe.rejectionReason = undefined;
+      }
     }
 
     if (location !== undefined) vibe.location = location ? location.trim() : '';
@@ -472,10 +486,13 @@ exports.updateVibe = async (req, res) => {
       })();
     }
 
+    const isPendingNow = vibe.status === 'pending';
     res.status(200).json({
       success: true,
       data: vibe.toObject(),
-      message: isAdmin ? 'Vibe updated successfully' : 'Vibe updated and submitted for admin review!'
+      message: isPendingNow
+        ? 'Vibe updated and submitted for admin review!'
+        : 'Vibe updated successfully'
     });
   } catch (error) {
     logger.error('Error updating vibe:', error);
