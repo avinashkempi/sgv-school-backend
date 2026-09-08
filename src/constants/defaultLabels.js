@@ -45,7 +45,7 @@ const DEFAULT_LABELS = {
     "confirm": "Confirm",
     "pending": "Pending",
     "history": "History",
-    "students": "students",
+    "students": "Students",
     "teaching": "Teaching",
     "somethingWentWrong": "Something went wrong",
     "noInternetConnection": "No internet connection",
