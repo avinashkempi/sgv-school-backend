@@ -54,6 +54,11 @@ const notificationSchema = new mongoose.Schema({
     type: Date,
     default: null
   },
+  // Users who have individually read this notification (for broadcast isolation)
+  readBy: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  }],
   // Action button support
   actionType: {
     type: String,
@@ -94,5 +99,6 @@ notificationSchema.index({ targetRole: 1, isRead: 1, createdAt: -1 });
 notificationSchema.index({ category: 1, createdAt: -1 });
 notificationSchema.index({ recipient: 1, isRead: 1, isArchived: 1, createdAt: -1 });
 notificationSchema.index({ targetRole: 1, isRead: 1, isArchived: 1 });
+notificationSchema.index({ createdAt: -1, recipient: 1 });
 
 module.exports = mongoose.model('Notification', notificationSchema);

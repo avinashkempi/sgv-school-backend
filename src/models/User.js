@@ -184,6 +184,10 @@ const userSchema = new mongoose.Schema({
     fee: { type: Boolean, default: true },
     event: { type: Boolean, default: true },
     general: { type: Boolean, default: true }
+  },
+  lastNotificationReadAt: {
+    type: Date,
+    default: null
   }
 });
 

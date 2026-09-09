@@ -23,7 +23,8 @@ const sanitizeUserForRequest = (user) => ({
   userId: user._id.toString(),
   name: user.name,
   role: user.role,
-  currentClass: user.currentClass ? user.currentClass.toString() : null
+  currentClass: user.currentClass ? user.currentClass.toString() : null,
+  lastNotificationReadAt: user.lastNotificationReadAt || null
 });
 
 const isTokenIssuedBeforePasswordChange = (payload, user) => {
@@ -52,7 +53,7 @@ const loadAndValidateTokenUser = async (payload) => {
   }
 
   const user = await User.findById(payload.userId)
-    .select('name role tokenVersion passwordChangedAt isActive currentClass')
+    .select('name role tokenVersion passwordChangedAt isActive currentClass lastNotificationReadAt')
     .lean();
 
   if (!user) {

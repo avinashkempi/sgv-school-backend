@@ -7,6 +7,113 @@ const { cacheGet, cacheSet, cacheDel, cacheInvalidatePattern } = require('../con
 const logger = require('../utils/logger');
 
 /**
+ * Helper to build query for notifications visible to a specific user
+ */
+const buildUserNotificationsQuery = async (user, isArchived = false) => {
+    const userId = user?.userId || user?.id || user?._id;
+    const userRole = user?.role;
+
+    // Handle ObjectId vs String safely for MongoDB matching & aggregation
+    const userObjectId = (userId && mongoose.Types.ObjectId.isValid(userId))
+        ? new mongoose.Types.ObjectId(userId)
+        : null;
+
+    const recipientClauses = [
+        ...(userId ? [{ recipient: userId }] : []),
+        ...(userObjectId ? [{ recipient: userObjectId }] : [])
+    ];
+
+    let orClauses = [
+        ...recipientClauses
+    ];
+
+    if (userRole === 'super admin') {
+        // Super admin sees all broadcast notifications (recipient: null)
+        orClauses.push({ recipient: null });
+    } else if (userRole === 'admin') {
+        // Admin sees broadcast notifications targeted to 'all' or 'admin'
+        orClauses.push({
+            recipient: null,
+            targetRole: { $in: ['all', 'admin'] }
+        });
+    } else if (userRole === 'student') {
+        // Student sees role-targeted notifications
+        orClauses.push({
+            recipient: null,
+            targetClass: null,
+            targetRole: { $in: ['all', 'student'] }
+        });
+
+        // Plus class-targeted notifications
+        const currentClass = user.currentClass || (userId ? (await User.findById(userId).select('currentClass').lean())?.currentClass : null);
+        if (currentClass) {
+            const classObjectId = mongoose.Types.ObjectId.isValid(currentClass)
+                ? new mongoose.Types.ObjectId(currentClass)
+                : null;
+            orClauses.push({
+                recipient: null,
+                targetClass: classObjectId ? { $in: [currentClass, classObjectId] } : currentClass
+            });
+        }
+    } else {
+        // Teachers, staff, support_staff, etc.
+        orClauses.push({
+            recipient: null,
+            targetClass: null,
+            targetRole: { $in: ['all', userRole] }
+        });
+    }
+
+    return {
+        isArchived: Boolean(isArchived),
+        $or: orClauses
+    };
+};
+
+/**
+ * Helper to retrieve user's notification watermark (lastNotificationReadAt)
+ */
+const getUserWatermark = async (user) => {
+    if (user?.lastNotificationReadAt) {
+        return new Date(user.lastNotificationReadAt);
+    }
+    const userId = user?.userId || user?.id || user?._id;
+    if (!userId) return null;
+    const userDoc = await User.findById(userId).select('lastNotificationReadAt').lean();
+    return userDoc?.lastNotificationReadAt ? new Date(userDoc.lastNotificationReadAt) : null;
+};
+
+/**
+ * Helper to resolve whether a specific notification is read for a given user
+ */
+const resolveNotificationReadState = (notif, userId, userObjectId, watermark) => {
+    const isPersonal = Boolean(notif.recipient);
+    if (isPersonal) {
+        return {
+            isRead: Boolean(notif.isRead),
+            readAt: notif.readAt || null
+        };
+    }
+
+    // Broadcast notification resolution:
+    // 1. Covered by watermark (read all occurred at or after creation)
+    const isBeforeWatermark = watermark && new Date(notif.createdAt) <= watermark;
+    // 2. Individually read by this user
+    const isIndividuallyRead = Array.isArray(notif.readBy) && (
+        notif.readBy.some(id => id.toString() === userId.toString())
+    );
+    // 3. Fallback to existing flag
+    const isGloballyRead = Boolean(notif.isRead);
+
+    const isRead = isBeforeWatermark || isIndividuallyRead || isGloballyRead;
+    const readAt = isBeforeWatermark
+        ? watermark
+        : (notif.readAt || (isIndividuallyRead ? notif.updatedAt : null));
+
+    return { isRead, readAt };
+};
+
+/**
  * Get notifications for current user with filtering
  */
 exports.getNotifications = async (req, res) => {
@@ -16,79 +123,79 @@ exports.getNotifications = async (req, res) => {
         const skip = (page - 1) * limit;
         const { category, isRead, isArchived = 'false' } = req.query;
 
-        let query = {
-            isArchived: isArchived === 'true',
-            $or: [
-                { recipient: req.user.userId },
-                {
-                    recipient: null,
-                    targetClass: null,
-                    targetRole: { $in: ['all', req.user.role] }
-                }
-            ]
-        };
+        const userId = req.user.userId || req.user.id || req.user._id;
+        const userObjectId = (userId && mongoose.Types.ObjectId.isValid(userId))
+            ? new mongoose.Types.ObjectId(userId)
+            : null;
+
+        const [baseQuery, watermark] = await Promise.all([
+            buildUserNotificationsQuery(req.user, isArchived === 'true'),
+            getUserWatermark(req.user)
+        ]);
+
+        let query = { ...baseQuery };
 
         // Filter by category
         if (category && category !== 'all') {
             query.category = category;
         }
 
-        // Filter by read status
-        if (isRead !== undefined) {
-            query.isRead = isRead === 'true';
-        }
-
-        if (req.user.role === 'student') {
-            const currentClass = req.user.currentClass || (await User.findById(req.user.userId).select('currentClass').lean())?.currentClass;
-            if (currentClass) {
-                query.$or.push({
-                    recipient: null,
-                    targetClass: currentClass,
-                    isArchived: isArchived === 'true'
-                });
-            }
-        }
-
-        if (req.user.role === 'super admin') {
-            query = {
-                isArchived: isArchived === 'true',
-                $or: [
-                    { recipient: req.user.userId },
-                    { recipient: null }
-                ]
-            };
-            if (category && category !== 'all') query.category = category;
-            if (isRead !== undefined) query.isRead = isRead === 'true';
-        }
-
-        // Fetch paginated notifications and counts in parallel using aggregate
-        const [notifications, countStats] = await Promise.all([
+        // Fetch paginated notifications
+        const [rawNotifications, total] = await Promise.all([
             Notification.find(query)
                 .select('-__v')
                 .sort({ createdAt: -1 })
                 .skip(skip)
                 .limit(limit)
                 .lean(),
-            Notification.aggregate([
-                { $match: query },
-                {
-                    $group: {
-                        _id: null,
-                        total: { $sum: 1 },
-                        unread: {
-                            $sum: { $cond: [{ $eq: ['$isRead', false] }, 1, 0] }
-                        }
-                    }
-                }
-            ])
+            Notification.countDocuments(query)
         ]);
 
-        const total = countStats[0]?.total || 0;
-        const unreadCount = countStats[0]?.unread || 0;
+        // Compute per-user read state using Watermark and read receipts
+        const formattedNotifications = rawNotifications.map(notif => {
+            const { isRead: computedIsRead, readAt: computedReadAt } = resolveNotificationReadState(
+                notif,
+                userId,
+                userObjectId,
+                watermark
+            );
+            return {
+                ...notif,
+                isRead: computedIsRead,
+                readAt: computedReadAt
+            };
+        });
+
+        // Filter by computed read status if requested by client
+        let resultNotifications = formattedNotifications;
+        if (isRead !== undefined) {
+            const requestedRead = isRead === 'true';
+            resultNotifications = formattedNotifications.filter(n => n.isRead === requestedRead);
+        }
+
+        // Calculate accurate unread count using the watermark query
+        const unreadFilter = {
+            ...baseQuery,
+            isArchived: false,
+            $or: [
+                {
+                    recipient: userObjectId ? { $in: [userId, userObjectId] } : userId,
+                    isRead: false
+                },
+                {
+                    recipient: null,
+                    isRead: { $ne: true },
+                    ...(watermark ? { createdAt: { $gt: watermark } } : {}),
+                    ...(userObjectId ? { readBy: { $ne: userObjectId } } : {})
+                }
+            ]
+        };
+
+        const unreadCount = await Notification.countDocuments(unreadFilter);
 
         res.json({
             success: true,
-            notifications,
+            notifications: resultNotifications,
             currentPage: page,
             totalPages: Math.ceil(total / limit),
             totalNotifications: total,
@@ -105,7 +212,8 @@ exports.getNotifications = async (req, res) => {
  */
 exports.getUnreadCount = async (req, res) => {
     try {
-        const cacheKey = `unreadCount:${req.user.userId}`;
+        const userId = req.user.userId || req.user.id || req.user._id;
+        const cacheKey = `unreadCount:${userId}`;
 
         // 1. Check Redis cache (30s TTL)
         try {
@@ -115,29 +223,33 @@ exports.getUnreadCount = async (req, res) => {
             }
         } catch (_) {}
 
-        const orClauses = [
-            { recipient: req.user.userId },
-            {
-                recipient: null,
-                targetClass: null,
-                targetRole: { $in: ['all', req.user.role] }
-            }
-        ];
+        const userObjectId = (userId && mongoose.Types.ObjectId.isValid(userId))
+            ? new mongoose.Types.ObjectId(userId)
+            : null;
 
-        // Students also receive class-broadcast notifications
-        if (req.user.role === 'student') {
-            const currentClass = req.user.currentClass || (await User.findById(req.user.userId).select('currentClass').lean())?.currentClass;
-            if (currentClass) {
-                orClauses.push({
+        const [baseQuery, watermark] = await Promise.all([
+            buildUserNotificationsQuery(req.user, false),
+            getUserWatermark(req.user)
+        ]);
+
+        const unreadFilter = {
+            ...baseQuery,
+            isArchived: false,
+            $or: [
+                {
+                    recipient: userObjectId ? { $in: [userId, userObjectId] } : userId,
+                    isRead: false
+                },
+                {
                     recipient: null,
-                    targetClass: currentClass,
-                    isArchived: false
-                });
-            }
-        }
+                    isRead: { $ne: true },
+                    ...(watermark ? { createdAt: { $gt: watermark } } : {}),
+                    ...(userObjectId ? { readBy: { $ne: userObjectId } } : {})
+                }
+            ]
+        };
 
-        const query = { isRead: false, isArchived: false, $or: orClauses };
-        const count = await Notification.countDocuments(query);
+        const count = await Notification.countDocuments(unreadFilter);
 
         // Store in Redis with 30s TTL
         cacheSet(cacheKey, { unreadCount: count }, 30).catch(() => {});
@@ -156,37 +268,56 @@ exports.markAsRead = async (req, res) => {
     try {
         const isRead = req.body && req.body.isRead !== undefined ? req.body.isRead : true;
         const notificationId = req.params.id;
-        
+        const userId = req.user.userId || req.user.id || req.user._id;
+        const userObjectId = (userId && mongoose.Types.ObjectId.isValid(userId))
+            ? new mongoose.Types.ObjectId(userId)
+            : null;
+
         // Validate ObjectId
         if (!mongoose.Types.ObjectId.isValid(notificationId)) {
             return res.status(400).json({ success: false, message: 'Invalid notification ID' });
         }
-        
-        const notification = await Notification.findById(notificationId);
 
+        const notification = await Notification.findById(notificationId);
         if (!notification) {
-            // This is expected if notification was already deleted or marked read elsewhere
-            // Only log as debug since this is a valid scenario (race condition or cleanup)
-            console.debug(`[Notification Controller] Notification already deleted or not found (ID: ${notificationId})`);
             return res.status(404).json({ success: false, message: 'Notification not found or already deleted' });
         }
 
-        // Only allow marking if this notification is addressed to the requesting user
-        const isPersonal = notification.recipient?.toString() === req.user.userId;
+        const isPersonal = notification.recipient && notification.recipient.toString() === userId.toString();
         const isBroadcast = !notification.recipient;
         const isAdminOverride = req.user.role === 'admin' || req.user.role === 'super admin';
+
         if (!isPersonal && !isBroadcast && !isAdminOverride) {
             return res.status(403).json({ success: false, message: 'Not authorised to modify this notification' });
         }
 
-        notification.isRead = isRead;
-        notification.readAt = isRead ? new Date() : null;
-        await notification.save();
+        if (isPersonal) {
+            notification.isRead = isRead;
+            notification.readAt = isRead ? new Date() : null;
+            await notification.save();
+        } else if (userObjectId) {
+            // Isolate broadcast read state per user via readBy array
+            if (isRead) {
+                await Notification.findByIdAndUpdate(notificationId, {
+                    $addToSet: { readBy: userObjectId }
+                });
+            } else {
+                await Notification.findByIdAndUpdate(notificationId, {
+                    $pull: { readBy: userObjectId }
+                });
+            }
+        }
 
         // Invalidate unread count cache for requesting user
-        cacheDel(`unreadCount:${req.user.userId}`).catch(() => {});
+        cacheDel(`unreadCount:${userId}`).catch(() => {});
 
-        res.json({ success: true, notification });
+        res.json({
+            success: true,
+            notification: {
+                ...notification.toObject(),
+                isRead
+            }
+        });
     } catch (err) {
         console.error('[Notification Controller] Mark Read Error:', err.message);
         res.status(500).json({ success: false, message: 'Server Error' });
@@ -198,31 +329,36 @@ exports.markAsRead = async (req, res) => {
  */
 exports.markAllAsRead = async (req, res) => {
     try {
-        // Only mark notifications that are actually visible to this user:
-        // - personally addressed ones, OR broadcast ones targeting their role
-        const result = await Notification.updateMany(
+        const userId = req.user.userId || req.user.id || req.user._id;
+        const userObjectId = (userId && mongoose.Types.ObjectId.isValid(userId))
+            ? new mongoose.Types.ObjectId(userId)
+            : null;
+        const now = new Date();
+
+        // 1. Advance the user's watermark timestamp (O(1) isolated operation)
+        await User.findByIdAndUpdate(userId, { lastNotificationReadAt: now });
+
+        // 2. Mark any personal direct notifications addressed to this user as read
+        const personalRecipientFilter = userObjectId ? { $in: [userId, userObjectId] } : userId;
+        const personalResult = await Notification.updateMany(
             {
+                recipient: personalRecipientFilter,
                 isRead: false,
-                isArchived: false,
-                $or: [
-                    { recipient: req.user.userId },
-                    {
-                        recipient: null,
-                        targetClass: null,
-                        targetRole: { $in: ['all', req.user.role] }
-                    }
-                ]
+                isArchived: false
             },
-            { $set: { isRead: true, readAt: new Date() } }
+            { $set: { isRead: true, readAt: now } }
         );
 
-        // Invalidate unread count cache
-        cacheDel(`unreadCount:${req.user.userId}`).catch(() => {});
+        // 3. Invalidate auth user cache and Redis unread count cache
+        const { invalidateUserCache } = require('../middleware/auth');
+        invalidateUserCache(userId);
+        cacheDel(`unreadCount:${userId}`).catch(() => {});
 
         res.json({
             success: true,
             message: 'All notifications marked as read',
-            modifiedCount: result.modifiedCount
+            watermark: now,
+            modifiedCount: personalResult.modifiedCount
         });
     } catch (err) {
         console.error('[Notification Controller] Mark All Read Error:', err.message);
