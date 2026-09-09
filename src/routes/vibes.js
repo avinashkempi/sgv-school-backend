@@ -48,6 +48,11 @@ router.get('/:id/viewers', authenticateToken, getVibeViewers);
 
 // ── Admin Moderation Endpoints ──
 router.get('/admin/pending', authenticateToken, requireAdmin, listPendingVibes);
+router.get('/admin/rejected', authenticateToken, requireAdmin, (req, res, next) => {
+  req.query.status = 'rejected';
+  return listPendingVibes(req, res, next);
+});
+router.get('/admin/moderation', authenticateToken, requireAdmin, listPendingVibes);
 router.post('/admin/batch-review', authenticateToken, requireAdmin, batchReviewVibes);
 router.patch('/admin/:id/review', authenticateToken, requireAdmin, reviewVibe);
 router.patch('/admin/:id/pin', authenticateToken, requireAdmin, togglePinVibe);

@@ -1197,7 +1197,9 @@ exports.getMySavedVibes = async (req, res) => {
 
 /**
  * GET /api/vibes/admin/pending
- * List all pending vibes requiring review. Admin / Super Admin only.
+/**
+ * GET /api/vibes/admin/pending
+ * List vibes for moderation (pending, rejected, or approved). Admin / Super Admin only.
  */
 exports.listPendingVibes = async (req, res) => {
   try {
@@ -1205,9 +1207,32 @@ exports.listPendingVibes = async (req, res) => {
     const limit = Math.min(Math.max(parseInt(req.query.limit) || 20, 1), 50);
     const skip = (page - 1) * limit;
 
-    const [pendingVibes, total] = await Promise.all([
-      Vibe.find({ status: 'pending', isActive: true })
-        .sort({ createdAt: 1 })
+    const requestedStatus = req.query.status;
+    const status = ['pending', 'rejected', 'approved'].includes(requestedStatus)
+      ? requestedStatus
+      : 'pending';
+
+    const filter = { status, isActive: true };
+
+    if (req.query.category && req.query.category !== 'all') {
+      filter.category = req.query.category;
+    }
+
+    if (req.query.search && req.query.search.trim()) {
+      filter.caption = { $regex: req.query.search.trim(), $options: 'i' };
+    }
+
+    // Determine sort based on status
+    let sortCriteria = { createdAt: 1 };
+    if (status === 'rejected') {
+      sortCriteria = { reviewedAt: -1, updatedAt: -1, createdAt: -1 };
+    } else if (status === 'approved') {
+      sortCriteria = { reviewedAt: -1, createdAt: -1 };
+    }
+
+    const [vibes, totalFiltered, statusCounts] = await Promise.all([
+      Vibe.find(filter)
+        .sort(sortCriteria)
         .skip(skip)
         .limit(limit)
         .populate({
@@ -1215,30 +1240,51 @@ exports.listPendingVibes = async (req, res) => {
           select: 'name role profilePhoto currentClass designation phone email',
           populate: { path: 'currentClass', select: 'label name section' }
         })
+        .populate({
+          path: 'reviewedBy',
+          select: 'name role profilePhoto designation'
+        })
         .lean(),
-      Vibe.countDocuments({ status: 'pending', isActive: true })
+      Vibe.countDocuments(filter),
+      Vibe.aggregate([
+        { $match: { isActive: true } },
+        { $group: { _id: '$status', count: { $sum: 1 } } }
+      ])
     ]);
+
+    const counts = {
+      pending: 0,
+      rejected: 0,
+      approved: 0
+    };
+    statusCounts.forEach((c) => {
+      if (counts[c._id] !== undefined) counts[c._id] = c.count;
+    });
 
     res.status(200).json({
       success: true,
-      data: pendingVibes,
-      pendingCount: total,
+      data: vibes,
+      status,
+      pendingCount: counts.pending,
+      rejectedCount: counts.rejected,
+      approvedCount: counts.approved,
+      counts,
       pagination: {
         page,
         limit,
-        total,
-        hasMore: skip + pendingVibes.length < total
+        total: totalFiltered,
+        hasMore: skip + vibes.length < totalFiltered
       }
     });
   } catch (error) {
-    logger.error('Error listing pending vibes:', error);
-    res.status(500).json({ success: false, message: 'Server error while fetching pending vibes' });
+    logger.error('Error listing vibes for moderation:', error);
+    res.status(500).json({ success: false, message: 'Server error while fetching vibes' });
   }
 };
 
 /**
  * PATCH /api/vibes/admin/:id/review
- * Approve or Reject a vibe. Admin / Super Admin only.
+ * Approve, Reject, or Restore to Pending a vibe. Admin / Super Admin only.
  */
 exports.reviewVibe = async (req, res) => {
   try {
@@ -1249,19 +1295,25 @@ exports.reviewVibe = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid vibe ID' });
     }
 
-    if (!['approve', 'reject'].includes(action)) {
-      return res.status(400).json({ success: false, message: 'Action must be "approve" or "reject"' });
+    if (!['approve', 'reject', 'pending'].includes(action)) {
+      return res.status(400).json({ success: false, message: 'Action must be "approve", "reject", or "pending"' });
     }
 
-    const vibe = await Vibe.findOne({ _id: vibeId, isActive: true }).populate('author', 'name role profilePhoto currentClass designation');
+    const vibe = await Vibe.findOne({ _id: vibeId, isActive: true })
+      .populate('author', 'name role profilePhoto currentClass designation');
     if (!vibe) {
       return res.status(404).json({ success: false, message: 'Vibe not found' });
     }
 
-    const newStatus = action === 'approve' ? 'approved' : 'rejected';
+    const previousStatus = vibe.status;
+    let newStatus = 'pending';
+    if (action === 'approve') newStatus = 'approved';
+    else if (action === 'reject') newStatus = 'rejected';
+
     vibe.status = newStatus;
     vibe.reviewedBy = req.user.userId;
     vibe.reviewedAt = new Date();
+
     if (action === 'reject') {
       vibe.rejectionReason = reason ? reason.trim() : 'Does not follow school community guidelines';
     } else {
@@ -1269,40 +1321,59 @@ exports.reviewVibe = async (req, res) => {
     }
 
     await vibe.save();
+    await vibe.populate({
+      path: 'reviewedBy',
+      select: 'name role profilePhoto designation'
+    });
 
-    // Trigger push & in-app notification to author
-    (async () => {
-      try {
-        const authorId = vibe.author?._id || vibe.author;
-        const title = action === 'approve' ? '✨ Vibe Approved!' : 'Vibe Submission Update';
-        const message = action === 'approve'
-          ? 'Your campus vibe has been approved and is now live on SGV Campus Feed!'
-          : `Your vibe submission was not approved: ${vibe.rejectionReason}`;
+    // Trigger push & in-app notification to author on approve or reject
+    if (action === 'approve' || action === 'reject') {
+      (async () => {
+        try {
+          const authorId = vibe.author?._id || vibe.author;
+          const title = action === 'approve' ? '✨ Vibe Approved!' : 'Vibe Submission Update';
+          const message = action === 'approve'
+            ? 'Your campus vibe has been approved and is now live on SGV Campus Feed!'
+            : `Your vibe submission was not approved: ${vibe.rejectionReason}`;
 
-        await Notification.create({
-          title,
-          message,
-          type: 'General',
-          category: 'general',
-          recipient: authorId,
-          actionType: 'navigate',
-          actionData: '/vibes'
-        }).catch(() => {});
+          await Notification.create({
+            title,
+            message,
+            type: 'General',
+            category: 'general',
+            recipient: authorId,
+            actionType: 'navigate',
+            actionData: '/vibes'
+          }).catch(() => {});
 
-        await sendTargetedNotification('user', authorId, {
-          title,
-          message,
-          type: 'General'
-        }).catch(() => {});
-      } catch (notifErr) {
-        logger.error('[Vibe Review] Notification error:', notifErr);
-      }
-    })();
+          await sendTargetedNotification('user', authorId, {
+            title,
+            message,
+            type: 'General'
+          }).catch(() => {});
+        } catch (notifErr) {
+          logger.error('[Vibe Review] Notification error:', notifErr);
+        }
+      })();
+    }
+
+    let successMessage = 'Vibe updated successfully';
+    if (action === 'approve') {
+      successMessage = previousStatus === 'rejected'
+        ? 'Rejected vibe approved and published live!'
+        : 'Vibe approved and live!';
+    } else if (action === 'reject') {
+      successMessage = previousStatus === 'rejected'
+        ? 'Rejection feedback updated.'
+        : 'Vibe rejected.';
+    } else if (action === 'pending') {
+      successMessage = 'Vibe restored to pending review queue.';
+    }
 
     res.status(200).json({
       success: true,
       data: vibe.toObject(),
-      message: action === 'approve' ? 'Vibe approved and live!' : 'Vibe rejected.'
+      message: successMessage
     });
   } catch (error) {
     logger.error('Error reviewing vibe:', error);
@@ -1312,7 +1383,7 @@ exports.reviewVibe = async (req, res) => {
 
 /**
  * POST /api/vibes/admin/batch-review
- * Approve or Reject multiple pending vibes at once. Admin / Super Admin only.
+ * Approve, Reject, or Restore multiple vibes at once. Admin / Super Admin only.
  */
 exports.batchReviewVibes = async (req, res) => {
   try {
@@ -1322,8 +1393,8 @@ exports.batchReviewVibes = async (req, res) => {
       return res.status(400).json({ success: false, message: 'vibeIds array is required' });
     }
 
-    if (!['approve', 'reject'].includes(action)) {
-      return res.status(400).json({ success: false, message: 'Action must be "approve" or "reject"' });
+    if (!['approve', 'reject', 'pending'].includes(action)) {
+      return res.status(400).json({ success: false, message: 'Action must be "approve", "reject", or "pending"' });
     }
 
     const validIds = vibeIds.filter(id => isValidObjectId(id)).map(id => new mongoose.Types.ObjectId(id));
@@ -1331,7 +1402,10 @@ exports.batchReviewVibes = async (req, res) => {
       return res.status(400).json({ success: false, message: 'No valid vibe IDs provided' });
     }
 
-    const newStatus = action === 'approve' ? 'approved' : 'rejected';
+    let newStatus = 'pending';
+    if (action === 'approve') newStatus = 'approved';
+    else if (action === 'reject') newStatus = 'rejected';
+
     const finalReason = reason ? reason.trim() : 'Does not follow school community guidelines';
 
     const updateDoc = {
@@ -1343,7 +1417,7 @@ exports.batchReviewVibes = async (req, res) => {
       }
     };
 
-    if (action === 'approve') {
+    if (action === 'approve' || action === 'pending') {
       updateDoc.$unset = { rejectionReason: 1 };
     }
 
@@ -1352,41 +1426,48 @@ exports.batchReviewVibes = async (req, res) => {
       updateDoc
     );
 
-    // Trigger push & in-app notifications asynchronously
-    (async () => {
-      try {
-        const vibes = await Vibe.find({ _id: { $in: validIds } }).select('author caption category');
-        for (const v of vibes) {
-          if (!v.author) continue;
-          const title = action === 'approve' ? '✨ Vibe Approved!' : 'Vibe Submission Update';
-          const message = action === 'approve'
-            ? 'Your campus vibe has been approved and is now live on SGV Campus Feed!'
-            : `Your vibe submission was not approved: ${finalReason}`;
+    // Trigger push & in-app notifications asynchronously on approve or reject
+    if (action === 'approve' || action === 'reject') {
+      (async () => {
+        try {
+          const vibes = await Vibe.find({ _id: { $in: validIds } }).select('author caption category');
+          for (const v of vibes) {
+            if (!v.author) continue;
+            const title = action === 'approve' ? '✨ Vibe Approved!' : 'Vibe Submission Update';
+            const message = action === 'approve'
+              ? 'Your campus vibe has been approved and is now live on SGV Campus Feed!'
+              : `Your vibe submission was not approved: ${finalReason}`;
 
-          await Notification.create({
-            title,
-            message,
-            type: 'General',
-            category: 'general',
-            recipient: v.author,
-            actionType: 'navigate',
-            actionData: '/vibes'
-          }).catch(() => {});
+            await Notification.create({
+              title,
+              message,
+              type: 'General',
+              category: 'general',
+              recipient: v.author,
+              actionType: 'navigate',
+              actionData: '/vibes'
+            }).catch(() => {});
 
-          await sendTargetedNotification('user', v.author, {
-            title,
-            message,
-            type: 'General'
-          }).catch(() => {});
+            await sendTargetedNotification('user', v.author, {
+              title,
+              message,
+              type: 'General'
+            }).catch(() => {});
+          }
+        } catch (notifErr) {
+          logger.error('[Batch Vibe Review] Notification error:', notifErr);
         }
-      } catch (notifErr) {
-        logger.error('[Batch Vibe Review] Notification error:', notifErr);
-      }
-    })();
+      })();
+    }
+
+    let actionLabel = 'processed';
+    if (action === 'approve') actionLabel = 'approved';
+    else if (action === 'reject') actionLabel = 'rejected';
+    else if (action === 'pending') actionLabel = 'restored to pending';
 
     res.status(200).json({
       success: true,
-      message: `Successfully ${action === 'approve' ? 'approved' : 'rejected'} ${validIds.length} ${validIds.length === 1 ? 'vibe' : 'vibes'}!`
+      message: `Successfully ${actionLabel} ${validIds.length} ${validIds.length === 1 ? 'vibe' : 'vibes'}!`
     });
   } catch (error) {
     logger.error('Error batch reviewing vibes:', error);
