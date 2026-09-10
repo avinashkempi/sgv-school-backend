@@ -65,6 +65,17 @@ router.post('/', auth, async (req, res) => {
 router.get('/my-complaints', auth, async (req, res) => {
     try {
         const complaints = await Complaint.find({ raisedBy: req.user.userId })
+            .populate({
+                path: 'raisedBy',
+                select: 'name email role currentClass profilePhoto',
+                populate: { path: 'currentClass', select: 'name section' }
+            })
+            .populate({
+                path: 'student',
+                select: 'name email role currentClass profilePhoto',
+                populate: { path: 'currentClass', select: 'name section' }
+            })
+            .populate('assignedTo', 'name profilePhoto')
             .sort({ createdAt: -1 });
         res.json(complaints);
     } catch (err) {
@@ -90,8 +101,16 @@ router.get('/inbox', [auth, checkRole(['admin', 'super admin'])], async (req, re
         }
 
         const complaints = await Complaint.find(filter)
-            .populate('raisedBy', 'name email role currentClass profilePhoto')
-            .populate('student', 'name email role currentClass profilePhoto')
+            .populate({
+                path: 'raisedBy',
+                select: 'name email role currentClass profilePhoto',
+                populate: { path: 'currentClass', select: 'name section' }
+            })
+            .populate({
+                path: 'student',
+                select: 'name email role currentClass profilePhoto',
+                populate: { path: 'currentClass', select: 'name section' }
+            })
             .populate('assignedTo', 'name profilePhoto')
             .sort({ createdAt: -1 });
 

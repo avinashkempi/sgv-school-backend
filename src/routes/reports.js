@@ -371,7 +371,105 @@ router.get('/insights/:studentId', [auth, yearContext, requireStudentAccessParam
             exam: { $in: exams.map(e => e._id) }
         }).lean();
 
-        // Group by Subject
+        // Fetch all marks for this class's standardized exams to compute class benchmarks
+        const examIds = exams.map(e => e._id);
+        const classMarks = await Marks.find({
+            exam: { $in: examIds }
+        }).select('student exam marksObtained percentage').lean();
+
+        // 1. Compute Subject-level Class Benchmarks & Class Toppers
+        const classSubjectScores = {};
+        const subjectStudentTotals = {}; // { [subjectName]: { [studentId]: { obt: 0, max: 0 } } }
+
+        exams.forEach(exam => {
+            const subjectName = exam.subject?.name || 'General';
+            if (!classSubjectScores[subjectName]) classSubjectScores[subjectName] = [];
+            if (!subjectStudentTotals[subjectName]) subjectStudentTotals[subjectName] = {};
+
+            const relatedMarks = classMarks.filter(m => m.exam.toString() === exam._id.toString());
+            relatedMarks.forEach(m => {
+                const sId = m.student.toString();
+                const pct = m.percentage || (exam.totalMarks > 0 ? (m.marksObtained / exam.totalMarks) * 100 : 0);
+                classSubjectScores[subjectName].push(pct);
+
+                if (!subjectStudentTotals[subjectName][sId]) {
+                    subjectStudentTotals[subjectName][sId] = { obt: 0, max: 0 };
+                }
+                subjectStudentTotals[subjectName][sId].obt += m.marksObtained;
+                subjectStudentTotals[subjectName][sId].max += exam.totalMarks;
+            });
+        });
+
+        const classSubjectAvg = {};
+        Object.keys(classSubjectScores).forEach(sub => {
+            const arr = classSubjectScores[sub];
+            classSubjectAvg[sub] = arr.length > 0 ? parseFloat((arr.reduce((a, b) => a + b, 0) / arr.length).toFixed(1)) : 0;
+        });
+
+        // Determine top scorers per subject across the entire class
+        const subjectHighestScore = {};
+        const subjectTopperIds = {};
+        Object.keys(subjectStudentTotals).forEach(subjectName => {
+            const studentMap = subjectStudentTotals[subjectName];
+            let maxPct = -1;
+            const toppers = [];
+
+            Object.keys(studentMap).forEach(sId => {
+                const item = studentMap[sId];
+                if (item.max > 0) {
+                    const pct = parseFloat(((item.obt / item.max) * 100).toFixed(1));
+                    if (pct > maxPct) {
+                        maxPct = pct;
+                        toppers.length = 0;
+                        toppers.push(sId);
+                    } else if (Math.abs(pct - maxPct) < 0.05) {
+                        toppers.push(sId);
+                    }
+                }
+            });
+
+            subjectHighestScore[subjectName] = maxPct >= 0 ? maxPct : 0;
+            subjectTopperIds[subjectName] = toppers;
+        });
+
+        // 2. Class Overall Benchmark & Percentile Rank
+        const studentOverallMap = {};
+        const studentMaxMap = {};
+        classMarks.forEach(m => {
+            const sId = m.student.toString();
+            const examObj = exams.find(e => e._id.toString() === m.exam.toString());
+            if (examObj) {
+                if (!studentOverallMap[sId]) {
+                    studentOverallMap[sId] = 0;
+                    studentMaxMap[sId] = 0;
+                }
+                studentOverallMap[sId] += m.marksObtained;
+                studentMaxMap[sId] += examObj.totalMarks;
+            }
+        });
+
+        const studentRankList = Object.keys(studentOverallMap).map(sId => {
+            const max = studentMaxMap[sId];
+            const obt = studentOverallMap[sId];
+            return {
+                studentId: sId,
+                percentage: max > 0 ? (obt / max) * 100 : 0
+            };
+        }).sort((a, b) => b.percentage - a.percentage);
+
+        const totalClassStudents = studentRankList.length;
+        const studentRankIndex = studentRankList.findIndex(s => s.studentId === studentId);
+        const classRank = studentRankIndex !== -1 ? studentRankIndex + 1 : null;
+        const studentPercentile = (classRank && totalClassStudents > 0)
+            ? Math.round(((totalClassStudents - classRank + 1) / totalClassStudents) * 100)
+            : null;
+
+        const classAllPcts = studentRankList.map(s => s.percentage);
+        const classAverageOverall = classAllPcts.length > 0
+            ? parseFloat((classAllPcts.reduce((a, b) => a + b, 0) / classAllPcts.length).toFixed(1))
+            : 0;
+
+        // Group by Subject for Target Student
         const subjectTrends = {};
         const subjectScores = {};
 
@@ -413,24 +511,71 @@ router.get('/insights/:studentId', [auth, yearContext, requireStudentAccessParam
             };
         });
 
-        // Calculate Subject Averages & Strengths / Weaknesses
+        // 3. Subject Summary with Trajectory, Volatility, Class Benchmark, and Class Topper status
         const subjectSummary = Object.keys(subjectScores).map(sub => {
             const scores = subjectScores[sub];
             const avg = scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : 0;
+            const classAvg = classSubjectAvg[sub] || 0;
+            const diffFromClass = parseFloat((avg - classAvg).toFixed(1));
+
+            // Determine if target student is a class topper in this subject
+            const isClassTopper = Boolean(
+                avg > 0 &&
+                subjectTopperIds[sub] &&
+                subjectTopperIds[sub].includes(studentId.toString())
+            );
+
+            // Trajectory
+            let trajectoryDelta = 0;
+            let trajectoryDirection = 'steady';
+            if (scores.length >= 2) {
+                trajectoryDelta = parseFloat((scores[scores.length - 1] - scores[0]).toFixed(1));
+                if (trajectoryDelta >= 3) trajectoryDirection = 'up';
+                else if (trajectoryDelta <= -3) trajectoryDirection = 'down';
+            }
+
+            // Volatility (Standard Deviation)
+            let volatility = 0;
+            if (scores.length >= 2) {
+                const sMean = avg;
+                const sVar = scores.reduce((sum, val) => sum + Math.pow(val - sMean, 2), 0) / scores.length;
+                volatility = parseFloat(Math.sqrt(sVar).toFixed(1));
+            }
+
             return {
                 subject: sub,
                 average: parseFloat(avg.toFixed(1)),
                 grade: getGrade(avg),
-                examCount: scores.length
+                examCount: scores.length,
+                classAverage: classAvg,
+                classHighest: subjectHighestScore[sub] || 0,
+                isClassTopper,
+                diffFromClass,
+                trajectory: {
+                    delta: trajectoryDelta,
+                    direction: trajectoryDirection,
+                    latest: scores.length > 0 ? parseFloat(scores[scores.length - 1].toFixed(1)) : avg
+                },
+                volatility,
+                scores
             };
         }).filter(s => s.examCount > 0);
 
         subjectSummary.sort((a, b) => b.average - a.average);
 
-        const strengths = subjectSummary.slice(0, Math.min(3, subjectSummary.length));
-        const weaknesses = subjectSummary.length > 3 ? subjectSummary.slice(-2).reverse() : [];
+        // 4. Accurate Strengths (Mastery >= 70% or significantly above class average)
+        const strengthsList = subjectSummary.filter(s => s.average >= 70 || s.diffFromClass >= 3);
+        const finalStrengths = strengthsList.length > 0
+            ? strengthsList.slice(0, 3)
+            : subjectSummary.slice(0, Math.min(2, subjectSummary.length));
 
-        // Calculate Consistency Index (Standard Deviation of exam scores)
+        // 5. Accurate Focus Areas / Growth Targets
+        const weaknessesList = subjectSummary.filter(s => s.average < 65 || s.diffFromClass <= -4 || s.trajectory.direction === 'down');
+        const finalWeaknesses = weaknessesList.length > 0
+            ? weaknessesList.slice(0, 3)
+            : (subjectSummary.length > 3 ? subjectSummary.slice(-1) : []);
+
+        // 6. Consistency Index
         const validExamPcts = examTrends.filter(e => e.percentage > 0).map(e => e.percentage);
         let consistencyScore = 100;
         let consistencyLabel = 'High Consistency';
@@ -444,15 +589,308 @@ router.get('/insights/:studentId', [auth, yearContext, requireStudentAccessParam
             else consistencyLabel = 'High Variance';
         }
 
+        // 7. Formative (FA) vs Summative (SA) Style
+        let faTotalMax = 0, faTotalObt = 0;
+        let saTotalMax = 0, saTotalObt = 0;
+
+        exams.forEach(exam => {
+            const mark = marks.find(m => m.exam.toString() === exam._id.toString());
+            if (mark) {
+                if (['FA1', 'FA2', 'FA3', 'FA4'].includes(exam.standardizedType)) {
+                    faTotalMax += exam.totalMarks;
+                    faTotalObt += mark.marksObtained;
+                } else if (['SA1', 'SA2'].includes(exam.standardizedType)) {
+                    saTotalMax += exam.totalMarks;
+                    saTotalObt += mark.marksObtained;
+                }
+            }
+        });
+
+        const faAverage = faTotalMax > 0 ? parseFloat(((faTotalObt / faTotalMax) * 100).toFixed(1)) : null;
+        const saAverage = saTotalMax > 0 ? parseFloat(((saTotalObt / saTotalMax) * 100).toFixed(1)) : null;
+
+        let assessmentStyle = null;
+        if (faAverage !== null && saAverage !== null) {
+            const gap = parseFloat((faAverage - saAverage).toFixed(1));
+            if (gap >= 6) {
+                assessmentStyle = {
+                    style: 'Sprint Achiever',
+                    badge: 'Continuous Quiz Specialist',
+                    faAverage,
+                    saAverage,
+                    gap,
+                    summary: `You score ${gap}% higher in monthly continuous tests (FA) than comprehensive term exams (SA).`,
+                    tip: 'Your weekly retention is sharp! Build exam stamina by practicing full-length 2-hour mock papers with mixed questions.'
+                };
+            } else if (gap <= -6) {
+                assessmentStyle = {
+                    style: 'Endurance Climber',
+                    badge: 'Term Finals Specialist',
+                    faAverage,
+                    saAverage,
+                    gap,
+                    summary: `You peak in major comprehensive exams (SA), scoring ${Math.abs(gap)}% higher than monthly unit tests (FA).`,
+                    tip: 'You thrive on big-picture preparation! Regular weekly reviews will prevent last-minute cramming and boost unit quiz grades.'
+                };
+            } else {
+                assessmentStyle = {
+                    style: 'Balanced Performer',
+                    badge: 'Consistent Multi-Format Achiever',
+                    faAverage,
+                    saAverage,
+                    gap,
+                    summary: `You maintain balanced performance across monthly quizzes and term finals (${Math.abs(gap)}% variance).`,
+                    tip: 'Keep up your structured revision schedule to maintain this exceptional balance.'
+                };
+            }
+        } else if (faAverage !== null || saAverage !== null) {
+            assessmentStyle = {
+                style: 'Developing Profile',
+                badge: 'Active Assessment Phase',
+                faAverage: faAverage || 0,
+                saAverage: saAverage || 0,
+                gap: 0,
+                summary: 'Style profile will unlock as both Formative unit tests and Summative term exams are recorded.',
+                tip: 'Stay consistent across all upcoming unit quizzes and term papers.'
+            };
+        }
+
+        // 8. Momentum: Top Gainer & Most Challenged
+        let topGainer = null;
+        let mostChallenged = null;
+
+        const subjectsWithHistory = subjectSummary.filter(s => s.examCount >= 2);
+        if (subjectsWithHistory.length > 0) {
+            const sortedByGain = [...subjectsWithHistory].sort((a, b) => b.trajectory.delta - a.trajectory.delta);
+            if (sortedByGain[0].trajectory.delta > 0) {
+                topGainer = {
+                    subject: sortedByGain[0].subject,
+                    gain: sortedByGain[0].trajectory.delta,
+                    currentAvg: sortedByGain[0].average
+                };
+            }
+            const sortedByDrop = [...subjectsWithHistory].sort((a, b) => a.trajectory.delta - b.trajectory.delta);
+            if (sortedByDrop[0].trajectory.delta < 0) {
+                mostChallenged = {
+                    subject: sortedByDrop[0].subject,
+                    drop: Math.abs(sortedByDrop[0].trajectory.delta),
+                    currentAvg: sortedByDrop[0].average
+                };
+            }
+        }
+
+        // 9. Volatility: Most Consistent vs Most Volatile Subject
+        let mostConsistentSubject = null;
+        let mostVolatileSubject = null;
+        if (subjectsWithHistory.length > 0) {
+            const sortedByVol = [...subjectsWithHistory].sort((a, b) => a.volatility - b.volatility);
+            mostConsistentSubject = {
+                subject: sortedByVol[0].subject,
+                stdDev: sortedByVol[0].volatility,
+                avg: sortedByVol[0].average
+            };
+            const volatileCandidate = sortedByVol[sortedByVol.length - 1];
+            if (volatileCandidate.volatility > 5) {
+                mostVolatileSubject = {
+                    subject: volatileCandidate.subject,
+                    stdDev: volatileCandidate.volatility,
+                    avg: volatileCandidate.average
+                };
+            }
+        }
+
+        // 10. Attendance Diagnostic
+        let attendanceInsight = null;
+        try {
+            const attRecords = await Attendance.find({
+                user: studentId,
+                academicYear: yearId,
+                role: 'student'
+            }).select('status').lean();
+
+            if (attRecords.length > 0) {
+                const totalDays = attRecords.length;
+                const presentDays = attRecords.filter(a => a.status === 'present').length +
+                    (attRecords.filter(a => a.status === 'half-day').length * 0.5);
+                const attRate = parseFloat(((presentDays / totalDays) * 100).toFixed(1));
+
+                let attStatus = 'High';
+                let attImpact = 'High attendance provides steady classroom learning and reinforces test performance.';
+                if (attRate >= 90) {
+                    attStatus = 'Excellent';
+                    attImpact = `Outstanding attendance (${attRate}%) creates consistent conceptual reinforcement and test readiness.`;
+                } else if (attRate >= 75) {
+                    attStatus = 'Good';
+                    attImpact = `Attendance at ${attRate}% is satisfactory. Minimizing missed lecture sessions will support challenging subjects.`;
+                } else {
+                    attStatus = 'Needs Attention';
+                    attImpact = `Attendance rate (${attRate}%) indicates absent periods that correlate with learning gaps before exams.`;
+                }
+
+                attendanceInsight = {
+                    rate: attRate,
+                    status: attStatus,
+                    impact: attImpact,
+                    presentDays,
+                    totalDays
+                };
+            }
+        } catch (_attErr) {
+            // Ignore attendance error if not configured
+        }
+
+        // 11. Student Overall Percentage & Benchmark Diff
+        const studentRecord = studentRankList.find(s => s.studentId === studentId);
+        const studentOverall = studentRecord ? parseFloat(studentRecord.percentage.toFixed(1)) : 0;
+        const benchmarkDiff = parseFloat((studentOverall - classAverageOverall).toFixed(1));
+
+        // 12. Dynamic Academic Milestone Badges
+        const badges = [];
+        const allStudentMarks = marks.map(m => m.percentage || 0);
+        if (allStudentMarks.some(p => p >= 95)) {
+            badges.push({
+                id: 'centum',
+                title: 'High Distinction',
+                icon: 'star',
+                color: '#F59E0B',
+                desc: 'Achieved 95%+ in an exam'
+            });
+        }
+        if (topGainer && topGainer.gain >= 8) {
+            badges.push({
+                id: 'climber',
+                title: 'Rapid Climber',
+                icon: 'trending-up',
+                color: '#10B981',
+                desc: `+${topGainer.gain}% surge in ${topGainer.subject}`
+            });
+        }
+        if (consistencyScore >= 85) {
+            badges.push({
+                id: 'anchor',
+                title: 'Steady Anchor',
+                icon: 'verified',
+                color: '#3B82F6',
+                desc: 'High consistency index across tests'
+            });
+        }
+        if (subjectSummary.length >= 3 && subjectSummary.every(s => s.average >= 70)) {
+            badges.push({
+                id: 'all_rounder',
+                title: 'All-Rounder',
+                icon: 'military-tech',
+                color: '#8B5CF6',
+                desc: 'Balanced 70%+ across all subjects'
+            });
+        }
+        if (benchmarkDiff >= 5) {
+            badges.push({
+                id: 'pacesetter',
+                title: 'Class Pacesetter',
+                icon: 'leaderboard',
+                color: '#EC4899',
+                desc: `+${benchmarkDiff}% above class average`
+            });
+        }
+        if (attendanceInsight && attendanceInsight.rate >= 95) {
+            badges.push({
+                id: 'attendance_star',
+                title: 'Punctuality Star',
+                icon: 'event-available',
+                color: '#059669',
+                desc: `${attendanceInsight.rate}% attendance record`
+            });
+        }
+
+        // 13. Personalized Study Playbook (Actionable Recommendations)
+        const recommendations = [];
+
+        if (finalWeaknesses.length > 0) {
+            const lowest = finalWeaknesses[0];
+            recommendations.push({
+                id: 'focus_subject',
+                title: `Target Focus: ${lowest.subject}`,
+                description: `Dedicate 30–40 mins daily to ${lowest.subject} (current avg ${lowest.average}%). Review mistake logs from prior exams to eliminate recurring errors.`,
+                priority: lowest.average < 50 ? 'High' : 'Medium',
+                category: 'Subject Strategy'
+            });
+        }
+
+        if (topGainer) {
+            recommendations.push({
+                id: 'momentum',
+                title: `Leverage Momentum in ${topGainer.subject}`,
+                description: `Your strategy in ${topGainer.subject} is working (+${topGainer.gain}% gain). Apply the same study schedule to other subjects.`,
+                priority: 'Low',
+                category: 'Study Habits'
+            });
+        }
+
+        if (assessmentStyle && assessmentStyle.tip) {
+            recommendations.push({
+                id: 'style_tip',
+                title: `${assessmentStyle.style} Strategy`,
+                description: assessmentStyle.tip,
+                priority: Math.abs(assessmentStyle.gap) >= 10 ? 'High' : 'Medium',
+                category: 'Exam Technique'
+            });
+        }
+
+        if (mostVolatileSubject) {
+            recommendations.push({
+                id: 'volatility_fix',
+                title: `Stabilize ${mostVolatileSubject.subject}`,
+                description: `${mostVolatileSubject.subject} has notable mark fluctuations (std dev ${mostVolatileSubject.stdDev}%). Regular weekly self-tests will make your marks predictable.`,
+                priority: 'Medium',
+                category: 'Consistency'
+            });
+        }
+
+        // 14. Goal & Grade Projections
+        const projectedGrade = getGrade(studentOverall);
+        let nextTier = null;
+        let pointsNeeded = null;
+        if (studentOverall < 90) {
+            const nextThreshold = studentOverall < 30 ? 30 : studentOverall < 50 ? 50 : studentOverall < 70 ? 70 : 90;
+            const nextGradeLabel = nextThreshold === 90 ? 'A+' : nextThreshold === 70 ? 'A' : nextThreshold === 50 ? 'B+' : 'B';
+            const gapToNext = parseFloat((nextThreshold - studentOverall).toFixed(1));
+            nextTier = `${nextGradeLabel} (${nextThreshold}%)`;
+            pointsNeeded = gapToNext;
+        }
+
         res.json({
             subjectTrends,
             examTrends,
             subjectSummary,
-            strengths,
-            weaknesses,
+            strengths: finalStrengths,
+            weaknesses: finalWeaknesses,
             consistency: {
                 score: consistencyScore,
-                label: consistencyLabel
+                label: consistencyLabel,
+                mostConsistentSubject,
+                mostVolatileSubject
+            },
+            benchmark: {
+                studentOverall,
+                classAverageOverall,
+                diffFromClass: benchmarkDiff,
+                classRank,
+                totalClassStudents,
+                percentile: studentPercentile
+            },
+            assessmentStyle,
+            momentum: {
+                topGainer,
+                mostChallenged
+            },
+            attendance: attendanceInsight,
+            badges,
+            recommendations,
+            projection: {
+                projectedPercentage: studentOverall,
+                projectedGrade,
+                nextTier,
+                pointsNeeded
             }
         });
 
