@@ -1,5 +1,7 @@
 node_modules/
 serviceAccountKey.json
+sgv-service-account.json
+*-service-account*.json
 .env
 .env.local
 .env.*.local

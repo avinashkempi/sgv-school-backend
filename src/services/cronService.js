@@ -11,6 +11,7 @@ const AcademicYear = require('../models/AcademicYear');
 const { sendTargetedNotification } = require('./notificationService');
 const logger = require('../utils/logger');
 const toTitleCase = require('../utils/titleCase');
+const { runFeeSync } = require('./feeSyncService');
 
 // ─────────────────────────────────────────────────────────────
 // Helpers
@@ -636,6 +637,16 @@ function startAllCronJobs() {
         catch (err) { logger.error('[Notification Cleanup] Unhandled error in scheduled job', err); }
     }, { timezone: TIMEZONE });
 
+    // Every 6 hours at minute 30 — Fee sync from Google Sheets (safety net)
+    if (process.env.FEE_SYNC_ENABLED === 'true') {
+        cron.schedule('30 */6 * * *', async () => {
+            logger.info('[Cron] Running scheduled fee sync from Google Sheets');
+            try { await runFeeSync({ trigger: 'scheduled' }); }
+            catch (err) { logger.error('[Fee Sync Cron] Unhandled error in scheduled job', err); }
+        }, { timezone: TIMEZONE });
+        logger.info('   ✅ Fee sync from Google Sheets enabled (every 6 hours)');
+    }
+
     logger.info('✅ All cron jobs registered:');
     logger.info('   • 07:00 AM IST — Exam-day reminders');
     logger.info('   • 08:00 AM IST — Birthday & event-day notifications');
@@ -643,6 +654,9 @@ function startAllCronJobs() {
     logger.info('   • 08:00 PM IST — Event eve reminders');
     logger.info('   • Sunday 03:00 AM — Stale FCM token cleanup');
     logger.info('   • Sunday 04:00 AM — Old notification cleanup');
+    if (process.env.FEE_SYNC_ENABLED === 'true') {
+        logger.info('   • Every 6 hours (xx:30) — Fee sync from Google Sheets');
+    }
 
     // ── Startup catchup ──
     // If the server starts after cron fire times, run applicable jobs now.

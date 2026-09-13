@@ -12,6 +12,7 @@ const {
     runStaleTokenCleanup,
     runNotificationCleanup,
 } = require('../services/cronService');
+const { runFeeSync, getSyncHistory } = require('../services/feeSyncService');
 
 // ─────────────────────────────────────────────────────────────
 // Shared webhook secret middleware
@@ -234,6 +235,72 @@ router.post('/cron/monthly-fee-reminders', async (req, res) => {
         });
     } catch (error) {
         logger.error('[Webhook] Monthly fee reminder error', error);
+        res.status(500).json({ success: false, message: 'Internal Server Error' });
+    }
+});
+
+// ─────────────────────────────────────────────────────────────
+// Fee Sync from Google Sheets
+// ─────────────────────────────────────────────────────────────
+
+// @route   POST /api/webhooks/cron/fee-sync
+// @desc    Trigger fee sync from Google Sheets (instant or scheduled)
+// @access  Protected by CRON_SECRET
+router.post('/cron/fee-sync', async (req, res) => {
+    try {
+        const dryRun = req.query.dryRun === 'true' || req.body.dryRun === true;
+        const force = req.query.force === 'true' || req.body.force === true;
+
+        // Determine trigger source
+        let trigger = 'on_demand';
+        if (req.headers['x-trigger-source'] === 'apps_script') {
+            trigger = 'apps_script';
+        } else if (req.headers['x-trigger-source'] === 'scheduled') {
+            trigger = 'scheduled';
+        }
+
+        const result = await runFeeSync({ trigger, dryRun, force });
+
+        if (result.skipped) {
+            return res.json({
+                success: true,
+                message: result.reason || result.error || 'Fee sync skipped',
+                skipped: true,
+            });
+        }
+
+        if (!result.success) {
+            return res.status(500).json({
+                success: false,
+                message: result.error || 'Fee sync failed',
+                syncLogId: result.syncLogId,
+            });
+        }
+
+        res.json({
+            success: true,
+            message: `Fee sync completed — Updated: ${result.summary?.updated || 0}, Failed: ${result.summary?.failed || 0}`,
+            ...(dryRun ? { dryRun: true, rowCount: result.rowCount, sampleHeaders: result.sampleHeaders } : {}),
+            summary: result.summary,
+            durationMs: result.durationMs,
+            syncLogId: result.syncLogId,
+        });
+    } catch (error) {
+        logger.error('[Webhook] Fee sync error', error);
+        res.status(500).json({ success: false, message: 'Internal Server Error' });
+    }
+});
+
+// @route   GET /api/webhooks/sync-history
+// @desc    Get recent fee sync history
+// @access  Protected by CRON_SECRET
+router.get('/sync-history', async (req, res) => {
+    try {
+        const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+        const history = await getSyncHistory(limit);
+        res.json({ success: true, history });
+    } catch (error) {
+        logger.error('[Webhook] Sync history error', error);
         res.status(500).json({ success: false, message: 'Internal Server Error' });
     }
 });
