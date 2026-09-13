@@ -5,6 +5,7 @@ const Class = require('../models/Class');
 const AcademicYear = require('../models/AcademicYear');
 const FeeStructure = require('../models/FeeStructure');
 const { wipeNonAdminData } = require('./wipeService');
+const logger = require('../utils/logger');
 
 // Utility to parse currency string "₹11,900" -> 11900
 const parseCurrency = (str) => {
@@ -89,7 +90,11 @@ const processImport = async (csvData, options = { wipe: false }) => {
         const branch = normalizeBranch(row['Branch']);
         uniqueClassEntries.set(classMapKey(academicYear?._id, branch, className), { className, branch });
     }
-    console.log(`Found ${uniqueClassEntries.size} unique class/branch entries in CSV`);
+    if (options.feesOnly) {
+        logger.info(`[FeeSync] Verified ${uniqueClassEntries.size} classes to link student fee records (class definitions are not modified)`);
+    } else {
+        logger.info(`[Import] Found ${uniqueClassEntries.size} classes across student records`);
+    }
 
     // Pre-populate classMap from all existing classes in the academic year
     const classes = await Class.find(academicYear ? { academicYear: academicYear._id } : {});
@@ -176,7 +181,7 @@ const processImport = async (csvData, options = { wipe: false }) => {
             const classId = classMap.get(classMapKey(academicYear?._id, branch, className));
 
             if (!classId && className) {
-                console.warn(`Class ${className} not found in map for student ${row['Student Name']}`);
+                logger.warn(`[FeeSync] Class "${className}" not found in system for student "${row['Student Name']}"`);
             }
 
             // Increment Class Count
@@ -326,7 +331,7 @@ const processFeeStructure = async (classId, academicYear, row) => {
         }
 
     } catch (error) {
-        console.error(`Error processing fee structure for class ${classId}:`, error);
+        logger.error(`[Import] Error processing fee structure for class ${classId}:`, error);
     }
 };
 
