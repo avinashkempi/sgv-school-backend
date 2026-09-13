@@ -35,7 +35,7 @@ const SyncLogSchema = new mongoose.Schema({
         failed: { type: Number, default: 0 },
         skipped: { type: Number, default: 0 }
     },
-    errors: [{
+    syncErrors: [{
         row: Number,
         name: String,
         error: String

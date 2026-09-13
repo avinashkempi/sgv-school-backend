@@ -148,7 +148,7 @@ async function runFeeSync(options = {}) {
             failed: importResult.failed,
             skipped: 0
         };
-        syncLog.errors = (importResult.errors || []).slice(0, 50); // Cap at 50 errors
+        syncLog.syncErrors = (importResult.errors || []).slice(0, 50); // Cap at 50 errors
         syncLog.completedAt = completedAt;
         syncLog.durationMs = durationMs;
         await syncLog.save();
@@ -178,7 +178,7 @@ async function runFeeSync(options = {}) {
     } catch (error) {
         const completedAt = new Date();
         syncLog.status = 'failed';
-        syncLog.errors = [{ error: error.message }];
+        syncLog.syncErrors = [{ error: error.message }];
         syncLog.completedAt = completedAt;
         syncLog.durationMs = completedAt.getTime() - startedAt.getTime();
         await syncLog.save().catch(err => logger.error('[FeeSync] Failed to save error log', err));
