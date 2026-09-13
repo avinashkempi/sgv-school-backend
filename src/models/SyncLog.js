@@ -51,7 +51,8 @@ const SyncLogSchema = new mongoose.Schema({
         type: Date
     }
 }, {
-    timestamps: true
+    timestamps: true,
+    suppressReservedKeysWarning: true
 });
 
 // Auto-cleanup: keep only last 90 days of sync logs

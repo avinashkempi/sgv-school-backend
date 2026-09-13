@@ -26,15 +26,20 @@ function getAuthClient() {
         );
     }
 
-    // Handle escaped newlines from environment variables
-    const formattedKey = privateKey.replace(/\\n/g, '\n');
+    // Handle quotes and escaped newlines from environment variables
+    let formattedKey = privateKey;
+    if (formattedKey.startsWith('"') && formattedKey.endsWith('"')) {
+        formattedKey = formattedKey.slice(1, -1);
+    }
+    formattedKey = formattedKey.replace(/\\n/g, '\n');
 
-    const auth = new google.auth.JWT(
-        email,
-        null,
-        formattedKey,
-        ['https://www.googleapis.com/auth/spreadsheets.readonly']
-    );
+    const auth = new google.auth.GoogleAuth({
+        credentials: {
+            client_email: email,
+            private_key: formattedKey
+        },
+        scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly']
+    });
 
     return auth;
 }
