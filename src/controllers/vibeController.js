@@ -1331,9 +1331,15 @@ exports.reviewVibe = async (req, res) => {
       (async () => {
         try {
           const authorId = vibe.author?._id || vibe.author;
-          const title = action === 'approve' ? '✨ Vibe Approved!' : 'Vibe Submission Update';
+          const title = action === 'approve'
+            ? '✨ Vibe Approved!'
+            : previousStatus === 'approved'
+            ? '⚠️ Vibe Removed from Feed'
+            : 'Vibe Submission Update';
           const message = action === 'approve'
             ? 'Your campus vibe has been approved and is now live on SGV Campus Feed!'
+            : previousStatus === 'approved'
+            ? `Your vibe was taken down after moderation: ${vibe.rejectionReason}`
             : `Your vibe submission was not approved: ${vibe.rejectionReason}`;
 
           await Notification.create({
@@ -1363,11 +1369,15 @@ exports.reviewVibe = async (req, res) => {
         ? 'Rejected vibe approved and published live!'
         : 'Vibe approved and live!';
     } else if (action === 'reject') {
-      successMessage = previousStatus === 'rejected'
+      successMessage = previousStatus === 'approved'
+        ? 'Vibe rejected and taken down from live feed.'
+        : previousStatus === 'rejected'
         ? 'Rejection feedback updated.'
         : 'Vibe rejected.';
     } else if (action === 'pending') {
-      successMessage = 'Vibe restored to pending review queue.';
+      successMessage = previousStatus === 'approved'
+        ? 'Vibe unpublished and restored to pending review queue.'
+        : 'Vibe restored to pending review queue.';
     }
 
     res.status(200).json({
@@ -1421,6 +1431,15 @@ exports.batchReviewVibes = async (req, res) => {
       updateDoc.$unset = { rejectionReason: 1 };
     }
 
+    // Fetch vibes first to inspect previous statuses for notifications
+    let prevVibes = [];
+    if (action === 'approve' || action === 'reject') {
+      prevVibes = await Vibe.find({ _id: { $in: validIds }, isActive: true })
+        .select('author caption category status')
+        .lean()
+        .catch(() => []);
+    }
+
     await Vibe.updateMany(
       { _id: { $in: validIds }, isActive: true },
       updateDoc
@@ -1430,12 +1449,18 @@ exports.batchReviewVibes = async (req, res) => {
     if (action === 'approve' || action === 'reject') {
       (async () => {
         try {
-          const vibes = await Vibe.find({ _id: { $in: validIds } }).select('author caption category');
-          for (const v of vibes) {
+          for (const v of prevVibes) {
             if (!v.author) continue;
-            const title = action === 'approve' ? '✨ Vibe Approved!' : 'Vibe Submission Update';
+            const isApprovedTakedown = action === 'reject' && v.status === 'approved';
+            const title = action === 'approve'
+              ? '✨ Vibe Approved!'
+              : isApprovedTakedown
+              ? '⚠️ Vibe Removed from Feed'
+              : 'Vibe Submission Update';
             const message = action === 'approve'
               ? 'Your campus vibe has been approved and is now live on SGV Campus Feed!'
+              : isApprovedTakedown
+              ? `Your vibe was taken down after moderation: ${finalReason}`
               : `Your vibe submission was not approved: ${finalReason}`;
 
             await Notification.create({
