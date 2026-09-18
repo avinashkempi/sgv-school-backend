@@ -800,16 +800,27 @@ router.get('/missing-tracker', [auth, yearContext], async (req, res) => {
             });
         } else if (req.user.role === 'admin' || req.user.role === 'super admin') {
             // For admin, we want to know for each day, which classes are MISSING
-            const allClasses = await Class.find({}).select('name section').lean();
+            const classFilter = {};
+            if (req.academicYearContext) {
+                classFilter.academicYear = req.academicYearContext;
+            }
+            const allClasses = await Class.find(classFilter)
+                .populate('classTeacher', 'name email profilePhoto phone designation role')
+                .select('name section branch classTeacher academicYear')
+                .lean();
+
+            const matchFilter = {
+                role: 'student',
+                class: { $ne: null },
+                date: { $gte: start, $lte: effectiveEnd }
+            };
+            if (req.academicYearContext && mongoose.Types.ObjectId.isValid(req.academicYearContext)) {
+                matchFilter.academicYear = new mongoose.Types.ObjectId(req.academicYearContext);
+            }
 
             const attendanceAgg = await Attendance.aggregate([
                 {
-                    $match: {
-                        role: 'student',
-                        class: { $ne: null },
-                        date: { $gte: start, $lte: effectiveEnd },
-                        academicYear: new mongoose.Types.ObjectId(req.academicYearContext)
-                    }
+                    $match: matchFilter
                 },
                 {
                     $group: {
@@ -846,7 +857,82 @@ router.get('/missing-tracker', [auth, yearContext], async (req, res) => {
             // Sort newest first
             missingData.sort((a, b) => new Date(b.date) - new Date(a.date));
 
-            return res.json({ success: true, missingData });
+            // Aggregate statistics grouped by teacher
+            const teacherMap = new Map();
+
+            allClasses.forEach(cls => {
+                const tId = cls.classTeacher?._id ? cls.classTeacher._id.toString() : 'unassigned';
+                if (!teacherMap.has(tId)) {
+                    teacherMap.set(tId, {
+                        teacher: cls.classTeacher || null,
+                        isUnassigned: !cls.classTeacher,
+                        classes: [],
+                        missedCount: 0,
+                        missedDays: [],
+                        totalOpportunities: 0
+                    });
+                }
+                const entry = teacherMap.get(tId);
+                if (!entry.classes.some(c => c._id.toString() === cls._id.toString())) {
+                    entry.classes.push({
+                        _id: cls._id,
+                        name: cls.name,
+                        section: cls.section,
+                        branch: cls.branch
+                    });
+                }
+            });
+
+            missingData.forEach(day => {
+                day.missingClasses.forEach(cls => {
+                    const tId = cls.classTeacher?._id ? cls.classTeacher._id.toString() : 'unassigned';
+                    if (teacherMap.has(tId)) {
+                        const entry = teacherMap.get(tId);
+                        entry.missedCount += 1;
+                        entry.missedDays.push({
+                            date: day.date,
+                            classId: cls._id,
+                            className: cls.name,
+                            classSection: cls.section
+                        });
+                    }
+                });
+            });
+
+            const teacherSummary = Array.from(teacherMap.values()).map(entry => {
+                const classCount = entry.classes.length;
+                const totalPossible = classCount * daysInRange.length;
+                const complianceRate = totalPossible > 0
+                    ? Math.max(0, Math.round(((totalPossible - entry.missedCount) / totalPossible) * 100))
+                    : 100;
+
+                // Sort missed days newest first
+                entry.missedDays.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+                return {
+                    ...entry,
+                    totalOpportunities: totalPossible,
+                    complianceRate
+                };
+            });
+
+            // Sort by missedCount DESC (who missed most first), then alphabetically by name
+            teacherSummary.sort((a, b) => {
+                if (b.missedCount !== a.missedCount) {
+                    return b.missedCount - a.missedCount;
+                }
+                const nameA = a.teacher?.name || 'zzz';
+                const nameB = b.teacher?.name || 'zzz';
+                return nameA.localeCompare(nameB);
+            });
+
+            return res.json({
+                success: true,
+                missingData,
+                teacherSummary,
+                totalWorkingDays: daysInRange.length,
+                totalClasses: allClasses.length
+            });
         } else {
             return res.status(403).json({ message: 'Not authorized' });
         }
