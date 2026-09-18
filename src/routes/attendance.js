@@ -10,7 +10,7 @@ const Subject = require('../models/Subject');
 const LeaveRequest = require('../models/LeaveRequest');
 const Event = require('../models/Event');
 const AcademicYear = require('../models/AcademicYear');
-const { invalidateDashboardCaches, invalidateAdminDashboard, invalidateTeacherDashboard, invalidateMultipleStudentDashboards } = require('../controllers/dashboardController');
+const { invalidateAdminDashboard, invalidateTeacherDashboard, invalidateMultipleStudentDashboards } = require('../controllers/dashboardController');
 const {
     getISTDateString,
     getISTDayBounds,
@@ -741,10 +741,11 @@ router.get('/missing-tracker', [auth, yearContext], async (req, res) => {
         const { endOfDay: end } = getISTDayBounds(endDate);
 
         // Filter valid working days (assuming Monday-Saturday in IST)
-        // Exclude today since attendance may not be taken yet
+        // By default excludes today for historical multi-day ranges, unless includeToday is requested or startDate is today
         const todayStr = getISTDateString(new Date());
         const { startOfDay: todayStart } = getISTDayBounds(todayStr);
-        const effectiveEnd = end >= todayStart ? new Date(todayStart.getTime() - 1) : end;
+        const includeToday = req.query.includeToday === 'true' || startDate === todayStr;
+        const effectiveEnd = includeToday ? end : (end >= todayStart ? new Date(todayStart.getTime() - 1) : end);
 
         // Fetch custom holidays in range
         const holidaysRaw = await Event.distinct('date', {

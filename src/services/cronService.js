@@ -70,6 +70,17 @@ function getISTDate() {
     return istNow.getUTCDate();
 }
 
+/** Get current IST date components reliably using offset math. */
+function getISTDateComponents() {
+    const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+    const istNow = new Date(Date.now() + IST_OFFSET_MS);
+    return {
+        year: istNow.getUTCFullYear(),
+        month: istNow.getUTCMonth() + 1,
+        day: istNow.getUTCDate(),
+    };
+}
+
 /** Format a Date object into a readable string like "15 Aug 2026" */
 function formatDate(date) {
     const d = new Date(date);
@@ -87,11 +98,9 @@ function formatDate(date) {
 
 async function runBirthdayNotifications() {
     try {
-        const now = new Date();
-        const todayMonth = now.getMonth() + 1;
-        const todayDay = now.getDate();
+        const { month: todayMonth, day: todayDay } = getISTDateComponents();
 
-        logger.info(`[Birthday Cron] Running check for ${todayDay}/${todayMonth}`);
+        logger.info(`[Birthday Cron] Running check for ${todayDay}/${todayMonth} (IST)`);
 
         const { startOfDay, endOfDay } = getISTDayBounds();
 
@@ -107,16 +116,28 @@ async function runBirthdayNotifications() {
         }
 
         // Find users with a birthday today
+        // Note: No isActive dependency as per requirement - all users with matching dateOfBirth are included
         const birthdayUsers = await User.find({
             dateOfBirth: { $exists: true, $ne: null },
-            isActive: true,
             $expr: {
-                $and: [
-                    { $eq: [{ $month: '$dateOfBirth' }, todayMonth] },
-                    { $eq: [{ $dayOfMonth: '$dateOfBirth' }, todayDay] },
+                $or: [
+                    // Match with Asia/Kolkata timezone (handles dates stored with IST midnight offset)
+                    {
+                        $and: [
+                            { $eq: [{ $month: { date: '$dateOfBirth', timezone: 'Asia/Kolkata' } }, todayMonth] },
+                            { $eq: [{ $dayOfMonth: { date: '$dateOfBirth', timezone: 'Asia/Kolkata' } }, todayDay] },
+                        ],
+                    },
+                    // Fallback to UTC match (handles dates stored as UTC date-only strings)
+                    {
+                        $and: [
+                            { $eq: [{ $month: '$dateOfBirth' }, todayMonth] },
+                            { $eq: [{ $dayOfMonth: '$dateOfBirth' }, todayDay] },
+                        ],
+                    },
                 ],
             },
-        }).select('name role');
+        }).select('name role dateOfBirth');
 
         if (birthdayUsers.length === 0) {
             logger.info('[Birthday Cron] No birthdays today');
@@ -135,7 +156,7 @@ async function runBirthdayNotifications() {
             'all',
             null,
             { title, message, type: 'Birthday', category: 'birthday' },
-            false,
+            true, // Send to all registered devices (both authenticated and public/guest)
         );
 
         await Notification.create({
@@ -146,7 +167,7 @@ async function runBirthdayNotifications() {
             priority: 'medium',
             recipient: null,
             targetRole: 'all',
-            sendToPublic: false,
+            sendToPublic: true,
             metadata: {
                 birthdayUserIds: birthdayUsers.map(u => u._id.toString()),
                 birthdayUserNames: names,
@@ -686,8 +707,71 @@ function startAllCronJobs() {
     }
 }
 
+/**
+ * Run all due daily jobs based on current IST time.
+ * Used for unified webhook triggers, manual admin triggers, and catchup.
+ */
+async function runAllDailyJobs() {
+    const currentHour = getISTHour();
+    const currentDate = getISTDate();
+    const results = {};
+
+    logger.info(`[Cron Dispatcher] Running daily jobs check for current IST hour: ${currentHour}:00 (Date: ${currentDate})`);
+
+    // 1. Exam reminders (due if >= 7 AM IST)
+    if (currentHour >= 7) {
+        try {
+            results.examReminders = await runExamDayReminders();
+        } catch (err) {
+            results.examReminders = { error: err.message };
+            logger.error('[Cron Dispatcher] Exam reminders failed', err);
+        }
+    }
+
+    // 2. Birthday notifications (due if >= 8 AM IST)
+    if (currentHour >= 8) {
+        try {
+            results.birthdays = await runBirthdayNotifications();
+        } catch (err) {
+            results.birthdays = { error: err.message };
+            logger.error('[Cron Dispatcher] Birthday notifications failed', err);
+        }
+
+        // 3. Event-day notifications (due if >= 8 AM IST)
+        try {
+            results.events = await runEventNotifications();
+        } catch (err) {
+            results.events = { error: err.message };
+            logger.error('[Cron Dispatcher] Event notifications failed', err);
+        }
+    }
+
+    // 4. Monthly fee reminders (1st of month, >= 9 AM IST)
+    if (currentDate === 1 && currentHour >= 9) {
+        try {
+            results.monthlyFees = await runMonthlyFeeReminders();
+        } catch (err) {
+            results.monthlyFees = { error: err.message };
+            logger.error('[Cron Dispatcher] Monthly fee reminders failed', err);
+        }
+    }
+
+    // 5. Event eve reminders (due if >= 8 PM IST)
+    if (currentHour >= 20) {
+        try {
+            results.eventEve = await runEventEveReminders();
+        } catch (err) {
+            results.eventEve = { error: err.message };
+            logger.error('[Cron Dispatcher] Event eve reminders failed', err);
+        }
+    }
+
+    return results;
+}
+
 module.exports = {
     startAllCronJobs,
+    runAllDailyJobs,
     runBirthdayNotifications,
     runEventNotifications,
     runEventEveReminders,

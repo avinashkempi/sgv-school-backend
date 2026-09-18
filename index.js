@@ -26,12 +26,6 @@ process.on('unhandledRejection', (reason, _promise) => {
 // express-rate-limit can correctly identify client IPs from X-Forwarded-For.
 app.set('trust proxy', 1);
 
-// Enable strong ETag caching for bandwidth optimization
-app.set('etag', 'strong');
-
-// Connect to MongoDB
-connectDB();
-
 // Initialize Redis (optional with graceful fallback)
 require('./src/config/redis');
 
@@ -120,11 +114,35 @@ app.get('/', (req, res) => {
 // Global Central Error Handler Middleware
 app.use(errorHandler);
 
-// Webhook routes handle tasks like cron previously handled locally
+const User = require('./src/models/User');
 
-// Start the server
-app.listen(PORT, () => {
-  logger.info(`✅ Server running on http://localhost:${PORT}`);
-  // Start background cron jobs
-  startAllCronJobs();
-});
+// Start the server after DB connection
+async function startServer() {
+  try {
+    await connectDB();
+
+    // Data integrity check: ensure all users have isActive: true
+    try {
+      const updated = await User.updateMany(
+        { $or: [{ isActive: { $exists: false } }, { isActive: null }] },
+        { $set: { isActive: true } }
+      );
+      if (updated.modifiedCount > 0) {
+        logger.info(`[Startup Migration] Backfilled isActive: true for ${updated.modifiedCount} user(s)`);
+      }
+    } catch (migErr) {
+      logger.error('[Startup Migration] Failed to backfill isActive', migErr);
+    }
+
+    app.listen(PORT, () => {
+      logger.info(`✅ Server running on http://localhost:${PORT}`);
+      // Start background cron jobs now that database connection is active
+      startAllCronJobs();
+    });
+  } catch (err) {
+    logger.error('Failed to start server:', err);
+    process.exit(1);
+  }
+}
+
+startServer();

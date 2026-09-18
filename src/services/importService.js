@@ -225,6 +225,7 @@ const processImport = async (csvData, options = { wipe: false }) => {
                 password: generateTemporaryPassword(loginPhone),
                 mustChangePassword: true,
                 role: 'student',
+                isActive: true,
                 currentClass: classId,
                 academicYear: academicYear ? academicYear._id : null,
                 gender: getRowValue(row, 'Gender'),
@@ -435,6 +436,7 @@ const processStaffImport = async (csvData) => {
                 password: generateTemporaryPassword(phone),
                 mustChangePassword: true,
                 role: role,
+                isActive: true,
                 designation: designation,
 
                 dateOfBirth: parseDate(row['Date of Birth']),

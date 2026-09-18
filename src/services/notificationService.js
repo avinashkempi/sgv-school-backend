@@ -1,6 +1,7 @@
 const FCMToken = require('../models/FCMToken');
 const NotificationPreference = require('../models/NotificationPreference');
 const path = require('path');
+const fs = require('fs');
 const logger = require('../utils/logger');
 
 // Firebase Admin will be initialized with a warning if credentials are not available
@@ -13,26 +14,62 @@ try {
     if (!admin.apps.length) {
         let serviceAccount = null;
 
-        // Try to load from environment variable first (for production/Render)
+        // 1. Check FIREBASE_SERVICE_ACCOUNT_JSON
         if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
-
-            serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
+            try {
+                serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
+            } catch (e) {
+                logger.error('[Notifications] Failed to parse FIREBASE_SERVICE_ACCOUNT_JSON:', e);
+            }
         }
-        // Otherwise try to load from file path (for local development)
+        // 2. Check FIREBASE_SERVICE_ACCOUNT (raw JSON or base64 as documented in FIREBASE_SETUP.md)
+        else if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+            try {
+                serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+            } catch (e) {
+                try {
+                    const decoded = Buffer.from(process.env.FIREBASE_SERVICE_ACCOUNT, 'base64').toString('utf8');
+                    serviceAccount = JSON.parse(decoded);
+                } catch (b64Err) {
+                    logger.error('[Notifications] Failed to parse FIREBASE_SERVICE_ACCOUNT:', b64Err);
+                }
+            }
+        }
+        // 3. Check FIREBASE_SERVICE_ACCOUNT_PATH
         else if (process.env.FIREBASE_SERVICE_ACCOUNT_PATH) {
             const absolutePath = path.resolve(process.cwd(), process.env.FIREBASE_SERVICE_ACCOUNT_PATH);
+            if (fs.existsSync(absolutePath)) {
+                serviceAccount = require(absolutePath);
+            } else {
+                logger.warn(`[Notifications] FIREBASE_SERVICE_ACCOUNT_PATH not found at: ${absolutePath}`);
+            }
+        }
 
-            serviceAccount = require(absolutePath);
+        // 4. Fallback: check standard service account key file locations in backend
+        if (!serviceAccount) {
+            const candidatePaths = [
+                path.resolve(__dirname, '../../sgv-service-account.json'),
+                path.resolve(process.cwd(), 'sgv-service-account.json'),
+                path.resolve(__dirname, '../../serviceAccountKey.json'),
+                path.resolve(process.cwd(), 'serviceAccountKey.json'),
+            ];
+            for (const cPath of candidatePaths) {
+                if (fs.existsSync(cPath)) {
+                    logger.info(`[Notifications] Auto-discovered Firebase credentials at ${cPath}`);
+                    serviceAccount = require(cPath);
+                    break;
+                }
+            }
         }
 
         if (serviceAccount) {
             admin.initializeApp({
                 credential: admin.credential.cert(serviceAccount),
             });
-
+            logger.info('✅ Firebase Admin SDK initialized successfully');
         } else {
             logger.warn('⚠️  Firebase credentials not found. Push notifications will not work.');
-            logger.warn('⚠️  Set FIREBASE_SERVICE_ACCOUNT_JSON or FIREBASE_SERVICE_ACCOUNT_PATH environment variable');
+            logger.warn('⚠️  Set FIREBASE_SERVICE_ACCOUNT_JSON, FIREBASE_SERVICE_ACCOUNT, or place sgv-service-account.json in the backend directory.');
             admin = null; // Set to null if not properly initialized
         }
     }
@@ -77,6 +114,22 @@ function isInQuietHours(quietStart, quietEnd) {
 // ─────────────────────────────────────────────────────────────
 
 /**
+ * Ensure all values in the data payload are strings as strictly required by FCM
+ */
+function sanitizeDataPayload(data = {}) {
+    const sanitized = {};
+    for (const [key, value] of Object.entries(data)) {
+        if (value === undefined || value === null) continue;
+        if (typeof value === 'object') {
+            sanitized[key] = JSON.stringify(value);
+        } else {
+            sanitized[key] = String(value);
+        }
+    }
+    return sanitized;
+}
+
+/**
  * Send push notification to multiple devices
  * @param {Array} tokens - Array of FCM tokens
  * @param {Object} notification - Notification payload
@@ -105,11 +158,12 @@ async function sendBatchNotifications(tokens, notification, data = {}) {
         let totalSuccess = 0;
         let totalFailure = 0;
         const failedTokens = [];
+        const sanitizedData = sanitizeDataPayload(data);
 
         for (const batch of batches) {
             const message = {
                 notification,
-                data,
+                data: sanitizedData,
                 tokens: batch,
             };
 

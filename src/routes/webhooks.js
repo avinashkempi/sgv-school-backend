@@ -11,6 +11,7 @@ const {
     runMonthlyFeeReminders,
     runStaleTokenCleanup,
     runNotificationCleanup,
+    runAllDailyJobs,
 } = require('../services/cronService');
 const { runFeeSync, getSyncHistory } = require('../services/feeSyncService');
 
@@ -19,11 +20,11 @@ const { runFeeSync, getSyncHistory } = require('../services/feeSyncService');
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Validates the x-cron-secret header against the CRON_SECRET env var.
+ * Validates the x-cron-secret header or secret query parameter against CRON_SECRET.
  * Rejects requests when CRON_SECRET is not configured on the server.
  */
 function validateCronSecret(req, res, next) {
-    const secret = req.headers['x-cron-secret'];
+    const secret = req.headers['x-cron-secret'] || req.query.secret;
     const validSecret = process.env.CRON_SECRET;
 
     if (!validSecret) {
@@ -287,6 +288,55 @@ router.post('/cron/fee-sync', async (req, res) => {
         });
     } catch (error) {
         logger.error('[Webhook] Fee sync error', error);
+        res.status(500).json({ success: false, message: 'Internal Server Error' });
+    }
+});
+
+// @route   POST /api/webhooks/cron/all-daily
+// @desc    Trigger all due daily cron jobs (morning/evening) in one unified request
+// @access  Protected by CRON_SECRET
+router.post('/cron/all-daily', async (req, res) => {
+    try {
+        const results = await runAllDailyJobs();
+        res.json({
+            success: true,
+            message: 'All applicable daily cron jobs executed',
+            results,
+        });
+    } catch (error) {
+        logger.error('[Webhook] all-daily error', error);
+        res.status(500).json({ success: false, message: 'Internal Server Error', error: error.message });
+    }
+});
+
+// @route   GET /api/webhooks/cron/status
+// @desc    Diagnostic endpoint to check cron system status & last activity
+// @access  Protected by CRON_SECRET
+router.get('/cron/status', async (req, res) => {
+    try {
+        const mongoose = require('mongoose');
+        const now = new Date();
+        const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+        const istNow = new Date(now.getTime() + IST_OFFSET_MS);
+
+        // Fetch last 5 cron-generated notifications
+        const recentCronNotifications = await Notification.find({
+            category: { $in: ['birthday', 'event', 'exam', 'fee'] },
+        })
+            .sort({ createdAt: -1 })
+            .limit(5)
+            .select('title category createdAt metadata');
+
+        res.json({
+            success: true,
+            serverTimeUTC: now.toISOString(),
+            serverTimeIST: istNow.toISOString(),
+            dbConnected: mongoose.connection.readyState === 1,
+            feeSyncEnabled: process.env.FEE_SYNC_ENABLED === 'true',
+            recentCronNotifications,
+        });
+    } catch (error) {
+        logger.error('[Webhook] status error', error);
         res.status(500).json({ success: false, message: 'Internal Server Error' });
     }
 });

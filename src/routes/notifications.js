@@ -50,4 +50,9 @@ router.delete('/:id', auth, adminOnly, notificationController.deleteNotification
 // @access  Private (Admin)
 router.post('/send', auth, adminOnly, notificationController.sendNotification);
 
+// @route   POST /api/notifications/trigger-cron
+// @desc    Trigger automated cron jobs manually (Admin only)
+// @access  Private (Admin)
+router.post('/trigger-cron', auth, adminOnly, notificationController.triggerCron);
+
 module.exports = router;

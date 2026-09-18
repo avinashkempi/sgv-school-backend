@@ -11,7 +11,7 @@ const User = require('../models/User');
 const Class = require('../models/Class');
 const { sendTargetedNotification } = require('../services/notificationService');
 const { isAdminRole } = require('../middleware/accessControl');
-const { invalidateDashboardCaches, invalidateAdminDashboard, invalidateStudentDashboard, invalidateMultipleStudentDashboards } = require('../controllers/dashboardController');
+const { invalidateAdminDashboard, invalidateStudentDashboard, invalidateMultipleStudentDashboards } = require('../controllers/dashboardController');
 
 // Helper to generate receipt number atomically.
 const generateReceiptNumber = async () => {

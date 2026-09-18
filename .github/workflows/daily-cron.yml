@@ -1,0 +1,61 @@
+name: Daily School Cron Jobs
+
+on:
+  schedule:
+    # 01:30 UTC = 07:00 AM IST (Exam reminders)
+    - cron: '30 1 * * *'
+    # 02:30 UTC = 08:00 AM IST (Birthdays & Events)
+    - cron: '30 2 * * *'
+    # 03:30 UTC on 1st of month = 09:00 AM IST (Monthly Fee Reminders)
+    - cron: '30 3 1 * *'
+    # 14:30 UTC = 08:00 PM IST (Event Eve Reminders)
+    - cron: '30 14 * * *'
+  workflow_dispatch:
+    inputs:
+      job:
+        description: 'Job to trigger (all-daily, birthday, event, exam, or fees)'
+        required: false
+        default: 'all-daily'
+
+jobs:
+  trigger-cron:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger SGV School Backend Cron Webhook
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET || 'sgv_cron_super_secret_key_2026' }}
+          BACKEND_URL: ${{ secrets.BACKEND_URL || 'https://sgv-school-backend.onrender.com' }}
+          TARGET_JOB: ${{ github.event.inputs.job || 'all-daily' }}
+        run: |
+          echo "🚀 Triggering SGV School cron job: $TARGET_JOB at $(date -u)"
+          
+          if [ "$TARGET_JOB" = "birthday" ]; then
+            ENDPOINT="/api/webhooks/cron/birthday-notifications"
+          elif [ "$TARGET_JOB" = "event" ]; then
+            ENDPOINT="/api/webhooks/cron/event-notifications"
+          elif [ "$TARGET_JOB" = "exam" ]; then
+            ENDPOINT="/api/webhooks/cron/exam-reminders"
+          elif [ "$TARGET_JOB" = "fees" ]; then
+            ENDPOINT="/api/webhooks/cron/monthly-fee-reminders"
+          else
+            ENDPOINT="/api/webhooks/cron/all-daily"
+          fi
+          
+          RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -X POST "${BACKEND_URL}${ENDPOINT}" \
+            -H "x-cron-secret: ${CRON_SECRET}" \
+            -H "Content-Type: application/json" \
+            --retry 3 \
+            --retry-delay 5 \
+            --max-time 60)
+          
+          HTTP_STATUS=$(echo "$RESPONSE" | grep "HTTP_STATUS" | cut -d':' -f2)
+          BODY=$(echo "$RESPONSE" | grep -v "HTTP_STATUS")
+          
+          echo "Response Body: $BODY"
+          echo "HTTP Status: $HTTP_STATUS"
+          
+          if [ "$HTTP_STATUS" -ne 200 ]; then
+            echo "❌ Failed with status $HTTP_STATUS"
+            exit 1
+          fi
+          echo "✅ Successfully triggered cron endpoint"

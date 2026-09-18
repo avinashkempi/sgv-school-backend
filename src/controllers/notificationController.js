@@ -601,3 +601,38 @@ exports.triggerNotification = async (data) => {
     }
 };
 
+/**
+ * Manually trigger automated cron reminders (Admin only)
+ */
+exports.triggerCron = async (req, res) => {
+    try {
+        const { job } = req.body || {};
+        const {
+            runAllDailyJobs,
+            runBirthdayNotifications,
+            runEventNotifications,
+            runExamDayReminders,
+        } = require('../services/cronService');
+
+        let result;
+        if (job === 'birthday') {
+            result = await runBirthdayNotifications();
+        } else if (job === 'event') {
+            result = await runEventNotifications();
+        } else if (job === 'exam') {
+            result = await runExamDayReminders();
+        } else {
+            result = await runAllDailyJobs();
+        }
+
+        res.json({
+            success: true,
+            message: 'Cron job executed successfully',
+            result,
+        });
+    } catch (err) {
+        logger.error('[Notification Controller] Trigger Cron Error:', err);
+        res.status(500).json({ success: false, message: 'Failed to run cron job', error: err.message });
+    }
+};
+
