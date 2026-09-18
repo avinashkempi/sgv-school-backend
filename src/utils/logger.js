@@ -69,8 +69,8 @@ const getTimestamp = () => new Date().toISOString();
 const LOG_LEVELS = { error: 0, warn: 1, info: 2, debug: 3 };
 
 const getCurrentLogLevel = () => {
-  const level = (process.env.LOG_LEVEL || 'warn').toLowerCase();
-  return LOG_LEVELS[level] !== undefined ? LOG_LEVELS[level] : LOG_LEVELS.warn;
+  const level = (process.env.LOG_LEVEL || 'info').toLowerCase();
+  return LOG_LEVELS[level] !== undefined ? LOG_LEVELS[level] : LOG_LEVELS.info;
 };
 
 const logger = {

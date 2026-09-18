@@ -606,33 +606,54 @@ exports.triggerNotification = async (data) => {
  */
 exports.triggerCron = async (req, res) => {
     try {
-        const { job } = req.body || {};
+        const { job = 'all-daily', force = false } = req.body || {};
         const {
             runAllDailyJobs,
             runBirthdayNotifications,
             runEventNotifications,
             runExamDayReminders,
+            getCronLogs,
         } = require('../services/cronService');
 
         let result;
         if (job === 'birthday') {
-            result = await runBirthdayNotifications();
+            result = await runBirthdayNotifications({ trigger: 'manual', force });
         } else if (job === 'event') {
-            result = await runEventNotifications();
+            result = await runEventNotifications({ trigger: 'manual', force });
         } else if (job === 'exam') {
-            result = await runExamDayReminders();
+            result = await runExamDayReminders({ trigger: 'manual', force });
         } else {
-            result = await runAllDailyJobs();
+            result = await runAllDailyJobs({ trigger: 'manual', force });
         }
+
+        const recentLogs = await getCronLogs({ limit: 10 });
 
         res.json({
             success: true,
             message: 'Cron job executed successfully',
             result,
+            logs: recentLogs,
         });
     } catch (err) {
         logger.error('[Notification Controller] Trigger Cron Error:', err);
         res.status(500).json({ success: false, message: 'Failed to run cron job', error: err.message });
     }
 };
+
+/**
+ * Fetch cron execution audit logs (Admin only)
+ */
+exports.getCronLogs = async (req, res) => {
+    try {
+        const { getCronLogs } = require('../services/cronService');
+        const limit = Math.min(parseInt(req.query.limit, 10) || 50, 100);
+        const { jobName, status } = req.query;
+        const logs = await getCronLogs({ limit, jobName, status });
+        res.json({ success: true, logs });
+    } catch (err) {
+        logger.error('[Notification Controller] Get Cron Logs Error:', err);
+        res.status(500).json({ success: false, message: 'Failed to fetch cron logs', error: err.message });
+    }
+};
+
 

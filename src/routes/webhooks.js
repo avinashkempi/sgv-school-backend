@@ -12,6 +12,7 @@ const {
     runStaleTokenCleanup,
     runNotificationCleanup,
     runAllDailyJobs,
+    getCronLogs,
 } = require('../services/cronService');
 const { runFeeSync, getSyncHistory } = require('../services/feeSyncService');
 
@@ -77,29 +78,35 @@ router.post('/cron/cleanup', async (req, res) => {
 // ─────────────────────────────────────────────────────────────
 
 // @route   POST /api/webhooks/cron/birthday-notifications
+// @route   POST /api/webhooks/cron/birthdays (alias)
 // @desc    Trigger birthday notifications
 // @access  Protected by CRON_SECRET
-router.post('/cron/birthday-notifications', async (req, res) => {
+const handleBirthdayWebhook = async (req, res) => {
     try {
-        const result = await runBirthdayNotifications();
+        const force = req.query.force === 'true' || req.body?.force === true;
+        const result = await runBirthdayNotifications({ trigger: 'webhook', force });
 
         if (result.skipped) {
-            return res.json({ success: true, message: result.reason });
+            return res.json({ success: true, message: result.reason, result });
         }
         if (!result.sent) {
-            return res.json({ success: true, message: result.reason });
+            return res.json({ success: true, message: result.reason, result });
         }
 
         res.json({
             success: true,
             message: `Birthday notifications sent for ${result.userCount} user(s)`,
             fcmResult: result.fcmResult,
+            result,
         });
     } catch (error) {
         logger.error('[Webhook] Birthday error', error);
         res.status(500).json({ success: false, message: 'Internal Server Error' });
     }
-});
+};
+
+router.post('/cron/birthday-notifications', handleBirthdayWebhook);
+router.post('/cron/birthdays', handleBirthdayWebhook);
 
 // ─────────────────────────────────────────────────────────────
 // Event-Day Notifications
@@ -297,7 +304,8 @@ router.post('/cron/fee-sync', async (req, res) => {
 // @access  Protected by CRON_SECRET
 router.post('/cron/all-daily', async (req, res) => {
     try {
-        const results = await runAllDailyJobs();
+        const force = req.query.force === 'true' || req.body?.force === true;
+        const results = await runAllDailyJobs({ trigger: 'webhook', force });
         res.json({
             success: true,
             message: 'All applicable daily cron jobs executed',
@@ -306,6 +314,21 @@ router.post('/cron/all-daily', async (req, res) => {
     } catch (error) {
         logger.error('[Webhook] all-daily error', error);
         res.status(500).json({ success: false, message: 'Internal Server Error', error: error.message });
+    }
+});
+
+// @route   GET /api/webhooks/cron/logs
+// @desc    Fetch recent cron execution audit logs
+// @access  Protected by CRON_SECRET
+router.get('/cron/logs', async (req, res) => {
+    try {
+        const limit = Math.min(parseInt(req.query.limit, 10) || 50, 100);
+        const { jobName, status } = req.query;
+        const logs = await getCronLogs({ limit, jobName, status });
+        res.json({ success: true, logs });
+    } catch (error) {
+        logger.error('[Webhook] Cron logs error', error);
+        res.status(500).json({ success: false, message: 'Internal Server Error' });
     }
 });
 
@@ -319,13 +342,16 @@ router.get('/cron/status', async (req, res) => {
         const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
         const istNow = new Date(now.getTime() + IST_OFFSET_MS);
 
-        // Fetch last 5 cron-generated notifications
-        const recentCronNotifications = await Notification.find({
-            category: { $in: ['birthday', 'event', 'exam', 'fee'] },
-        })
-            .sort({ createdAt: -1 })
-            .limit(5)
-            .select('title category createdAt metadata');
+        // Fetch last 5 cron logs and last 5 cron notifications
+        const [recentCronNotifications, recentCronLogs] = await Promise.all([
+            Notification.find({
+                category: { $in: ['birthday', 'event', 'exam', 'fee'] },
+            })
+                .sort({ createdAt: -1 })
+                .limit(5)
+                .select('title category createdAt metadata'),
+            getCronLogs({ limit: 5 }),
+        ]);
 
         res.json({
             success: true,
@@ -334,6 +360,7 @@ router.get('/cron/status', async (req, res) => {
             dbConnected: mongoose.connection.readyState === 1,
             feeSyncEnabled: process.env.FEE_SYNC_ENABLED === 'true',
             recentCronNotifications,
+            recentCronLogs,
         });
     } catch (error) {
         logger.error('[Webhook] status error', error);

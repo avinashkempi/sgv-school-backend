@@ -55,4 +55,10 @@ router.post('/send', auth, adminOnly, notificationController.sendNotification);
 // @access  Private (Admin)
 router.post('/trigger-cron', auth, adminOnly, notificationController.triggerCron);
 
+// @route   GET /api/notifications/cron/logs
+// @desc    Get cron execution audit logs (Admin only)
+// @access  Private (Admin)
+router.get('/cron/logs', auth, adminOnly, notificationController.getCronLogs);
+
 module.exports = router;
+

@@ -8,14 +8,47 @@ const FeeStructure = require('../models/FeeStructure');
 const FeePayment = require('../models/FeePayment');
 const StudentFee = require('../models/StudentFee');
 const AcademicYear = require('../models/AcademicYear');
+const CronLog = require('../models/CronLog');
 const { sendTargetedNotification } = require('./notificationService');
 const logger = require('../utils/logger');
 const toTitleCase = require('../utils/titleCase');
 const { runFeeSync } = require('./feeSyncService');
 
 // ─────────────────────────────────────────────────────────────
-// Helpers
+// Helpers & Audit Logging
 // ─────────────────────────────────────────────────────────────
+
+/**
+ * Record a persistent audit log entry in MongoDB for any cron execution.
+ */
+async function recordCronLog({ jobName, trigger = 'scheduled', status, message, details = {}, durationMs = 0 }) {
+    try {
+        await CronLog.create({
+            jobName,
+            trigger,
+            status,
+            message,
+            details,
+            durationMs,
+        });
+    } catch (err) {
+        logger.error(`[CronLog] Failed to persist log for ${jobName}:`, err);
+    }
+}
+
+/**
+ * Fetch recent cron logs from MongoDB with optional filtering.
+ */
+async function getCronLogs(options = {}) {
+    const { limit = 50, jobName, status } = options;
+    const filter = {};
+    if (jobName && jobName !== 'all') filter.jobName = jobName;
+    if (status && status !== 'all') filter.status = status;
+    return CronLog.find(filter)
+        .sort({ createdAt: -1 })
+        .limit(Math.min(parseInt(limit, 10) || 50, 100))
+        .lean();
+}
 
 /** Return { startOfDay, endOfDay } in UTC for the current IST date. */
 function getISTDayBounds() {
@@ -96,23 +129,34 @@ function formatDate(date) {
 // 1. Birthday Notifications (Daily at 08:00 AM IST)
 // ─────────────────────────────────────────────────────────────
 
-async function runBirthdayNotifications() {
+async function runBirthdayNotifications(options = {}) {
+    const { trigger = 'scheduled', force = false } = options;
+    const startTime = Date.now();
     try {
         const { month: todayMonth, day: todayDay } = getISTDateComponents();
 
-        logger.info(`[Birthday Cron] Running check for ${todayDay}/${todayMonth} (IST)`);
+        logger.info(`[Birthday Cron] Running check for ${todayDay}/${todayMonth} (IST) [trigger: ${trigger}, force: ${force}]`);
 
         const { startOfDay, endOfDay } = getISTDayBounds();
 
-        // Duplicate guard
+        // Duplicate guard (can be bypassed if force = true)
         const alreadySent = await Notification.findOne({
             category: 'birthday',
             createdAt: { $gte: startOfDay, $lte: endOfDay },
         });
 
-        if (alreadySent) {
-            logger.info('[Birthday Cron] Already sent today — skipping');
-            return { skipped: true, reason: 'Already sent today' };
+        if (alreadySent && !force) {
+            const durationMs = Date.now() - startTime;
+            logger.info(`[Birthday Cron] Already sent today (${todayDay}/${todayMonth}) — skipping`);
+            await recordCronLog({
+                jobName: 'birthday',
+                trigger,
+                status: 'skipped',
+                message: `Birthday notifications already sent today (${todayDay}/${todayMonth} IST)`,
+                details: { existingNotificationId: alreadySent._id, title: alreadySent.title },
+                durationMs,
+            });
+            return { skipped: true, reason: 'Already sent today', checkedDate: `${todayDay}/${todayMonth}` };
         }
 
         // Find users with a birthday today
@@ -139,9 +183,19 @@ async function runBirthdayNotifications() {
             },
         }).select('name role dateOfBirth');
 
+        const durationMs = Date.now() - startTime;
+
         if (birthdayUsers.length === 0) {
-            logger.info('[Birthday Cron] No birthdays today');
-            return { sent: false, reason: 'No birthdays today' };
+            logger.info(`[Birthday Cron] No birthdays today (${todayDay}/${todayMonth})`);
+            await recordCronLog({
+                jobName: 'birthday',
+                trigger,
+                status: 'success',
+                message: `Checked birthdays for ${todayDay}/${todayMonth} (IST): 0 birthdays found`,
+                details: { checkedDate: `${todayDay}/${todayMonth}`, birthdayCount: 0 },
+                durationMs,
+            });
+            return { sent: false, userCount: 0, reason: `No birthdays today (${todayDay}/${todayMonth})` };
         }
 
         const names = birthdayUsers.map(u => toTitleCase(u.name));
@@ -174,10 +228,32 @@ async function runBirthdayNotifications() {
             },
         });
 
+        const totalDurationMs = Date.now() - startTime;
         logger.info(`[Birthday Cron] Sent for ${birthdayUsers.length} user(s): ${namesList}`);
-        return { sent: true, userCount: birthdayUsers.length, fcmResult: result };
+        await recordCronLog({
+            jobName: 'birthday',
+            trigger,
+            status: 'success',
+            message: `Sent birthday greetings for ${birthdayUsers.length} user(s): ${namesList}`,
+            details: {
+                userCount: birthdayUsers.length,
+                names,
+                fcmResult: result,
+            },
+            durationMs: totalDurationMs,
+        });
+
+        return { sent: true, userCount: birthdayUsers.length, names, fcmResult: result };
     } catch (error) {
         logger.error('[Birthday Cron] Error running birthday notifications', error);
+        await recordCronLog({
+            jobName: 'birthday',
+            trigger,
+            status: 'failed',
+            message: error.message,
+            details: { stack: error.stack },
+            durationMs: Date.now() - startTime,
+        });
         throw error;
     }
 }
@@ -186,18 +262,29 @@ async function runBirthdayNotifications() {
 // 2. Event-Day Notifications (Daily at 08:00 AM IST)
 // ─────────────────────────────────────────────────────────────
 
-async function runEventNotifications() {
+async function runEventNotifications(options = {}) {
+    const { trigger = 'scheduled', force = false } = options;
+    const startTime = Date.now();
     try {
         const { startOfDay, endOfDay } = getISTDayBounds();
 
-        logger.info(`[Event Cron] Checking for events on ${formatDate(startOfDay)}`);
+        logger.info(`[Event Cron] Checking for events on ${formatDate(startOfDay)} [trigger: ${trigger}, force: ${force}]`);
 
         const todayEvents = await Event.find({
             date: { $gte: startOfDay, $lte: endOfDay },
         }).select('title description _id isHoliday');
 
         if (todayEvents.length === 0) {
+            const durationMs = Date.now() - startTime;
             logger.info('[Event Cron] No events today');
+            await recordCronLog({
+                jobName: 'event',
+                trigger,
+                status: 'success',
+                message: `Checked events for ${formatDate(startOfDay)}: 0 events found`,
+                details: { eventCount: 0 },
+                durationMs,
+            });
             return { sent: false, reason: 'No events today' };
         }
 
@@ -213,7 +300,7 @@ async function runEventNotifications() {
                 'metadata.reminderType': { $ne: 'eve' },
             });
 
-            if (alreadySent) {
+            if (alreadySent && !force) {
                 logger.info(`[Event Cron] Already notified for "${event.title}" — skipping`);
                 skippedCount++;
                 continue;
@@ -249,9 +336,27 @@ async function runEventNotifications() {
             sentCount++;
         }
 
+        const durationMs = Date.now() - startTime;
+        await recordCronLog({
+            jobName: 'event',
+            trigger,
+            status: 'success',
+            message: `Processed ${todayEvents.length} event(s): sent ${sentCount}, skipped ${skippedCount}`,
+            details: { totalEvents: todayEvents.length, sentCount, skippedCount },
+            durationMs,
+        });
+
         return { sent: sentCount > 0, sentCount, skippedCount, totalEvents: todayEvents.length };
     } catch (error) {
         logger.error('[Event Cron] Error running event notifications', error);
+        await recordCronLog({
+            jobName: 'event',
+            trigger,
+            status: 'failed',
+            message: error.message,
+            details: { stack: error.stack },
+            durationMs: Date.now() - startTime,
+        });
         throw error;
     }
 }
@@ -260,22 +365,34 @@ async function runEventNotifications() {
 // 3. Event Eve Reminders (Daily at 08:00 PM IST)
 // ─────────────────────────────────────────────────────────────
 
-async function runEventEveReminders() {
+async function runEventEveReminders(options = {}) {
+    const { trigger = 'scheduled', force = false } = options;
+    const startTime = Date.now();
     try {
         const { startOfDay, endOfDay } = getISTTomorrowBounds();
 
-        logger.info(`[Event Eve Cron] Checking for events tomorrow: ${formatDate(startOfDay)}`);
+        logger.info(`[Event Eve Cron] Checking for events tomorrow: ${formatDate(startOfDay)} [trigger: ${trigger}]`);
 
         const tomorrowEvents = await Event.find({
             date: { $gte: startOfDay, $lte: endOfDay },
         }).select('title description _id isHoliday');
 
         if (tomorrowEvents.length === 0) {
+            const durationMs = Date.now() - startTime;
             logger.info('[Event Eve Cron] No events tomorrow');
+            await recordCronLog({
+                jobName: 'event_eve',
+                trigger,
+                status: 'success',
+                message: `Checked eve reminders for tomorrow (${formatDate(startOfDay)}): 0 events found`,
+                details: { eventCount: 0 },
+                durationMs,
+            });
             return { sent: false, reason: 'No events tomorrow' };
         }
 
         let sentCount = 0;
+        let skippedCount = 0;
         const { startOfDay: todayStart, endOfDay: todayEnd } = getISTDayBounds();
 
         for (const event of tomorrowEvents) {
@@ -287,8 +404,9 @@ async function runEventEveReminders() {
                 createdAt: { $gte: todayStart, $lte: todayEnd },
             });
 
-            if (alreadySent) {
+            if (alreadySent && !force) {
                 logger.info(`[Event Eve Cron] Eve reminder already sent for "${event.title}" — skipping`);
+                skippedCount++;
                 continue;
             }
 
@@ -322,9 +440,27 @@ async function runEventEveReminders() {
             sentCount++;
         }
 
-        return { sent: sentCount > 0, sentCount, totalEvents: tomorrowEvents.length };
+        const durationMs = Date.now() - startTime;
+        await recordCronLog({
+            jobName: 'event_eve',
+            trigger,
+            status: 'success',
+            message: `Processed ${tomorrowEvents.length} eve event(s): sent ${sentCount}, skipped ${skippedCount}`,
+            details: { totalEvents: tomorrowEvents.length, sentCount, skippedCount },
+            durationMs,
+        });
+
+        return { sent: sentCount > 0, sentCount, skippedCount, totalEvents: tomorrowEvents.length };
     } catch (error) {
         logger.error('[Event Eve Cron] Error', error);
+        await recordCronLog({
+            jobName: 'event_eve',
+            trigger,
+            status: 'failed',
+            message: error.message,
+            details: { stack: error.stack },
+            durationMs: Date.now() - startTime,
+        });
         throw error;
     }
 }
@@ -333,11 +469,13 @@ async function runEventEveReminders() {
 // 4. Exam-Day Reminders (Daily at 07:00 AM IST)
 // ─────────────────────────────────────────────────────────────
 
-async function runExamDayReminders() {
+async function runExamDayReminders(options = {}) {
+    const { trigger = 'scheduled', force = false } = options;
+    const startTime = Date.now();
     try {
         const { startOfDay, endOfDay } = getISTDayBounds();
 
-        logger.info(`[Exam Cron] Checking for exams on ${formatDate(startOfDay)}`);
+        logger.info(`[Exam Cron] Checking for exams on ${formatDate(startOfDay)} [trigger: ${trigger}]`);
 
         const todayExams = await Exam.find({
             date: { $gte: startOfDay, $lte: endOfDay },
@@ -345,11 +483,21 @@ async function runExamDayReminders() {
         }).populate('subject', 'name').populate('class', 'name');
 
         if (todayExams.length === 0) {
+            const durationMs = Date.now() - startTime;
             logger.info('[Exam Cron] No exams today');
+            await recordCronLog({
+                jobName: 'exam',
+                trigger,
+                status: 'success',
+                message: `Checked exams for ${formatDate(startOfDay)}: 0 exams found`,
+                details: { examCount: 0 },
+                durationMs,
+            });
             return { sent: false, reason: 'No exams today' };
         }
 
         let sentCount = 0;
+        let skippedCount = 0;
 
         for (const exam of todayExams) {
             // Duplicate guard
@@ -360,8 +508,9 @@ async function runExamDayReminders() {
                 createdAt: { $gte: startOfDay, $lte: endOfDay },
             });
 
-            if (alreadySent) {
+            if (alreadySent && !force) {
                 logger.info(`[Exam Cron] Already notified for "${exam.name}" — skipping`);
+                skippedCount++;
                 continue;
             }
 
@@ -404,9 +553,27 @@ async function runExamDayReminders() {
             sentCount++;
         }
 
-        return { sent: sentCount > 0, sentCount, totalExams: todayExams.length };
+        const durationMs = Date.now() - startTime;
+        await recordCronLog({
+            jobName: 'exam',
+            trigger,
+            status: 'success',
+            message: `Processed ${todayExams.length} exam(s): sent ${sentCount}, skipped ${skippedCount}`,
+            details: { totalExams: todayExams.length, sentCount, skippedCount },
+            durationMs,
+        });
+
+        return { sent: sentCount > 0, sentCount, skippedCount, totalExams: todayExams.length };
     } catch (error) {
         logger.error('[Exam Cron] Error running exam reminders', error);
+        await recordCronLog({
+            jobName: 'exam',
+            trigger,
+            status: 'failed',
+            message: error.message,
+            details: { stack: error.stack },
+            durationMs: Date.now() - startTime,
+        });
         throw error;
     }
 }
@@ -415,7 +582,9 @@ async function runExamDayReminders() {
 // 5. Stale FCM Token Cleanup (Weekly — Sunday 03:00 AM IST)
 // ─────────────────────────────────────────────────────────────
 
-async function runStaleTokenCleanup() {
+async function runStaleTokenCleanup(options = {}) {
+    const { trigger = 'scheduled' } = options;
+    const startTime = Date.now();
     try {
         const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
 
@@ -423,10 +592,27 @@ async function runStaleTokenCleanup() {
             updatedAt: { $lt: sixtyDaysAgo },
         });
 
+        const durationMs = Date.now() - startTime;
         logger.info(`[Token Cleanup] Removed ${result.deletedCount} stale FCM tokens (not updated in 60+ days)`);
+        await recordCronLog({
+            jobName: 'stale_token',
+            trigger,
+            status: 'success',
+            message: `Removed ${result.deletedCount} stale FCM tokens (older than 60 days)`,
+            details: { deletedCount: result.deletedCount },
+            durationMs,
+        });
         return { deletedCount: result.deletedCount };
     } catch (error) {
         logger.error('[Token Cleanup] Error', error);
+        await recordCronLog({
+            jobName: 'stale_token',
+            trigger,
+            status: 'failed',
+            message: error.message,
+            details: { stack: error.stack },
+            durationMs: Date.now() - startTime,
+        });
         throw error;
     }
 }
@@ -435,7 +621,9 @@ async function runStaleTokenCleanup() {
 // 6. Old Notification Cleanup (Weekly — Sunday 04:00 AM IST)
 // ─────────────────────────────────────────────────────────────
 
-async function runNotificationCleanup() {
+async function runNotificationCleanup(options = {}) {
+    const { trigger = 'scheduled' } = options;
+    const startTime = Date.now();
     try {
         const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
         const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
@@ -452,9 +640,19 @@ async function runNotificationCleanup() {
             createdAt: { $lt: ninetyDaysAgo },
         });
 
+        const durationMs = Date.now() - startTime;
         logger.info(
             `[Notification Cleanup] Archived ${archiveResult.modifiedCount} old notifications, deleted ${deleteResult.deletedCount} expired notifications`,
         );
+
+        await recordCronLog({
+            jobName: 'notification_cleanup',
+            trigger,
+            status: 'success',
+            message: `Archived ${archiveResult.modifiedCount} notifications (>30d), deleted ${deleteResult.deletedCount} (>90d)`,
+            details: { archivedCount: archiveResult.modifiedCount, deletedCount: deleteResult.deletedCount },
+            durationMs,
+        });
 
         return {
             archivedCount: archiveResult.modifiedCount,
@@ -462,6 +660,14 @@ async function runNotificationCleanup() {
         };
     } catch (error) {
         logger.error('[Notification Cleanup] Error', error);
+        await recordCronLog({
+            jobName: 'notification_cleanup',
+            trigger,
+            status: 'failed',
+            message: error.message,
+            details: { stack: error.stack },
+            durationMs: Date.now() - startTime,
+        });
         throw error;
     }
 }
@@ -470,11 +676,13 @@ async function runNotificationCleanup() {
 // 7. Monthly Fee Reminders (1st of every month at 09:00 AM IST)
 // ─────────────────────────────────────────────────────────────
 
-async function runMonthlyFeeReminders() {
+async function runMonthlyFeeReminders(options = {}) {
+    const { trigger = 'scheduled', force = false } = options;
+    const startTime = Date.now();
     try {
         const { startOfDay, endOfDay } = getISTDayBounds();
 
-        logger.info('[Monthly Fee Cron] Running monthly fee reminder check for students with pending dues');
+        logger.info(`[Monthly Fee Cron] Running monthly fee reminder check [trigger: ${trigger}, force: ${force}]`);
 
         // Duplicate guard — check if monthly fee reminder already sent today
         const alreadySent = await Notification.findOne({
@@ -483,15 +691,32 @@ async function runMonthlyFeeReminders() {
             createdAt: { $gte: startOfDay, $lte: endOfDay },
         });
 
-        if (alreadySent) {
+        if (alreadySent && !force) {
+            const durationMs = Date.now() - startTime;
             logger.info('[Monthly Fee Cron] Monthly fee reminders already sent today — skipping');
+            await recordCronLog({
+                jobName: 'monthly_fee',
+                trigger,
+                status: 'skipped',
+                message: 'Monthly fee reminders already sent today',
+                details: { existingNotificationId: alreadySent._id },
+                durationMs,
+            });
             return { skipped: true, reason: 'Monthly fee reminders already sent today' };
         }
 
         // Find active academic year
         const activeYear = await AcademicYear.findOne({ isActive: true });
         if (!activeYear) {
+            const durationMs = Date.now() - startTime;
             logger.warn('[Monthly Fee Cron] No active academic year found — skipping');
+            await recordCronLog({
+                jobName: 'monthly_fee',
+                trigger,
+                status: 'skipped',
+                message: 'No active academic year found',
+                durationMs,
+            });
             return { sent: false, reason: 'No active academic year found' };
         }
 
@@ -502,7 +727,16 @@ async function runMonthlyFeeReminders() {
         }).select('_id name currentClass academicYear');
 
         if (students.length === 0) {
+            const durationMs = Date.now() - startTime;
             logger.info('[Monthly Fee Cron] No active students found');
+            await recordCronLog({
+                jobName: 'monthly_fee',
+                trigger,
+                status: 'success',
+                message: 'No active students found to remind',
+                details: { totalStudents: 0 },
+                durationMs,
+            });
             return { sent: false, reason: 'No active students found' };
         }
 
@@ -594,7 +828,16 @@ async function runMonthlyFeeReminders() {
             }
         }
 
+        const durationMs = Date.now() - startTime;
         logger.info(`[Monthly Fee Cron] Sent monthly fee reminders to ${sentCount} student(s) (checked ${students.length} total students)`);
+        await recordCronLog({
+            jobName: 'monthly_fee',
+            trigger,
+            status: 'success',
+            message: `Sent fee reminders to ${sentCount} student(s) of ${students.length} evaluated`,
+            details: { sentCount, totalChecked: students.length },
+            durationMs,
+        });
 
         return {
             sent: sentCount > 0,
@@ -603,6 +846,14 @@ async function runMonthlyFeeReminders() {
         };
     } catch (error) {
         logger.error('[Monthly Fee Cron] Error running monthly fee reminders', error);
+        await recordCronLog({
+            jobName: 'monthly_fee',
+            trigger,
+            status: 'failed',
+            message: error.message,
+            details: { stack: error.stack },
+            durationMs: Date.now() - startTime,
+        });
         throw error;
     }
 }
@@ -617,44 +868,44 @@ function startAllCronJobs() {
     // 07:00 AM IST — Exam-day reminders (before school starts)
     cron.schedule('0 7 * * *', async () => {
         logger.info('[Cron] 07:00 AM IST — Running exam-day reminders');
-        try { await runExamDayReminders(); }
+        try { await runExamDayReminders({ trigger: 'scheduled' }); }
         catch (err) { logger.error('[Exam Cron] Unhandled error in scheduled job', err); }
     }, { timezone: TIMEZONE });
 
     // 08:00 AM IST — Birthday & Event-day notifications
     cron.schedule('0 8 * * *', async () => {
         logger.info('[Cron] 08:00 AM IST — Running birthday & event notifications');
-        try { await runBirthdayNotifications(); }
+        try { await runBirthdayNotifications({ trigger: 'scheduled' }); }
         catch (err) { logger.error('[Birthday Cron] Unhandled error in scheduled job', err); }
-        try { await runEventNotifications(); }
+        try { await runEventNotifications({ trigger: 'scheduled' }); }
         catch (err) { logger.error('[Event Cron] Unhandled error in scheduled job', err); }
     }, { timezone: TIMEZONE });
 
     // 09:00 AM IST on 1st of every month — Monthly fee reminders
     cron.schedule('0 9 1 * *', async () => {
         logger.info('[Cron] 1st of month 09:00 AM IST — Running monthly fee reminders');
-        try { await runMonthlyFeeReminders(); }
+        try { await runMonthlyFeeReminders({ trigger: 'scheduled' }); }
         catch (err) { logger.error('[Monthly Fee Cron] Unhandled error in scheduled job', err); }
     }, { timezone: TIMEZONE });
 
     // 08:00 PM IST — Event eve reminders (for tomorrow's events)
     cron.schedule('0 20 * * *', async () => {
         logger.info('[Cron] 08:00 PM IST — Running event eve reminders');
-        try { await runEventEveReminders(); }
+        try { await runEventEveReminders({ trigger: 'scheduled' }); }
         catch (err) { logger.error('[Event Eve Cron] Unhandled error in scheduled job', err); }
     }, { timezone: TIMEZONE });
 
     // Every Sunday at 03:00 AM IST — Stale FCM token cleanup
     cron.schedule('0 3 * * 0', async () => {
         logger.info('[Cron] Sunday 03:00 AM IST — Running stale token cleanup');
-        try { await runStaleTokenCleanup(); }
+        try { await runStaleTokenCleanup({ trigger: 'scheduled' }); }
         catch (err) { logger.error('[Token Cleanup] Unhandled error in scheduled job', err); }
     }, { timezone: TIMEZONE });
 
     // Every Sunday at 04:00 AM IST — Old notification cleanup
     cron.schedule('0 4 * * 0', async () => {
         logger.info('[Cron] Sunday 04:00 AM IST — Running notification cleanup');
-        try { await runNotificationCleanup(); }
+        try { await runNotificationCleanup({ trigger: 'scheduled' }); }
         catch (err) { logger.error('[Notification Cleanup] Unhandled error in scheduled job', err); }
     }, { timezone: TIMEZONE });
 
@@ -687,23 +938,23 @@ function startAllCronJobs() {
 
     if (currentHour >= 7) {
         logger.info('[Cron] Server started after 07:00 AM IST — running exam catchup');
-        runExamDayReminders().catch(err => logger.error('[Exam Cron] Catchup error', err));
+        runExamDayReminders({ trigger: 'catchup' }).catch(err => logger.error('[Exam Cron] Catchup error', err));
     }
     if (currentHour >= 8) {
         logger.info('[Cron] Server started after 08:00 AM IST — running birthday & event catchup');
         Promise.resolve()
-            .then(() => runBirthdayNotifications())
+            .then(() => runBirthdayNotifications({ trigger: 'catchup' }))
             .catch(err => logger.error('[Birthday Cron] Catchup error', err))
-            .then(() => runEventNotifications())
+            .then(() => runEventNotifications({ trigger: 'catchup' }))
             .catch(err => logger.error('[Event Cron] Catchup error', err));
     }
     if (currentDate === 1 && currentHour >= 9) {
         logger.info('[Cron] Server started on 1st of month after 09:00 AM IST — running fee reminder catchup');
-        runMonthlyFeeReminders().catch(err => logger.error('[Monthly Fee Cron] Catchup error', err));
+        runMonthlyFeeReminders({ trigger: 'catchup' }).catch(err => logger.error('[Monthly Fee Cron] Catchup error', err));
     }
     if (currentHour >= 20) {
         logger.info('[Cron] Server started after 08:00 PM IST — running event eve catchup');
-        runEventEveReminders().catch(err => logger.error('[Event Eve Cron] Catchup error', err));
+        runEventEveReminders({ trigger: 'catchup' }).catch(err => logger.error('[Event Eve Cron] Catchup error', err));
     }
 }
 
@@ -711,45 +962,50 @@ function startAllCronJobs() {
  * Run all due daily jobs based on current IST time.
  * Used for unified webhook triggers, manual admin triggers, and catchup.
  */
-async function runAllDailyJobs() {
+async function runAllDailyJobs(options = {}) {
+    const { trigger = 'scheduled', force = false } = options;
+    const startTime = Date.now();
     const currentHour = getISTHour();
     const currentDate = getISTDate();
     const results = {};
 
-    logger.info(`[Cron Dispatcher] Running daily jobs check for current IST hour: ${currentHour}:00 (Date: ${currentDate})`);
+    logger.info(`[Cron Dispatcher] Running daily jobs check (trigger: ${trigger}, force: ${force}, IST hour: ${currentHour}:00, Date: ${currentDate})`);
 
-    // 1. Exam reminders (due if >= 7 AM IST)
-    if (currentHour >= 7) {
+    // For manual triggers or forced runs, execute all core daily checks unconditionally
+    const runNow = trigger === 'manual' || force;
+
+    // 1. Exam reminders (due if >= 7 AM IST, or manual/force)
+    if (runNow || currentHour >= 7) {
         try {
-            results.examReminders = await runExamDayReminders();
+            results.examReminders = await runExamDayReminders({ trigger, force });
         } catch (err) {
             results.examReminders = { error: err.message };
             logger.error('[Cron Dispatcher] Exam reminders failed', err);
         }
     }
 
-    // 2. Birthday notifications (due if >= 8 AM IST)
-    if (currentHour >= 8) {
+    // 2. Birthday notifications (due if >= 8 AM IST, or manual/force)
+    if (runNow || currentHour >= 8) {
         try {
-            results.birthdays = await runBirthdayNotifications();
+            results.birthdays = await runBirthdayNotifications({ trigger, force });
         } catch (err) {
             results.birthdays = { error: err.message };
             logger.error('[Cron Dispatcher] Birthday notifications failed', err);
         }
 
-        // 3. Event-day notifications (due if >= 8 AM IST)
+        // 3. Event-day notifications (due if >= 8 AM IST, or manual/force)
         try {
-            results.events = await runEventNotifications();
+            results.events = await runEventNotifications({ trigger, force });
         } catch (err) {
             results.events = { error: err.message };
             logger.error('[Cron Dispatcher] Event notifications failed', err);
         }
     }
 
-    // 4. Monthly fee reminders (1st of month, >= 9 AM IST)
-    if (currentDate === 1 && currentHour >= 9) {
+    // 4. Monthly fee reminders (1st of month, >= 9 AM IST, or if explicitly requested)
+    if (currentDate === 1 && (runNow || currentHour >= 9)) {
         try {
-            results.monthlyFees = await runMonthlyFeeReminders();
+            results.monthlyFees = await runMonthlyFeeReminders({ trigger, force });
         } catch (err) {
             results.monthlyFees = { error: err.message };
             logger.error('[Cron Dispatcher] Monthly fee reminders failed', err);
@@ -759,12 +1015,22 @@ async function runAllDailyJobs() {
     // 5. Event eve reminders (due if >= 8 PM IST)
     if (currentHour >= 20) {
         try {
-            results.eventEve = await runEventEveReminders();
+            results.eventEve = await runEventEveReminders({ trigger, force });
         } catch (err) {
             results.eventEve = { error: err.message };
             logger.error('[Cron Dispatcher] Event eve reminders failed', err);
         }
     }
+
+    const durationMs = Date.now() - startTime;
+    await recordCronLog({
+        jobName: 'all_daily',
+        trigger,
+        status: Object.values(results).some(r => r && r.error) ? 'failed' : 'success',
+        message: `All daily jobs completed in ${durationMs}ms`,
+        details: results,
+        durationMs,
+    });
 
     return results;
 }
@@ -779,4 +1045,6 @@ module.exports = {
     runMonthlyFeeReminders,
     runStaleTokenCleanup,
     runNotificationCleanup,
+    getCronLogs,
+    recordCronLog,
 };
