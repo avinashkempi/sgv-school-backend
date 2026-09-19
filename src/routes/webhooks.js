@@ -21,11 +21,26 @@ const { runFeeSync, getSyncHistory } = require('../services/feeSyncService');
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Validates the x-cron-secret header or secret query parameter against CRON_SECRET.
+ * Validates the x-cron-secret header, Authorization Bearer token, or secret query parameter against CRON_SECRET.
  * Rejects requests when CRON_SECRET is not configured on the server.
  */
 function validateCronSecret(req, res, next) {
-    const secret = req.headers['x-cron-secret'] || req.query.secret;
+    // 1. Try 'x-cron-secret' header (case-insensitive via req.get)
+    let secret = req.get('x-cron-secret') || req.headers['x-cron-secret'];
+
+    // 2. Try 'Authorization: Bearer <secret>' header
+    if (!secret && req.headers['authorization']) {
+        const authHeader = req.headers['authorization'];
+        if (authHeader.startsWith('Bearer ')) {
+            secret = authHeader.substring(7);
+        }
+    }
+
+    // 3. Try query parameter '?secret='
+    if (!secret && req.query?.secret) {
+        secret = req.query.secret;
+    }
+
     const validSecret = process.env.CRON_SECRET;
 
     if (!validSecret) {
@@ -33,8 +48,14 @@ function validateCronSecret(req, res, next) {
         return res.status(503).json({ success: false, message: 'Webhook secret not configured on server' });
     }
 
-    if (secret !== validSecret) {
-        logger.warn('[Webhook] Unauthorized cron webhook attempt blocked');
+    // Trim both values to prevent whitespace/newline mismatch issues when copy-pasting
+    const cleanSecret = (secret || '').trim();
+    const cleanValid = validSecret.trim();
+
+    if (!cleanSecret || cleanSecret !== cleanValid) {
+        logger.warn(
+            `[Webhook] Unauthorized cron webhook attempt blocked (received: ${!!cleanSecret}, length: ${cleanSecret.length} vs expected: ${cleanValid.length})`
+        );
         return res.status(401).json({ success: false, message: 'Unauthorized webhook' });
     }
 
@@ -113,9 +134,10 @@ router.post('/cron/birthdays', handleBirthdayWebhook);
 // ─────────────────────────────────────────────────────────────
 
 // @route   POST /api/webhooks/cron/event-notifications
+// @route   POST /api/webhooks/cron/events (alias)
 // @desc    Trigger event-day notifications
 // @access  Protected by CRON_SECRET
-router.post('/cron/event-notifications', async (req, res) => {
+const handleEventWebhook = async (req, res) => {
     try {
         const result = await runEventNotifications();
 
@@ -131,7 +153,10 @@ router.post('/cron/event-notifications', async (req, res) => {
         logger.error('[Webhook] Event notification error', error);
         res.status(500).json({ success: false, message: 'Internal Server Error' });
     }
-});
+};
+
+router.post('/cron/event-notifications', handleEventWebhook);
+router.post('/cron/events', handleEventWebhook);
 
 // ─────────────────────────────────────────────────────────────
 // Event Eve Reminders
@@ -163,9 +188,10 @@ router.post('/cron/event-eve-reminders', async (req, res) => {
 // ─────────────────────────────────────────────────────────────
 
 // @route   POST /api/webhooks/cron/exam-reminders
+// @route   POST /api/webhooks/cron/exams (alias)
 // @desc    Trigger exam-day reminders for today's exams
 // @access  Protected by CRON_SECRET
-router.post('/cron/exam-reminders', async (req, res) => {
+const handleExamWebhook = async (req, res) => {
     try {
         const result = await runExamDayReminders();
 
@@ -181,7 +207,10 @@ router.post('/cron/exam-reminders', async (req, res) => {
         logger.error('[Webhook] Exam reminder error', error);
         res.status(500).json({ success: false, message: 'Internal Server Error' });
     }
-});
+};
+
+router.post('/cron/exam-reminders', handleExamWebhook);
+router.post('/cron/exams', handleExamWebhook);
 
 // ─────────────────────────────────────────────────────────────
 // Stale Token Cleanup
@@ -230,9 +259,10 @@ router.post('/cron/notification-cleanup', async (req, res) => {
 // ─────────────────────────────────────────────────────────────
 
 // @route   POST /api/webhooks/cron/monthly-fee-reminders
+// @route   POST /api/webhooks/cron/fees (alias)
 // @desc    Trigger monthly fee reminders for students with pending fees
 // @access  Protected by CRON_SECRET
-router.post('/cron/monthly-fee-reminders', async (req, res) => {
+const handleFeeWebhook = async (req, res) => {
     try {
         const result = await runMonthlyFeeReminders();
 
@@ -245,7 +275,10 @@ router.post('/cron/monthly-fee-reminders', async (req, res) => {
         logger.error('[Webhook] Monthly fee reminder error', error);
         res.status(500).json({ success: false, message: 'Internal Server Error' });
     }
-});
+};
+
+router.post('/cron/monthly-fee-reminders', handleFeeWebhook);
+router.post('/cron/fees', handleFeeWebhook);
 
 // ─────────────────────────────────────────────────────────────
 // Fee Sync from Google Sheets

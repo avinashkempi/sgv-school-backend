@@ -23,39 +23,50 @@ jobs:
     steps:
       - name: Trigger SGV School Backend Cron Webhook
         env:
-          CRON_SECRET: ${{ secrets.CRON_SECRET || 'sgv_cron_super_secret_key_2026' }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
           BACKEND_URL: ${{ secrets.BACKEND_URL || 'https://sgv-school-backend.onrender.com' }}
           TARGET_JOB: ${{ github.event.inputs.job || 'all-daily' }}
         run: |
-          echo "🚀 Triggering SGV School cron job: $TARGET_JOB at $(date -u)"
-          
-          if [ "$TARGET_JOB" = "birthday" ]; then
-            ENDPOINT="/api/webhooks/cron/birthday-notifications"
-          elif [ "$TARGET_JOB" = "event" ]; then
-            ENDPOINT="/api/webhooks/cron/event-notifications"
-          elif [ "$TARGET_JOB" = "exam" ]; then
-            ENDPOINT="/api/webhooks/cron/exam-reminders"
-          elif [ "$TARGET_JOB" = "fees" ]; then
-            ENDPOINT="/api/webhooks/cron/monthly-fee-reminders"
-          else
-            ENDPOINT="/api/webhooks/cron/all-daily"
+          set -euo pipefail
+          if [ -z "${CRON_SECRET:-}" ]; then
+            echo "::error::CRON_SECRET is not configured in GitHub repository secrets"
+            exit 1
           fi
-          
-          RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -X POST "${BACKEND_URL}${ENDPOINT}" \
-            -H "x-cron-secret: ${CRON_SECRET}" \
-            -H "Content-Type: application/json" \
+          if [ -z "${BACKEND_URL:-}" ]; then
+            echo "::error::BACKEND_URL is not configured"
+            exit 1
+          fi
+
+          echo "🚀 Triggering SGV School cron job: $TARGET_JOB at $(date -u)"
+
+          case "$TARGET_JOB" in
+            birthday) ENDPOINT="/api/webhooks/cron/birthday-notifications" ;;
+            event)    ENDPOINT="/api/webhooks/cron/event-notifications" ;;
+            exam)     ENDPOINT="/api/webhooks/cron/exam-reminders" ;;
+            fees)     ENDPOINT="/api/webhooks/cron/monthly-fee-reminders" ;;
+            *)        ENDPOINT="/api/webhooks/cron/all-daily" ;;
+          esac
+
+          HTTP_STATUS="$(curl --silent --show-error --fail-with-body \
+            --output response.json \
+            --write-out '%{http_code}' \
+            --request POST \
+            --url "${BACKEND_URL}${ENDPOINT}" \
+            --header "x-cron-secret: ${CRON_SECRET}" \
+            --header "Authorization: Bearer ${CRON_SECRET}" \
+            --header "Content-Type: application/json" \
             --retry 3 \
             --retry-delay 5 \
-            --max-time 60)
-          
-          HTTP_STATUS=$(echo "$RESPONSE" | grep "HTTP_STATUS" | cut -d':' -f2)
-          BODY=$(echo "$RESPONSE" | grep -v "HTTP_STATUS")
-          
-          echo "Response Body: $BODY"
-          echo "HTTP Status: $HTTP_STATUS"
-          
-          if [ "$HTTP_STATUS" -ne 200 ]; then
-            echo "❌ Failed with status $HTTP_STATUS"
+            --max-time 60 || echo "$?")"
+
+          if [ -f response.json ]; then
+            cat response.json
+            echo ""
+          fi
+
+          echo "HTTP Status: ${HTTP_STATUS}"
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "::error::Cron endpoint returned HTTP ${HTTP_STATUS}"
             exit 1
           fi
           echo "✅ Successfully triggered cron endpoint"
