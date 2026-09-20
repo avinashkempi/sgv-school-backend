@@ -1164,11 +1164,37 @@ router.get('/performance/school', auth, async (req, res) => {
             };
         });
 
-        // Initialization overview
+        // Initialization overview across all classes and exam types
         const totalClassesCount = classes.length;
-        const fullyInitializedClassesCount = classwiseSummary.filter(c => c.examsCount >= 6).length;
-        const partiallyInitializedClassesCount = classwiseSummary.filter(c => c.examsCount > 0 && c.examsCount < 6).length;
-        const uninitializedClassesCount = classwiseSummary.filter(c => c.examsCount === 0).length;
+        let totalCompletedAssessments = 0;
+        let totalPartialAssessments = 0;
+        let totalNotSetupAssessments = 0;
+
+        classwiseSummary.forEach(c => {
+            (c.examTypeBreakdown || []).forEach(b => {
+                if (!b || b.status === 'not_initialized') {
+                    totalNotSetupAssessments++;
+                } else if (b.status === 'completed') {
+                    totalCompletedAssessments++;
+                } else {
+                    totalPartialAssessments++;
+                }
+            });
+        });
+
+        // Also calculate class-level setup counts (based on exam types configured out of 6, not raw examsCount)
+        const fullySetupClassesCount = classwiseSummary.filter(c => {
+            const initTypes = (c.examTypeBreakdown || []).filter(b => b.examsCount > 0).length;
+            return initTypes === 6;
+        }).length;
+        const partialSetupClassesCount = classwiseSummary.filter(c => {
+            const initTypes = (c.examTypeBreakdown || []).filter(b => b.examsCount > 0).length;
+            return initTypes > 0 && initTypes < 6;
+        }).length;
+        const unsetupClassesCount = classwiseSummary.filter(c => {
+            const initTypes = (c.examTypeBreakdown || []).filter(b => b.examsCount > 0).length;
+            return initTypes === 0;
+        }).length;
 
         const kpis = {
             totalMarksEvaluated: schoolTotalMarksEvaluated,
@@ -1179,15 +1205,19 @@ router.get('/performance/school', auth, async (req, res) => {
             totalMarksEntriesCount: allMarks.length,
             totalExpectedEntries,
             completionRate: totalExpectedEntries > 0 ? parseFloat(((allMarks.length / totalExpectedEntries) * 100).toFixed(1)) : 0,
-            fullyInitializedClassesCount,
+            fullyInitializedClassesCount: totalCompletedAssessments,
             totalClassesCount
         };
 
         const initializationSummary = {
             totalClassesCount,
-            fullyInitializedClassesCount,
-            partiallyInitializedClassesCount,
-            uninitializedClassesCount,
+            totalAssessments: totalClassesCount * examTypes.length,
+            fullyInitializedClassesCount: totalCompletedAssessments,
+            partiallyInitializedClassesCount: totalPartialAssessments,
+            uninitializedClassesCount: totalNotSetupAssessments,
+            fullySetupClassesCount,
+            partialSetupClassesCount,
+            unsetupClassesCount,
             totalExamsConfigured: exams.length
         };
 
