@@ -1,7 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const compression = require('compression');
-const rateLimit = require('express-rate-limit');
+const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 const connectDB = require('./src/config/database');
 const { startAllCronJobs } = require('./src/services/cronService');
 const logger = require('./src/utils/logger');
@@ -65,12 +65,36 @@ const authLimiter = rateLimit({
 });
 
 // General API Rate Limiter
+// Distinguish authenticated users (token-based key, 3000 req/15min) from unauthenticated traffic (IP-based key, 1000 req/15min)
+// This prevents multiple staff/teachers on the same school Wi-Fi (shared NAT IP) from exhausting each other's quota.
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 300, // limit each IP to 300 general requests per window
-  message: { success: false, message: 'Too many requests from this IP. Please try again later.' },
+  max: (req) => {
+    // Authenticated users get 3,000 requests per 15 minutes
+    if (req.headers && req.headers.authorization) {
+      return 3000;
+    }
+    // Unauthenticated requests get 1,000 requests per 15 minutes
+    return 1000;
+  },
+  keyGenerator: (req) => {
+    // Isolate authenticated users by their authorization token so users on shared Wi-Fi don't share limits
+    if (req.headers && req.headers.authorization && typeof req.headers.authorization === 'string') {
+      return req.headers.authorization;
+    }
+    return ipKeyGenerator(req);
+  },
+  skip: (req) => {
+    // Skip rate limiting for OPTIONS preflight and health check endpoints
+    return req.method === 'OPTIONS' || req.path === '/health' || req.path === '/api/health';
+  },
+  message: {
+    success: false,
+    message: 'Too many requests. Please slow down and try again shortly.'
+  },
   standardHeaders: true,
   legacyHeaders: false,
+  validate: { xForwardedForHeader: false }
 });
 
 // Routes
