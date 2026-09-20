@@ -37,17 +37,20 @@ app.use(requestLogger);
 // Enable compression
 app.use(compression());
 
-// Enable CORS for all origins — required because this is a React Native mobile app,
-// not a browser SPA. Mobile clients don't enforce same-origin policy, and the API
-// must be accessible from any device.
-app.use(cors({
+// Enable CORS for all origins and methods
+const corsOptions = {
   origin: '*',
   credentials: false,
   allowedHeaders: ['Content-Type', 'Authorization', 'x-academic-year', 'x-request-id'],
   exposedHeaders: ['x-active-academic-year', 'x-request-id'],
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'],
+  maxAge: 86400,
   optionsSuccessStatus: 200
-}));
+};
+
+app.use(cors(corsOptions));
+// Explicit preflight handling for Express 5 regex routing
+app.options(/.*/, cors(corsOptions));
 
 // Parse JSON with a 5MB body size limit to carefully reduce large payloads safely
 app.use(express.json({ limit: '5mb' }));

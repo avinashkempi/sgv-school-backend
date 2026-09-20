@@ -54,9 +54,20 @@ router.get('/admin/rejected', authenticateToken, requireAdmin, (req, res, next) 
 });
 router.get('/admin/moderation', authenticateToken, requireAdmin, listPendingVibes);
 router.post('/admin/batch-review', authenticateToken, requireAdmin, batchReviewVibes);
-router.patch('/admin/:id/review', authenticateToken, requireAdmin, reviewVibe);
-router.patch('/admin/:id/pin', authenticateToken, requireAdmin, togglePinVibe);
-router.patch('/admin/:id/spotlight', authenticateToken, requireAdmin, toggleSpotlightVibe);
+router.route('/admin/:id/review')
+  .patch(authenticateToken, requireAdmin, reviewVibe)
+  .post(authenticateToken, requireAdmin, reviewVibe)
+  .put(authenticateToken, requireAdmin, reviewVibe);
+
+router.route('/admin/:id/pin')
+  .patch(authenticateToken, requireAdmin, togglePinVibe)
+  .post(authenticateToken, requireAdmin, togglePinVibe)
+  .put(authenticateToken, requireAdmin, togglePinVibe);
+
+router.route('/admin/:id/spotlight')
+  .patch(authenticateToken, requireAdmin, toggleSpotlightVibe)
+  .post(authenticateToken, requireAdmin, toggleSpotlightVibe)
+  .put(authenticateToken, requireAdmin, toggleSpotlightVibe);
 
 // ── User Specific Endpoints ──
 router.get('/user/my-vibes', authenticateToken, getMyVibes);

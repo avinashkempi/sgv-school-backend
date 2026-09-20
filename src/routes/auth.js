@@ -21,6 +21,9 @@ const changePasswordLimiter = rateLimit({
 router.post('/login', loginValidation, login);
 router.get('/me', authenticateToken, getMe);
 router.post('/change-password', authenticateToken, changePasswordLimiter, changePasswordValidation, changePassword);
-router.patch('/profile-photo', authenticateToken, updateProfilePhoto);
+router.route('/profile-photo')
+  .patch(authenticateToken, updateProfilePhoto)
+  .post(authenticateToken, updateProfilePhoto)
+  .put(authenticateToken, updateProfilePhoto);
 
 module.exports = router;

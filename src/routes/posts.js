@@ -19,6 +19,9 @@ router.get('/:id', getPost);
 router.post('/', authenticateToken, requireAdmin, createPost);
 router.put('/:id', authenticateToken, requireAdmin, updatePost);
 router.delete('/:id', authenticateToken, requireAdmin, deletePost);
-router.patch('/:id/pin', authenticateToken, requireAdmin, togglePin);
+router.route('/:id/pin')
+  .patch(authenticateToken, requireAdmin, togglePin)
+  .post(authenticateToken, requireAdmin, togglePin)
+  .put(authenticateToken, requireAdmin, togglePin);
 
 module.exports = router;
