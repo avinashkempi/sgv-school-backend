@@ -43,9 +43,9 @@ async function test() {
     const mockRow = {
         'Total Fees': '₹12,900',
         'Last Year Fees': '₹3,000',
-        'To pay': '₹12,900', // Simulating sheet where formula wasn't modified
+        'To pay': '₹15,900', // As calculated directly in user's Excel sheet
         'Total Paid': '₹9,000',
-        'Pending': '₹3,900',  // Simulating sheet where formula wasn't modified
+        'Pending': '₹6,900',  // As calculated directly in user's Excel sheet
         'Concession': '',
         'Inst 1 Amount': '₹6,000',
         'Inst 1 Date': '02-07-2026',
@@ -56,12 +56,12 @@ async function test() {
     };
 
     const feeData = buildFeeData('mockStudentId', mockRow, null, 'mockClassId', 'Mangasuli');
-    console.log('Calculated feeData:');
+    console.log('Processed feeData from Excel:');
     console.log(' - totalFees:', feeData.totalFees, '(expected: 12900)');
     console.log(' - arrears:', feeData.arrears, '(expected: 3000)');
-    console.log(' - toPay:', feeData.toPay, '(expected: 15900 = 12900 + 3000)');
+    console.log(' - toPay:', feeData.toPay, '(expected: 15900 directly from Excel)');
     console.log(' - totalPaid:', feeData.totalPaid, '(expected: 9000)');
-    console.log(' - pendingAmount:', feeData.pendingAmount, '(expected: 6900 = 15900 - 9000)');
+    console.log(' - pendingAmount:', feeData.pendingAmount, '(expected: 6900 directly from Excel)');
 
     const passed = (
         feeData.totalFees === 12900 &&
@@ -72,7 +72,7 @@ async function test() {
     );
 
     if (passed) {
-        console.log('\n✅ TEST PASSED: Last Year Fees correctly added to toPay and pendingAmount!');
+        console.log('\n✅ TEST PASSED: Excel sheet To pay, Pending, and Last Year Fees read directly and accurately!');
     } else {
         console.error('\n❌ TEST FAILED: Calculations do not match expected values.');
         process.exit(1);

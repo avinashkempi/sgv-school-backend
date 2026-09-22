@@ -347,14 +347,18 @@ const buildFeeData = (studentId, row, academicYear, classId, branch) => {
         row['Arrears']
     );
     const concession = parseCurrency(row['Concession']);
+    // Use To pay directly from Excel/Sheet (fallback only if missing)
     const rawToPay = parseCurrency(row['To pay']);
-    const calculatedToPay = Math.max(0, totalFees + arrears - concession);
-    const toPay = rawToPay >= calculatedToPay && rawToPay > 0 ? rawToPay : calculatedToPay;
+    const toPay = (row['To pay'] !== undefined && row['To pay'] !== '')
+        ? rawToPay
+        : Math.max(0, totalFees + arrears - concession);
 
     const totalPaid = parseCurrency(row['Total Paid']);
+    // Use Pending directly from Excel/Sheet (fallback only if missing)
     const rawPending = parseCurrency(row['Pending']);
-    const calculatedPending = Math.max(0, toPay - totalPaid);
-    const pendingAmount = (rawPending >= calculatedPending && rawPending > 0) ? rawPending : calculatedPending;
+    const pendingAmount = (row['Pending'] !== undefined && row['Pending'] !== '')
+        ? rawPending
+        : Math.max(0, toPay - totalPaid);
 
     const feeData = {
         student: studentId,
