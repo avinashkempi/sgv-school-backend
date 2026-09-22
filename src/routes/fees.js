@@ -324,6 +324,7 @@ router.get('/summary', [auth, checkRole(['admin', 'super admin']), yearContext],
                 totalFees,
                 toPay,
                 concession,
+                arrears: feeRecord?.arrears || 0,
                 paidAmount,
                 pendingAmount
             };

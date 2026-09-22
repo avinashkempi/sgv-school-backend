@@ -338,13 +338,23 @@ const processFeeStructure = async (classId, academicYear, row) => {
 
 const buildFeeData = (studentId, row, academicYear, classId, branch) => {
     const totalFees = parseCurrency(row['Total Fees']);
-    const arrears = parseCurrency(row['Arrears / Previous Dues'] || row['Previous Dues'] || row['Arrears']);
+    const arrears = parseCurrency(
+        row['Last Year Fees'] ||
+        row['Last Year'] ||
+        row['Last Year Pending'] ||
+        row['Arrears / Previous Dues'] ||
+        row['Previous Dues'] ||
+        row['Arrears']
+    );
     const concession = parseCurrency(row['Concession']);
     const rawToPay = parseCurrency(row['To pay']);
-    const toPay = rawToPay > 0 || row['To pay'] !== undefined ? rawToPay : Math.max(0, totalFees + arrears - concession);
+    const calculatedToPay = Math.max(0, totalFees + arrears - concession);
+    const toPay = rawToPay >= calculatedToPay && rawToPay > 0 ? rawToPay : calculatedToPay;
+
     const totalPaid = parseCurrency(row['Total Paid']);
     const rawPending = parseCurrency(row['Pending']);
-    const pendingAmount = rawPending > 0 || row['Pending'] !== undefined ? rawPending : Math.max(0, toPay - totalPaid);
+    const calculatedPending = Math.max(0, toPay - totalPaid);
+    const pendingAmount = (rawPending >= calculatedPending && rawPending > 0) ? rawPending : calculatedPending;
 
     const feeData = {
         student: studentId,
@@ -494,4 +504,4 @@ const processStaffImport = async (csvData) => {
     return results;
 };
 
-module.exports = { processImport, processStaffImport };
+module.exports = { processImport, processStaffImport, buildFeeData };
