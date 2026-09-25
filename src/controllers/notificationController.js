@@ -611,7 +611,9 @@ exports.triggerCron = async (req, res) => {
             runAllDailyJobs,
             runBirthdayNotifications,
             runEventNotifications,
+            runEventEveReminders,
             runExamDayReminders,
+            runMonthlyFeeReminders,
             getCronLogs,
         } = require('../services/cronService');
 
@@ -620,8 +622,12 @@ exports.triggerCron = async (req, res) => {
             result = await runBirthdayNotifications({ trigger: 'manual', force });
         } else if (job === 'event') {
             result = await runEventNotifications({ trigger: 'manual', force });
+        } else if (job === 'event-eve' || job === 'event_eve') {
+            result = await runEventEveReminders({ trigger: 'manual', force });
         } else if (job === 'exam') {
             result = await runExamDayReminders({ trigger: 'manual', force });
+        } else if (job === 'monthly-fee' || job === 'monthly_fee' || job === 'fee') {
+            result = await runMonthlyFeeReminders({ trigger: 'manual', force });
         } else {
             result = await runAllDailyJobs({ trigger: 'manual', force });
         }
