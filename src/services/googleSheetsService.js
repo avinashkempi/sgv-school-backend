@@ -1,4 +1,4 @@
-const { google } = require('googleapis');
+const { sheets: createSheetsClient, auth: googleAuth } = require('@googleapis/sheets');
 const logger = require('../utils/logger');
 
 /**
@@ -33,7 +33,7 @@ function getAuthClient() {
     }
     formattedKey = formattedKey.replace(/\\n/g, '\n');
 
-    const auth = new google.auth.GoogleAuth({
+    const auth = new googleAuth.GoogleAuth({
         credentials: {
             client_email: email,
             private_key: formattedKey
@@ -62,7 +62,7 @@ async function fetchSheetData(options = {}) {
     }
 
     const auth = getAuthClient();
-    const sheets = google.sheets({ version: 'v4', auth });
+    const sheets = createSheetsClient({ version: 'v4', auth });
 
     logger.info(`[GoogleSheets] Fetching data from sheet "${tabName}" (ID: ${spreadsheetId})`);
 
