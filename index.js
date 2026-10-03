@@ -133,6 +133,7 @@ app.use('/api/attendance-enhancements', require('./src/routes/attendanceEnhancem
 app.use('/api/fee-enhancements', require('./src/routes/feeEnhancements'));
 app.use('/api/analytics', require('./src/routes/analytics'));
 app.use('/api/import', require('./src/routes/import'));
+app.use('/api/student-ratings', require('./src/routes/studentRatings'));
 
 app.get('/', (req, res) => {
   res.send('Hello from Express Backend!');
