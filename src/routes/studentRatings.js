@@ -2,12 +2,11 @@ const express = require('express');
 const mongoose = require('mongoose');
 const router = express.Router();
 const { validationResult } = require('express-validator');
-const { authenticateToken: auth, checkRole, requireAdmin } = require('../middleware/auth');
+const { authenticateToken: auth, requireAdmin } = require('../middleware/auth');
 const { yearContext, requireOpenYear } = require('../middleware/yearContext');
 const StudentRating = require('../models/StudentRating');
 const Subject = require('../models/Subject');
 const User = require('../models/User');
-const Class = require('../models/Class');
 const { bulkRatingValidation } = require('../validations/studentRating');
 
 const hasObjectIdMatch = (ids = [], userId) => ids.some((id) => id && id.toString() === userId);
