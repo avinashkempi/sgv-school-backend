@@ -110,6 +110,11 @@ const vibeSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  isVisibleToDemo: {
+    type: Boolean,
+    default: false,
+    index: true
+  },
   isActive: {
     type: Boolean,
     default: true
@@ -122,6 +127,7 @@ const vibeSchema = new mongoose.Schema({
 vibeSchema.index({ status: 1, isActive: 1, isSpotlight: -1, isPinned: -1, createdAt: -1 });
 vibeSchema.index({ status: 1, isActive: 1, isPinned: -1, createdAt: -1 });
 vibeSchema.index({ status: 1, category: 1, isActive: 1, isPinned: -1, createdAt: -1 });
+vibeSchema.index({ status: 1, isVisibleToDemo: 1, isActive: 1, createdAt: -1 });
 vibeSchema.index({ author: 1, status: 1, isActive: 1, createdAt: -1 });
 vibeSchema.index({ tags: 1, status: 1, isActive: 1 });
 

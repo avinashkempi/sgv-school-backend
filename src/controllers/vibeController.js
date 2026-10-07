@@ -36,21 +36,38 @@ exports.listVibes = async (req, res) => {
     const page = Math.max(parseInt(req.query.page) || 1, 1);
     const limit = Math.min(Math.max(parseInt(req.query.limit) || 15, 1), 50);
     const skip = (page - 1) * limit;
-    const { category, tag, search } = req.query;
+    const { category, tag, search, demo } = req.query;
 
     const query = {
       status: 'approved',
       isActive: true
     };
 
+    if (demo === 'true') {
+      query.$or = [
+        { isVisibleToDemo: true },
+        { category: 'achievement' }
+      ];
+    }
+
     if (category && category !== 'all') {
-      if (category === 'official') {
-        query.$or = [
-          { category: 'official' },
-          { postAs: 'school', category: { $in: [null, undefined, '', 'official'] } }
+      const categoryFilter = category === 'official'
+        ? {
+            $or: [
+              { category: 'official' },
+              { postAs: 'school', category: { $in: [null, undefined, '', 'official'] } }
+            ]
+          }
+        : { category };
+
+      if (query.$or) {
+        query.$and = [
+          { $or: query.$or },
+          categoryFilter
         ];
+        delete query.$or;
       } else {
-        query.category = category;
+        Object.assign(query, categoryFilter);
       }
     }
 
@@ -180,7 +197,7 @@ exports.getVibe = async (req, res) => {
  */
 exports.createVibe = async (req, res) => {
   try {
-    const { caption, category = 'general', images, postAs = 'self', tags = [], location, isSpotlight = false } = req.body;
+    const { caption, category = 'general', images, postAs = 'self', tags = [], location, isSpotlight = false, isVisibleToDemo = false } = req.body;
     const user = req.user;
 
     if (!images || !Array.isArray(images) || images.length === 0) {
@@ -267,6 +284,7 @@ exports.createVibe = async (req, res) => {
       tags: extractedTags,
       location: location ? location.trim() : '',
       isSpotlight: isAdmin ? Boolean(isSpotlight) : false,
+      isVisibleToDemo: isAdmin ? Boolean(isVisibleToDemo) : false,
       reviewedBy: isAdmin ? user.userId : undefined,
       reviewedAt: isAdmin ? new Date() : undefined
     });
@@ -330,7 +348,7 @@ exports.updateVibe = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid vibe ID' });
     }
 
-    const { caption, category, images, postAs, tags, location, isSpotlight } = req.body;
+    const { caption, category, images, postAs, tags, location, isSpotlight, isVisibleToDemo } = req.body;
     const vibe = await Vibe.findOne({ _id: req.params.id, isActive: true });
 
     if (!vibe) {
@@ -371,6 +389,9 @@ exports.updateVibe = async (req, res) => {
       }
       if (isSpotlight !== undefined) {
         vibe.isSpotlight = Boolean(isSpotlight);
+      }
+      if (isVisibleToDemo !== undefined) {
+        vibe.isVisibleToDemo = Boolean(isVisibleToDemo);
       }
     } else {
       // Non-admin cannot post as official or change spotlight
@@ -1320,6 +1341,10 @@ exports.reviewVibe = async (req, res) => {
       vibe.rejectionReason = undefined;
     }
 
+    if (req.body.isVisibleToDemo !== undefined) {
+      vibe.isVisibleToDemo = Boolean(req.body.isVisibleToDemo);
+    }
+
     await vibe.save();
     await vibe.populate({
       path: 'reviewedBy',
@@ -1559,6 +1584,35 @@ exports.toggleSpotlightVibe = async (req, res) => {
 };
 
 /**
+ * PATCH /api/vibes/admin/:id/demo-visibility
+ * Toggle visibility for non-logged-in demo users. Admin / Super Admin only.
+ */
+exports.toggleDemoVisibilityVibe = async (req, res) => {
+  try {
+    if (!isValidObjectId(req.params.id)) {
+      return res.status(400).json({ success: false, message: 'Invalid vibe ID' });
+    }
+
+    const vibe = await Vibe.findOne({ _id: req.params.id, isActive: true });
+    if (!vibe) {
+      return res.status(404).json({ success: false, message: 'Vibe not found' });
+    }
+
+    vibe.isVisibleToDemo = !vibe.isVisibleToDemo;
+    await vibe.save();
+
+    res.status(200).json({
+      success: true,
+      data: { isVisibleToDemo: vibe.isVisibleToDemo },
+      message: vibe.isVisibleToDemo ? 'Vibe is now visible to demo users' : 'Vibe hidden from demo users'
+    });
+  } catch (error) {
+    logger.error('Error toggling demo visibility:', error);
+    res.status(500).json({ success: false, message: 'Server error while toggling demo visibility' });
+  }
+};
+
+/**
  * GET /api/vibes/highlights
  * Returns grouped highlights for the Home Page Stories Tray:
  * - Official announcements
@@ -1567,13 +1621,40 @@ exports.toggleSpotlightVibe = async (req, res) => {
  */
 exports.getVibeHighlights = async (req, res) => {
   try {
+    const isDemo = req.query.demo === 'true';
+
+    const officialQuery = {
+      status: 'approved',
+      isActive: true,
+      $or: [{ postAs: 'school' }, { category: 'official' }]
+    };
+    if (isDemo) {
+      officialQuery.$and = [
+        { $or: [{ postAs: 'school' }, { category: 'official' }] },
+        { $or: [{ isVisibleToDemo: true }, { category: 'achievement' }] }
+      ];
+      delete officialQuery.$or;
+    }
+
+    const achievementQuery = {
+      status: 'approved',
+      isActive: true,
+      category: 'achievement'
+    };
+
+    const recentQuery = {
+      status: 'approved',
+      isActive: true,
+      postAs: 'self',
+      category: { $ne: 'official' }
+    };
+    if (isDemo) {
+      recentQuery.isVisibleToDemo = true;
+    }
+
     const [officialVibes, achievementVibes, recentCampusVibes] = await Promise.all([
       // Official / School broadcasts
-      Vibe.find({
-        status: 'approved',
-        isActive: true,
-        $or: [{ postAs: 'school' }, { category: 'official' }]
-      })
+      Vibe.find(officialQuery)
         .sort({ isSpotlight: -1, isPinned: -1, createdAt: -1 })
         .limit(5)
         .populate({
@@ -1584,11 +1665,7 @@ exports.getVibeHighlights = async (req, res) => {
         .lean(),
 
       // Achievements
-      Vibe.find({
-        status: 'approved',
-        isActive: true,
-        category: 'achievement'
-      })
+      Vibe.find(achievementQuery)
         .sort({ isSpotlight: -1, isPinned: -1, createdAt: -1 })
         .limit(5)
         .populate({
@@ -1599,12 +1676,7 @@ exports.getVibeHighlights = async (req, res) => {
         .lean(),
 
       // Recent campus vibes from students & teachers (excluding official announcements to prevent duplication)
-      Vibe.find({
-        status: 'approved',
-        isActive: true,
-        postAs: 'self',
-        category: { $ne: 'official' }
-      })
+      Vibe.find(recentQuery)
         .sort({ createdAt: -1 })
         .limit(15)
         .populate({
@@ -1828,12 +1900,19 @@ exports.getSpotlightVibe = async (req, res) => {
       populate: { path: 'currentClass', select: 'label name section' }
     };
 
-    // Strictly fetch vibe explicitly chosen by Admin for spotlight (no automatic fallback leaks)
-    const spotlight = await Vibe.findOne({
+    const isDemo = req.query.demo === 'true';
+
+    const query = {
       status: 'approved',
       isActive: true,
       isSpotlight: true
-    })
+    };
+    if (isDemo) {
+      query.$or = [{ isVisibleToDemo: true }, { category: 'achievement' }];
+    }
+
+    // Strictly fetch vibe explicitly chosen by Admin for spotlight (no automatic fallback leaks)
+    const spotlight = await Vibe.findOne(query)
       .sort({ updatedAt: -1, createdAt: -1 })
       .populate(populateAuthorObj)
       .lean();

@@ -25,6 +25,7 @@ const {
   batchReviewVibes,
   togglePinVibe,
   toggleSpotlightVibe,
+  toggleDemoVisibilityVibe,
   getVibeHighlights,
   getSpotlightVibe,
   getUserVibes,
@@ -68,6 +69,11 @@ router.route('/admin/:id/spotlight')
   .patch(authenticateToken, requireAdmin, toggleSpotlightVibe)
   .post(authenticateToken, requireAdmin, toggleSpotlightVibe)
   .put(authenticateToken, requireAdmin, toggleSpotlightVibe);
+
+router.route('/admin/:id/demo-visibility')
+  .patch(authenticateToken, requireAdmin, toggleDemoVisibilityVibe)
+  .post(authenticateToken, requireAdmin, toggleDemoVisibilityVibe)
+  .put(authenticateToken, requireAdmin, toggleDemoVisibilityVibe);
 
 // ── User Specific Endpoints ──
 router.get('/user/my-vibes', authenticateToken, getMyVibes);
