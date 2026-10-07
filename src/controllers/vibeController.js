@@ -53,11 +53,11 @@ exports.listVibes = async (req, res) => {
     if (category && category !== 'all') {
       const categoryFilter = category === 'official'
         ? {
-            $or: [
-              { category: 'official' },
-              { postAs: 'school', category: { $in: [null, undefined, '', 'official'] } }
-            ]
-          }
+          $or: [
+            { category: 'official' },
+            { postAs: 'school', category: { $in: [null, undefined, '', 'official'] } }
+          ]
+        }
         : { category };
 
       if (query.$or) {
@@ -158,6 +158,10 @@ exports.getVibe = async (req, res) => {
 
     if (!vibe) {
       return res.status(404).json({ success: false, message: 'Vibe not found' });
+    }
+
+    if (req.query.demo === 'true' && !vibe.isVisibleToDemo) {
+      return res.status(404).json({ success: false, message: 'Vibe not visible to demo users' });
     }
 
     const currentUserId = req.user?.userId;
@@ -312,13 +316,13 @@ exports.createVibe = async (req, res) => {
             targetRole: 'admin',
             actionType: 'navigate',
             actionData: '/admin/vibe-approvals'
-          }).catch(() => {});
+          }).catch(() => { });
 
           await sendTargetedNotification('admin', null, {
             title,
             message,
             type: 'General'
-          }).catch(() => {});
+          }).catch(() => { });
         } catch (notifErr) {
           logger.error('[Create Vibe] Admin notification error:', notifErr);
         }
@@ -494,13 +498,13 @@ exports.updateVibe = async (req, res) => {
             targetRole: 'admin',
             actionType: 'navigate',
             actionData: '/admin/vibe-approvals'
-          }).catch(() => {});
+          }).catch(() => { });
 
           await sendTargetedNotification('admin', null, {
             title,
             message,
             type: 'General'
-          }).catch(() => {});
+          }).catch(() => { });
         } catch (notifErr) {
           logger.error('[Update Vibe] Admin notification error:', notifErr);
         }
@@ -555,7 +559,7 @@ exports.deleteVibe = async (req, res) => {
       VibeLike.deleteMany({ vibe: vibe._id }),
       VibeView.deleteMany({ vibe: vibe._id }),
       VibeComment.updateMany({ vibe: vibe._id }, { isActive: false })
-    ]).catch(() => {});
+    ]).catch(() => { });
 
     res.status(200).json({ success: true, message: 'Vibe deleted successfully' });
   } catch (error) {
@@ -631,13 +635,13 @@ exports.toggleLike = async (req, res) => {
                 recipient: vibe.author,
                 actionType: 'navigate',
                 actionData: '/vibes'
-              }).catch(() => {});
+              }).catch(() => { });
 
               await sendTargetedNotification('user', vibe.author, {
                 title,
                 message,
                 type: 'General'
-              }).catch(() => {});
+              }).catch(() => { });
             } catch (notifErr) {
               logger.error('[Vibe Like] Notification error:', notifErr);
             }
@@ -825,13 +829,13 @@ exports.addVibeComment = async (req, res) => {
             recipient: vibe.author,
             actionType: 'navigate',
             actionData: '/vibes'
-          }).catch(() => {});
+          }).catch(() => { });
 
           await sendTargetedNotification('user', vibe.author, {
             title,
             message,
             type: 'General'
-          }).catch(() => {});
+          }).catch(() => { });
         } catch (notifErr) {
           logger.error('[Vibe Comment] Notification error:', notifErr);
         }
@@ -1359,13 +1363,13 @@ exports.reviewVibe = async (req, res) => {
           const title = action === 'approve'
             ? '✨ Vibe Approved!'
             : previousStatus === 'approved'
-            ? '⚠️ Vibe Removed from Feed'
-            : 'Vibe Submission Update';
+              ? '⚠️ Vibe Removed from Feed'
+              : 'Vibe Submission Update';
           const message = action === 'approve'
             ? 'Your campus vibe has been approved and is now live on SGV Campus Feed!'
             : previousStatus === 'approved'
-            ? `Your vibe was taken down after moderation: ${vibe.rejectionReason}`
-            : `Your vibe submission was not approved: ${vibe.rejectionReason}`;
+              ? `Your vibe was taken down after moderation: ${vibe.rejectionReason}`
+              : `Your vibe submission was not approved: ${vibe.rejectionReason}`;
 
           await Notification.create({
             title,
@@ -1375,13 +1379,13 @@ exports.reviewVibe = async (req, res) => {
             recipient: authorId,
             actionType: 'navigate',
             actionData: '/vibes'
-          }).catch(() => {});
+          }).catch(() => { });
 
           await sendTargetedNotification('user', authorId, {
             title,
             message,
             type: 'General'
-          }).catch(() => {});
+          }).catch(() => { });
         } catch (notifErr) {
           logger.error('[Vibe Review] Notification error:', notifErr);
         }
@@ -1397,8 +1401,8 @@ exports.reviewVibe = async (req, res) => {
       successMessage = previousStatus === 'approved'
         ? 'Vibe rejected and taken down from live feed.'
         : previousStatus === 'rejected'
-        ? 'Rejection feedback updated.'
-        : 'Vibe rejected.';
+          ? 'Rejection feedback updated.'
+          : 'Vibe rejected.';
     } else if (action === 'pending') {
       successMessage = previousStatus === 'approved'
         ? 'Vibe unpublished and restored to pending review queue.'
@@ -1480,13 +1484,13 @@ exports.batchReviewVibes = async (req, res) => {
             const title = action === 'approve'
               ? '✨ Vibe Approved!'
               : isApprovedTakedown
-              ? '⚠️ Vibe Removed from Feed'
-              : 'Vibe Submission Update';
+                ? '⚠️ Vibe Removed from Feed'
+                : 'Vibe Submission Update';
             const message = action === 'approve'
               ? 'Your campus vibe has been approved and is now live on SGV Campus Feed!'
               : isApprovedTakedown
-              ? `Your vibe was taken down after moderation: ${finalReason}`
-              : `Your vibe submission was not approved: ${finalReason}`;
+                ? `Your vibe was taken down after moderation: ${finalReason}`
+                : `Your vibe submission was not approved: ${finalReason}`;
 
             await Notification.create({
               title,
@@ -1496,13 +1500,13 @@ exports.batchReviewVibes = async (req, res) => {
               recipient: v.author,
               actionType: 'navigate',
               actionData: '/vibes'
-            }).catch(() => {});
+            }).catch(() => { });
 
             await sendTargetedNotification('user', v.author, {
               title,
               message,
               type: 'General'
-            }).catch(() => {});
+            }).catch(() => { });
           }
         } catch (notifErr) {
           logger.error('[Batch Vibe Review] Notification error:', notifErr);
@@ -1641,6 +1645,9 @@ exports.getVibeHighlights = async (req, res) => {
       isActive: true,
       category: 'achievement'
     };
+    if (isDemo) {
+      achievementQuery.isVisibleToDemo = true;
+    }
 
     const recentQuery = {
       status: 'approved',
