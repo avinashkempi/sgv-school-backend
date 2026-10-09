@@ -46,7 +46,9 @@ const vibeSchema = new mongoose.Schema({
     },
     aspectRatio: {
       type: Number,
-      default: 1 // width / height (e.g. 1.0 for square, 0.8 for 4:5, 1.77 for 16:9)
+      default: function () {
+        return this.type === 'video' ? 1.778 : 1;
+      }
     }
   }],
   author: {
