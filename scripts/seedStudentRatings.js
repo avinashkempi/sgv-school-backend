@@ -1,6 +1,5 @@
 const mongoose = require('mongoose');
 const User = require('../src/models/User');
-const Class = require('../src/models/Class');
 const Subject = require('../src/models/Subject');
 const AcademicYear = require('../src/models/AcademicYear');
 const StudentRating = require('../src/models/StudentRating');
