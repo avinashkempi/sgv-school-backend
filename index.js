@@ -52,8 +52,20 @@ app.use(cors(corsOptions));
 // Explicit preflight handling for Express 5 regex routing
 app.options(/.*/, cors(corsOptions));
 
-// Parse JSON with a 5MB body size limit to carefully reduce large payloads safely
+// Parse JSON and URL-encoded bodies with a 5MB limit
 app.use(express.json({ limit: '5mb' }));
+app.use(express.urlencoded({ extended: true, limit: '5mb' }));
+
+// Graceful fallback for text/plain JSON payloads
+app.use(express.text({ type: 'text/plain', limit: '5mb' }));
+app.use((req, res, next) => {
+  if (typeof req.body === 'string' && req.body.trim().startsWith('{')) {
+    try {
+      req.body = JSON.parse(req.body);
+    } catch (_) {}
+  }
+  next();
+});
 
 // Rate limiting on auth routes to prevent brute-force login attacks
 const authLimiter = rateLimit({

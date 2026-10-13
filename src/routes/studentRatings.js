@@ -289,7 +289,11 @@ router.post('/bulk', [auth, yearContext, requireOpenYear, ...bulkRatingValidatio
             });
         }
 
-        const { subjectId, month, year, ratings } = req.body;
+        let body = req.body;
+        if (typeof body === 'string') {
+            try { body = JSON.parse(body); } catch (_) {}
+        }
+        const { subjectId, month, year, ratings } = body || {};
         const userId = req.user.userId;
         const userRole = req.user.role;
 
@@ -769,7 +773,11 @@ router.get('/admin/subjects-config', [auth, yearContext, requireAdmin], async (r
 // @access  Private (Admin)
 router.patch('/admin/toggle-subject', [auth, yearContext, requireAdmin], async (req, res) => {
     try {
-        const { subjectName, ratingEnabled } = req.body;
+        let body = req.body;
+        if (typeof body === 'string') {
+            try { body = JSON.parse(body); } catch (_) {}
+        }
+        const { subjectName, ratingEnabled } = body || {};
         if (!subjectName || typeof subjectName !== 'string') {
             return res.status(400).json({ success: false, message: 'subjectName string is required' });
         }
@@ -805,7 +813,11 @@ router.patch('/admin/toggle-subject', [auth, yearContext, requireAdmin], async (
 router.patch('/admin/subject/:subjectId/toggle-rating', [auth, yearContext, requireAdmin], async (req, res) => {
     try {
         const { subjectId } = req.params;
-        const { ratingEnabled } = req.body;
+        let body = req.body;
+        if (typeof body === 'string') {
+            try { body = JSON.parse(body); } catch (_) {}
+        }
+        const { ratingEnabled } = body || {};
 
         const subject = await Subject.findById(subjectId);
         if (!subject) {
@@ -845,7 +857,11 @@ router.patch('/admin/subject/:subjectId/toggle-rating', [auth, yearContext, requ
 // @access  Private (Admin)
 router.post('/admin/bulk-configure-ratings', [auth, yearContext, requireAdmin], async (req, res) => {
     try {
-        const { subjectIds, subjectNames, all, ratingEnabled } = req.body;
+        let body = req.body;
+        if (typeof body === 'string') {
+            try { body = JSON.parse(body); } catch (_) {}
+        }
+        const { subjectIds, subjectNames, all, ratingEnabled } = body || {};
         const isEnabled = Boolean(ratingEnabled);
         let filter = { academicYear: req.academicYearContext };
 
