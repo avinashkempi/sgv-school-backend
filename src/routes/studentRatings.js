@@ -651,45 +651,112 @@ router.get('/my-ratings', [auth, yearContext, checkRole(['student'])], async (re
 //  ADMIN SUBJECT RATING CONFIGURATION ENDPOINTS
 // ──────────────────────────────────────────────
 
+// ──────────────────────────────────────────────
+//  ADMIN SUBJECT RATING CONFIGURATION ENDPOINTS (SCHOOL-WIDE SUBJECT-WISE)
+// ──────────────────────────────────────────────
+
 // @route   GET /api/student-ratings/admin/subjects-config
-// @desc    Get all subjects grouped by class with ratingEnabled status for admin configuration
+// @desc    Get all distinct subjects school-wide with ratingEnabled status, classes, and teachers
 // @access  Private (Admin)
 router.get('/admin/subjects-config', [auth, yearContext, requireAdmin], async (req, res) => {
     try {
         const subjects = await Subject.find({ academicYear: req.academicYearContext })
             .populate('class', 'value label name section branch')
             .populate('teachers', 'name email profilePhoto designation')
-            .sort({ 'class.value': 1, 'class.section': 1, name: 1 })
+            .sort({ name: 1 })
             .lean();
 
-        // Group by class
+        // Group school-wide by normalized subject name
+        const subjectMap = {};
         const classMap = {};
+
         subjects.forEach(sub => {
-            if (!sub.class) return;
-            const cid = sub.class._id.toString();
-            if (!classMap[cid]) {
-                classMap[cid] = {
-                    class: sub.class,
-                    totalSubjects: 0,
-                    ratableSubjects: 0,
-                    subjects: []
+            const rawName = (sub.name || '').trim();
+            if (!rawName) return;
+            const key = rawName.toLowerCase();
+
+            if (!subjectMap[key]) {
+                subjectMap[key] = {
+                    name: rawName,
+                    ratingEnabled: sub.ratingEnabled !== false,
+                    totalClasses: 0,
+                    classes: [],
+                    teachers: [],
+                    subjectIds: []
                 };
             }
-            classMap[cid].totalSubjects += 1;
-            const isRatable = sub.ratingEnabled !== false;
-            if (isRatable) classMap[cid].ratableSubjects += 1;
 
-            classMap[cid].subjects.push({
-                _id: sub._id,
-                name: sub.name,
-                ratingEnabled: isRatable,
-                teachers: sub.teachers || []
-            });
+            subjectMap[key].subjectIds.push(sub._id);
+
+            // If any instance in this academic year has rating disabled, reflect as disabled
+            if (sub.ratingEnabled === false) {
+                subjectMap[key].ratingEnabled = false;
+            }
+
+            if (sub.class) {
+                subjectMap[key].totalClasses += 1;
+                const cName = sub.class.name || sub.class.label || sub.class.value || 'Class';
+                const cSection = sub.class.section ? ` - ${sub.class.section}` : '';
+                const cLabel = `${cName}${cSection}`;
+                subjectMap[key].classes.push({
+                    _id: sub.class._id,
+                    name: sub.class.name,
+                    label: cLabel,
+                    value: sub.class.value,
+                    section: sub.class.section,
+                    branch: sub.class.branch
+                });
+
+                // Also maintain legacy classMap for backward compatibility
+                const cid = sub.class._id.toString();
+                if (!classMap[cid]) {
+                    classMap[cid] = {
+                        class: sub.class,
+                        totalSubjects: 0,
+                        ratableSubjects: 0,
+                        subjects: []
+                    };
+                }
+                classMap[cid].totalSubjects += 1;
+                if (sub.ratingEnabled !== false) classMap[cid].ratableSubjects += 1;
+                classMap[cid].subjects.push({
+                    _id: sub._id,
+                    name: sub.name,
+                    ratingEnabled: sub.ratingEnabled !== false,
+                    teachers: sub.teachers || []
+                });
+            }
+
+            if (Array.isArray(sub.teachers)) {
+                sub.teachers.forEach(t => {
+                    if (t && t._id) {
+                        const tId = t._id.toString();
+                        if (!subjectMap[key].teachers.some(existing => existing._id?.toString() === tId)) {
+                            subjectMap[key].teachers.push({
+                                _id: t._id,
+                                name: t.name,
+                                email: t.email,
+                                profilePhoto: t.profilePhoto,
+                                designation: t.designation || 'Teacher'
+                            });
+                        }
+                    }
+                });
+            }
         });
+
+        const subjectList = Object.values(subjectMap).sort((a, b) => a.name.localeCompare(b.name));
+        const totalSubjects = subjectList.length;
+        const enabledCount = subjectList.filter(s => s.ratingEnabled !== false).length;
+        const disabledCount = totalSubjects - enabledCount;
 
         res.json({
             success: true,
-            classes: Object.values(classMap)
+            subjects: subjectList,
+            totalSubjects,
+            enabledCount,
+            disabledCount,
+            classes: Object.values(classMap) // preserved for any legacy consumers
         });
     } catch (err) {
         console.error('Error fetching subjects config:', err);
@@ -697,8 +764,43 @@ router.get('/admin/subjects-config', [auth, yearContext, requireAdmin], async (r
     }
 });
 
+// @route   PATCH /api/student-ratings/admin/toggle-subject
+// @desc    Toggle ratingEnabled for a subject across ALL classes school-wide
+// @access  Private (Admin)
+router.patch('/admin/toggle-subject', [auth, yearContext, requireAdmin], async (req, res) => {
+    try {
+        const { subjectName, ratingEnabled } = req.body;
+        if (!subjectName || typeof subjectName !== 'string') {
+            return res.status(400).json({ success: false, message: 'subjectName string is required' });
+        }
+
+        const trimmedName = subjectName.trim();
+        const isEnabled = ratingEnabled !== undefined ? Boolean(ratingEnabled) : true;
+        const escaped = trimmedName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+        const updateResult = await Subject.updateMany(
+            {
+                name: { $regex: new RegExp(`^${escaped}$`, 'i') },
+                academicYear: req.academicYearContext
+            },
+            { $set: { ratingEnabled: isEnabled } }
+        );
+
+        res.json({
+            success: true,
+            message: `Student ratings ${isEnabled ? 'enabled' : 'disabled'} for "${trimmedName}" across all ${updateResult.modifiedCount} class(es)`,
+            subjectName: trimmedName,
+            ratingEnabled: isEnabled,
+            modifiedCount: updateResult.modifiedCount
+        });
+    } catch (err) {
+        console.error('Error toggling subject rating school-wide:', err);
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
+});
+
 // @route   PATCH /api/student-ratings/admin/subject/:subjectId/toggle-rating
-// @desc    Toggle ratingEnabled for a subject
+// @desc    Toggle ratingEnabled for a subject — updates ALL classes with that subject name
 // @access  Private (Admin)
 router.patch('/admin/subject/:subjectId/toggle-rating', [auth, yearContext, requireAdmin], async (req, res) => {
     try {
@@ -710,17 +812,26 @@ router.patch('/admin/subject/:subjectId/toggle-rating', [auth, yearContext, requ
             return res.status(404).json({ success: false, message: 'Subject not found' });
         }
 
-        subject.ratingEnabled = ratingEnabled !== undefined ? Boolean(ratingEnabled) : !subject.ratingEnabled;
-        await subject.save();
+        const targetStatus = ratingEnabled !== undefined ? Boolean(ratingEnabled) : !subject.ratingEnabled;
+        const escaped = subject.name.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+        // Update all classes offering this subject name in current academic year
+        const updateResult = await Subject.updateMany(
+            {
+                name: { $regex: new RegExp(`^${escaped}$`, 'i') },
+                academicYear: req.academicYearContext
+            },
+            { $set: { ratingEnabled: targetStatus } }
+        );
 
         res.json({
             success: true,
-            message: `Student ratings ${subject.ratingEnabled ? 'enabled' : 'disabled'} for ${subject.name}`,
+            message: `Student ratings ${targetStatus ? 'enabled' : 'disabled'} for "${subject.name}" across all ${updateResult.modifiedCount} class(es)`,
             subject: {
                 _id: subject._id,
                 name: subject.name,
-                class: subject.class,
-                ratingEnabled: subject.ratingEnabled
+                ratingEnabled: targetStatus,
+                modifiedCount: updateResult.modifiedCount
             }
         });
     } catch (err) {
@@ -730,25 +841,42 @@ router.patch('/admin/subject/:subjectId/toggle-rating', [auth, yearContext, requ
 });
 
 // @route   POST /api/student-ratings/admin/bulk-configure-ratings
-// @desc    Bulk configure ratingEnabled for multiple subjects
+// @desc    Bulk configure ratingEnabled school-wide (all subjects or list of subject names/ids)
 // @access  Private (Admin)
 router.post('/admin/bulk-configure-ratings', [auth, yearContext, requireAdmin], async (req, res) => {
     try {
-        const { subjectIds, ratingEnabled } = req.body;
-        if (!Array.isArray(subjectIds) || subjectIds.length === 0) {
-            return res.status(400).json({ success: false, message: 'subjectIds array is required' });
+        const { subjectIds, subjectNames, all, ratingEnabled } = req.body;
+        const isEnabled = Boolean(ratingEnabled);
+        let filter = { academicYear: req.academicYearContext };
+
+        if (all) {
+            // update all subjects school-wide
+        } else if (Array.isArray(subjectNames) && subjectNames.length > 0) {
+            const regexes = subjectNames.map(n => {
+                const escaped = n.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                return new RegExp(`^${escaped}$`, 'i');
+            });
+            filter.name = { $in: regexes };
+        } else if (Array.isArray(subjectIds) && subjectIds.length > 0) {
+            // Find all subject names for these IDs, then update by names to affect all classes
+            const sampleSubjects = await Subject.find({ _id: { $in: subjectIds } }).select('name').lean();
+            const names = [...new Set(sampleSubjects.map(s => s.name.trim()))];
+            const regexes = names.map(n => {
+                const escaped = n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                return new RegExp(`^${escaped}$`, 'i');
+            });
+            filter.name = { $in: regexes };
+        } else {
+            return res.status(400).json({ success: false, message: 'Must specify all: true, subjectNames, or subjectIds' });
         }
 
-        const isEnabled = Boolean(ratingEnabled);
-        await Subject.updateMany(
-            { _id: { $in: subjectIds }, academicYear: req.academicYearContext },
-            { $set: { ratingEnabled: isEnabled } }
-        );
+        const updateResult = await Subject.updateMany(filter, { $set: { ratingEnabled: isEnabled } });
 
         res.json({
             success: true,
-            message: `Updated ratings configuration for ${subjectIds.length} subject(s)`,
-            ratingEnabled: isEnabled
+            message: `Updated ratings configuration for ${updateResult.modifiedCount} subject instances`,
+            ratingEnabled: isEnabled,
+            modifiedCount: updateResult.modifiedCount
         });
     } catch (err) {
         console.error('Error bulk configuring subject ratings:', err);
