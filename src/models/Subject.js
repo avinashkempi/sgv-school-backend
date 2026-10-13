@@ -24,6 +24,10 @@ const subjectSchema = new mongoose.Schema({
         ref: 'AcademicYear',
         required: true
     },
+    ratingEnabled: {
+        type: Boolean,
+        default: true
+    },
     createdAt: {
         type: Date,
         default: Date.now

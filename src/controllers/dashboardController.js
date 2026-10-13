@@ -828,7 +828,8 @@ exports.getStudentStats = async (req, res) => {
             studentFeeRecord,
             appPayments,
             recentMarks,
-            nextExam
+            nextExam,
+            latestRatingRecords
         ] = await Promise.all([
             // Attendance for full academic year
             Attendance.countDocuments({
@@ -918,7 +919,15 @@ exports.getStudentStats = async (req, res) => {
                     .select('date examDate name standardizedType subject')
                     .populate('subject', 'name')
                     .lean();
-            })()
+            })(),
+            // Latest holistic ratings for student
+            require('../models/StudentRating').find({
+                student: studentId,
+                ...(activeYear ? { academicYear: activeYear._id } : {})
+            })
+                .populate('subject', 'name ratingEnabled')
+                .sort({ year: -1, month: -1 })
+                .lean()
         ]);
 
         // 1. Attendance % (academic year)
@@ -952,6 +961,38 @@ exports.getStudentStats = async (req, res) => {
             ? (nextExam.subject?.name || nextExam.name || nextExam.standardizedType || null)
             : null;
 
+        // 5. Holistic Student Rating Summary (Latest Available Month)
+        let latestRatingSummary = null;
+        if (latestRatingRecords && latestRatingRecords.length > 0) {
+            const validRatings = latestRatingRecords.filter(r => r.subject && r.subject.ratingEnabled !== false);
+            if (validRatings.length > 0) {
+                const topMonth = validRatings[0].month;
+                const topYear = validRatings[0].year;
+                const topRatings = validRatings.filter(r => r.month === topMonth && r.year === topYear);
+                const avg = parseFloat((topRatings.reduce((s, r) => s + r.averageScore, 0) / topRatings.length).toFixed(1));
+
+                let label = 'Meets Expectation';
+                let variant = 'primary';
+                if (avg >= 4.8) { label = 'Excellent'; variant = 'success'; }
+                else if (avg >= 4.0) { label = 'Good'; variant = 'success'; }
+                else if (avg < 2.0) { label = 'Needs Significant Imp.'; variant = 'error'; }
+                else if (avg < 3.0) { label = 'Needs Improvement'; variant = 'warning'; }
+
+                latestRatingSummary = {
+                    averageScore: avg,
+                    month: topMonth,
+                    year: topYear,
+                    label,
+                    variant,
+                    ratedSubjectCount: topRatings.length,
+                    classEngagement: parseFloat((topRatings.reduce((s, r) => s + r.classEngagement, 0) / topRatings.length).toFixed(1)),
+                    homeworkClasswork: parseFloat((topRatings.reduce((s, r) => s + r.homeworkClasswork, 0) / topRatings.length).toFixed(1)),
+                    behaviourSocial: parseFloat((topRatings.reduce((s, r) => s + r.behaviourSocial, 0) / topRatings.length).toFixed(1)),
+                    englishComm: parseFloat((topRatings.reduce((s, r) => s + r.englishComm, 0) / topRatings.length).toFixed(1))
+                };
+            }
+        }
+
         const responseData = {
             overview: {
                 attendancePercentage: parseFloat(attendancePercentage),
@@ -962,7 +1003,8 @@ exports.getStudentStats = async (req, res) => {
                 concession: studentFeeRecord?.concession || 0,
                 totalPaid: studentFeeRecord?.totalPaid || 0,
                 nextExamDate,
-                nextExamName
+                nextExamName,
+                rating: latestRatingSummary
             },
             charts: {
                 performanceTrend
