@@ -6,6 +6,7 @@ const AcademicYear = require('../models/AcademicYear');
 const FeeStructure = require('../models/FeeStructure');
 const { wipeNonAdminData } = require('./wipeService');
 const logger = require('../utils/logger');
+const { escapeRegex } = require('../utils/stringUtils');
 
 // Utility to parse currency string "₹11,900" -> 11900
 const parseCurrency = (str) => {
@@ -110,8 +111,8 @@ const processImport = async (csvData, options = { wipe: false }) => {
         if (classMap.has(key)) continue;
 
         const classValue = className.toLowerCase().replace(/\s+/g, '_');
-        const escapedName = className.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
-        const escapedValue = classValue.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+        const escapedName = escapeRegex(className);
+        const escapedValue = escapeRegex(classValue);
 
         let existingClass = await Class.findOne({
             branch,

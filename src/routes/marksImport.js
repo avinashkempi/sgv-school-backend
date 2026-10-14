@@ -6,6 +6,7 @@ const User = require('../models/User');
 const { authenticateToken: auth } = require('../middleware/auth');
 const { yearContext, requireOpenYear } = require('../middleware/yearContext');
 const { hasObjectIdMatch } = require('../middleware/accessControl');
+const { escapeRegex } = require('../utils/stringUtils');
 
 /**
  * CSV Import Route
@@ -56,7 +57,7 @@ router.post('/import/csv', [auth, yearContext, requireOpenYear], async (req, res
                     student = await User.findOne({ email: row.email, role: 'student' });
                 } else if (row.name) {
                     student = await User.findOne({
-                        name: { $regex: new RegExp(row.name, 'i') },
+                        name: { $regex: new RegExp(escapeRegex(row.name), 'i') },
                         role: 'student',
                         currentClass: exam.class._id
                     });
