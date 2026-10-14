@@ -1,6 +1,7 @@
 const { validationResult } = require('express-validator');
 const User = require('../models/User');
 const { invalidateUserCache } = require('../middleware/auth');
+const { escapeRegex } = require('../utils/stringUtils');
 
 const MAX_PAGE_LIMIT = 100;
 const ALLOWED_SORT_FIELDS = new Set(['createdAt', 'name', 'role', 'phone', 'email']);
@@ -11,8 +12,6 @@ const parsePagination = (query) => {
   const limit = Math.min(Math.max(requestedLimit, 1), MAX_PAGE_LIMIT);
   return { page, limit, skip: (page - 1) * limit };
 };
-
-const escapeRegex = (value) => value.toString().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const ensureCanAssignRole = async (requestUser, targetRole, existingUser = null) => {
   if (targetRole === 'super admin' && requestUser.role !== 'super admin') {
@@ -531,10 +530,10 @@ const revertStudentPromotion = async (req, res) => {
     // Find equivalent class in the current active year that the student is mapped to
     const query = {
       academicYear: user.academicYear,
-      name: { $regex: new RegExp(`^${oldClassName.trim()}$`, 'i') }
+      name: { $regex: new RegExp(`^${escapeRegex(oldClassName.trim())}$`, 'i') }
     };
     if (oldClassSection && oldClassSection.trim()) {
-      query.section = { $regex: new RegExp(`^${oldClassSection.trim()}$`, 'i') };
+      query.section = { $regex: new RegExp(`^${escapeRegex(oldClassSection.trim())}$`, 'i') };
     }
     if (oldClassBranch) {
       query.branch = oldClassBranch;
@@ -546,7 +545,7 @@ const revertStudentPromotion = async (req, res) => {
     if (!targetClass && oldClassName) {
       targetClass = await Class.findOne({
         academicYear: user.academicYear,
-        name: { $regex: new RegExp(`^${oldClassName.trim()}$`, 'i') }
+        name: { $regex: new RegExp(`^${escapeRegex(oldClassName.trim())}$`, 'i') }
       });
     }
 

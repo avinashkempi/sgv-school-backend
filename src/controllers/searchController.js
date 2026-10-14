@@ -6,6 +6,7 @@ const Complaint = require('../models/Complaint');
 const Event = require('../models/Event');
 const FeePayment = require('../models/FeePayment');
 const Attendance = require('../models/Attendance');
+const { escapeRegex } = require('../utils/stringUtils');
 
 // Global search across multiple entities (executed in parallel via Promise.all)
 exports.globalSearch = async (req, res) => {
@@ -16,7 +17,7 @@ exports.globalSearch = async (req, res) => {
             return res.status(400).json({ message: 'Search query must be at least 2 characters' });
         }
 
-        const searchRegex = new RegExp(q, 'i');
+        const searchRegex = new RegExp(escapeRegex(q), 'i');
         const results = {};
         const parsedLimit = parseInt(limit) || 10;
 
@@ -181,7 +182,7 @@ exports.filterStudents = async (req, res) => {
 
         // Text search
         if (search) {
-            const searchRegex = new RegExp(search, 'i');
+            const searchRegex = new RegExp(escapeRegex(search), 'i');
             query.$or = [
                 { name: searchRegex },
                 { email: searchRegex },
@@ -303,13 +304,13 @@ exports.filterExams = async (req, res) => {
 
         // Subject filter
         if (subject) {
-            const matchingSubjects = await Subject.find({ name: new RegExp(subject, 'i') }).select('_id').lean();
+            const matchingSubjects = await Subject.find({ name: new RegExp(escapeRegex(subject), 'i') }).select('_id').lean();
             query.subject = { $in: matchingSubjects.map(s => s._id) };
         }
 
         // Text search
         if (search) {
-            query.name = new RegExp(search, 'i');
+            query.name = new RegExp(escapeRegex(search), 'i');
         }
 
         // Date range filter
@@ -384,7 +385,7 @@ exports.filterComplaints = async (req, res) => {
 
         // Text search
         if (search) {
-            const searchRegex = new RegExp(search, 'i');
+            const searchRegex = new RegExp(escapeRegex(search), 'i');
             query.$or = [
                 { title: searchRegex },
                 { description: searchRegex }

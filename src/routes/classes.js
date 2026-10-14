@@ -11,6 +11,7 @@ const { authenticateToken: auth, checkRole } = require('../middleware/auth');
 const { yearContext } = require('../middleware/yearContext');
 const _notificationService = require('../services/notificationService');
 const { cacheGet, cacheSet, cacheInvalidatePattern } = require('../config/redis');
+const { escapeRegex } = require('../utils/stringUtils');
 
 // In-memory cache for classes list (5-minute TTL)
 const classesListCache = new Map();
@@ -710,7 +711,7 @@ router.get('/:id/content', auth, async (req, res) => {
         }
 
         if (search && search.trim()) {
-            const searchRegex = new RegExp(search.trim(), 'i');
+            const searchRegex = new RegExp(escapeRegex(search.trim()), 'i');
             query.$or = [
                 { title: searchRegex },
                 { description: searchRegex }

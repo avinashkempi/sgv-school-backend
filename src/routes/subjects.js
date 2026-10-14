@@ -4,6 +4,7 @@ const GlobalSubject = require('../models/GlobalSubject');
 const Subject = require('../models/Subject');
 const { authenticateToken: auth, checkRole } = require('../middleware/auth');
 const { cacheGet, cacheSet, cacheDel } = require('../config/redis');
+const { escapeRegex } = require('../utils/stringUtils');
 
 // In-memory cache for subjects (10-minute TTL)
 let cachedSubjects = null;
@@ -62,7 +63,7 @@ router.post('/', [auth, checkRole(['admin', 'super admin'])], async (req, res) =
     const { name, code, type } = req.body;
 
     try {
-        let subject = await GlobalSubject.findOne({ name: { $regex: new RegExp(`^${name}$`, 'i') } });
+        let subject = await GlobalSubject.findOne({ name: { $regex: new RegExp(`^${escapeRegex(name)}$`, 'i') } });
         if (subject) {
             return res.status(400).json({ msg: 'Subject already exists' });
         }
@@ -94,7 +95,7 @@ router.put('/:id', [auth, checkRole(['admin', 'super admin'])], async (req, res)
 
         // Check if name is taken by another subject
         if (name && name !== subject.name) {
-            const existing = await GlobalSubject.findOne({ name: { $regex: new RegExp(`^${name}$`, 'i') } });
+            const existing = await GlobalSubject.findOne({ name: { $regex: new RegExp(`^${escapeRegex(name)}$`, 'i') } });
             if (existing) {
                 return res.status(400).json({ msg: 'Subject name already exists' });
             }

@@ -8,6 +8,7 @@ const StudentRating = require('../models/StudentRating');
 const Subject = require('../models/Subject');
 const User = require('../models/User');
 const { bulkRatingValidation } = require('../validations/studentRating');
+const { escapeRegex } = require('../utils/stringUtils');
 
 const hasObjectIdMatch = (ids = [], userId) => ids.some((id) => id && id.toString() === userId);
 
@@ -784,7 +785,7 @@ router.patch('/admin/toggle-subject', [auth, yearContext, requireAdmin], async (
 
         const trimmedName = subjectName.trim();
         const isEnabled = ratingEnabled !== undefined ? Boolean(ratingEnabled) : true;
-        const escaped = trimmedName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const escaped = escapeRegex(trimmedName);
 
         const updateResult = await Subject.updateMany(
             {
@@ -825,7 +826,7 @@ router.patch('/admin/subject/:subjectId/toggle-rating', [auth, yearContext, requ
         }
 
         const targetStatus = ratingEnabled !== undefined ? Boolean(ratingEnabled) : !subject.ratingEnabled;
-        const escaped = subject.name.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const escaped = escapeRegex(subject.name.trim());
 
         // Update all classes offering this subject name in current academic year
         const updateResult = await Subject.updateMany(
@@ -869,7 +870,7 @@ router.post('/admin/bulk-configure-ratings', [auth, yearContext, requireAdmin], 
             // update all subjects school-wide
         } else if (Array.isArray(subjectNames) && subjectNames.length > 0) {
             const regexes = subjectNames.map(n => {
-                const escaped = n.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const escaped = escapeRegex(n.trim());
                 return new RegExp(`^${escaped}$`, 'i');
             });
             filter.name = { $in: regexes };
@@ -878,7 +879,7 @@ router.post('/admin/bulk-configure-ratings', [auth, yearContext, requireAdmin], 
             const sampleSubjects = await Subject.find({ _id: { $in: subjectIds } }).select('name').lean();
             const names = [...new Set(sampleSubjects.map(s => s.name.trim()))];
             const regexes = names.map(n => {
-                const escaped = n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const escaped = escapeRegex(n);
                 return new RegExp(`^${escaped}$`, 'i');
             });
             filter.name = { $in: regexes };
