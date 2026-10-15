@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const bcrypt = require('bcryptjs');
 const toTitleCase = require('../utils/titleCase');
 
 const userSchema = new mongoose.Schema({
@@ -192,7 +193,7 @@ const userSchema = new mongoose.Schema({
 });
 
 // Invalidate existing sessions when account access or password changes
-userSchema.pre('save', function (next) {
+userSchema.pre('save', async function (next) {
   const shouldRevokeSessions = !this.isNew && (
     this.isModified('password') ||
     this.isModified('role') ||
@@ -207,12 +208,27 @@ userSchema.pre('save', function (next) {
     }
   }
 
+  // Hash password before saving
+  if (this.isModified('password')) {
+    try {
+      const salt = await bcrypt.genSalt(10);
+      this.password = await bcrypt.hash(this.password, salt);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
   next();
 });
 
-// Hash password before saving disabled as per request
 // Compare password method
 userSchema.methods.comparePassword = async function (candidatePassword) {
+  // If stored password is a bcrypt hash (starts with $2a$, $2b$, or $2y$)
+  if (this.password && this.password.match(/^\$2[aby]\$/)) {
+    return bcrypt.compare(candidatePassword, this.password);
+  }
+
+  // Fallback for legacy plaintext passwords
   return candidatePassword === this.password;
 };
 
