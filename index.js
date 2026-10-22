@@ -8,6 +8,7 @@ const logger = require('./src/utils/logger');
 const requestId = require('./src/middleware/requestId');
 const requestLogger = require('./src/middleware/requestLogger');
 const errorHandler = require('./src/middleware/errorHandler');
+const forceHttps = require('./src/middleware/forceHttps');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -51,6 +52,9 @@ const corsOptions = {
 app.use(cors(corsOptions));
 // Explicit preflight handling for Express 5 regex routing
 app.options(/.*/, cors(corsOptions));
+
+// Redirect all unencrypted HTTP traffic to HTTPS
+app.use(forceHttps);
 
 // Parse JSON and URL-encoded bodies with a 5MB limit
 app.use(express.json({ limit: '5mb' }));
