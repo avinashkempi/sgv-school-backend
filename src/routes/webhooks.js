@@ -104,7 +104,7 @@ router.post('/cron/cleanup', async (req, res) => {
 // @access  Protected by CRON_SECRET
 const handleBirthdayWebhook = async (req, res) => {
     try {
-        const force = req.query.force === 'true' || req.body?.force === true;
+        const force = req.query?.force === 'true' || req.body?.force === true || req.body?.force === 'true';
         const result = await runBirthdayNotifications({ trigger: 'webhook', force });
 
         if (result.skipped) {
@@ -289,14 +289,15 @@ router.post('/cron/fees', handleFeeWebhook);
 // @access  Protected by CRON_SECRET
 router.post('/cron/fee-sync', async (req, res) => {
     try {
-        const dryRun = req.query.dryRun === 'true' || req.body.dryRun === true;
-        const force = req.query.force === 'true' || req.body.force === true;
+        const dryRun = req.query?.dryRun === 'true' || req.body?.dryRun === true || req.body?.dryRun === 'true';
+        const force = req.query?.force === 'true' || req.body?.force === true || req.body?.force === 'true';
 
         // Determine trigger source
         let trigger = 'on_demand';
-        if (req.headers['x-trigger-source'] === 'apps_script') {
+        const triggerHeader = req.get?.('x-trigger-source') || req.headers?.['x-trigger-source'];
+        if (triggerHeader === 'apps_script') {
             trigger = 'apps_script';
-        } else if (req.headers['x-trigger-source'] === 'scheduled') {
+        } else if (triggerHeader === 'scheduled') {
             trigger = 'scheduled';
         }
 
@@ -337,7 +338,7 @@ router.post('/cron/fee-sync', async (req, res) => {
 // @access  Protected by CRON_SECRET
 router.post('/cron/all-daily', async (req, res) => {
     try {
-        const force = req.query.force === 'true' || req.body?.force === true;
+        const force = req.query?.force === 'true' || req.body?.force === true || req.body?.force === 'true';
         const results = await runAllDailyJobs({ trigger: 'webhook', force });
         res.json({
             success: true,

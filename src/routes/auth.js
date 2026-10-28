@@ -1,7 +1,7 @@
 const express = require('express');
 const rateLimit = require('express-rate-limit');
 const { loginValidation, changePasswordValidation } = require('../validations/auth');
-const { login, getMe, changePassword, updateProfilePhoto } = require('../controllers/authController');
+const { login, getMe, changePassword, updateProfilePhoto, revokeAllSessions } = require('../controllers/authController');
 
 const { authenticateToken } = require('../middleware/auth');
 
@@ -21,6 +21,7 @@ const changePasswordLimiter = rateLimit({
 router.post('/login', loginValidation, login);
 router.get('/me', authenticateToken, getMe);
 router.post('/change-password', authenticateToken, changePasswordLimiter, changePasswordValidation, changePassword);
+router.post('/revoke-sessions', authenticateToken, revokeAllSessions);
 router.route('/profile-photo')
   .patch(authenticateToken, updateProfilePhoto)
   .post(authenticateToken, updateProfilePhoto)

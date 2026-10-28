@@ -124,6 +124,10 @@ const processImport = async (csvData, options = { wipe: false }) => {
         });
 
         if (!existingClass) {
+            if (options.feesOnly) {
+                logger.warn(`[FeeSync] Class "${className}" (branch: "${branch}") not found in academic year. Skipping auto-creation in fees-only mode to prevent ghost classes.`);
+                continue;
+            }
             existingClass = await Class.create({
                 name: className,
                 value: classValue,
@@ -195,7 +199,8 @@ const processImport = async (csvData, options = { wipe: false }) => {
                 if (!student) {
                     throw new Error(`Student not found with phone ${loginPhone} (Fees-Only mode skips student creation)`);
                 }
-                const feeData = buildFeeData(student._id, row, academicYear, classId, branch);
+                const resolvedClassId = classId || student.currentClass;
+                const feeData = buildFeeData(student._id, row, academicYear, resolvedClassId, branch);
                 feeBulkOps.push({
                     updateOne: {
                         filter: { student: student._id, academicYear: academicYear ? academicYear._id : null },

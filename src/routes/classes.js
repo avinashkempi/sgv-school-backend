@@ -7,6 +7,8 @@ const ClassContent = require('../models/ClassContent');
 const User = require('../models/User');
 const AcademicYear = require('../models/AcademicYear');
 const Timetable = require('../models/Timetable');
+const Exam = require('../models/Exam');
+const { logAudit } = require('../utils/auditLogger');
 const { authenticateToken: auth, checkRole } = require('../middleware/auth');
 const { yearContext } = require('../middleware/yearContext');
 const _notificationService = require('../services/notificationService');
@@ -237,15 +239,40 @@ router.post('/', [auth, checkRole(['super admin']), yearContext], async (req, re
     try {
         const trimmedName = (name || '').trim();
         const trimmedSection = (section || '').trim();
+
+        if (!trimmedName) {
+            return res.status(400).json({ success: false, message: 'Class name is required' });
+        }
+        if (trimmedName.length > 50) {
+            return res.status(400).json({ success: false, message: 'Class name cannot exceed 50 characters' });
+        }
+
+        const validBranches = ['Ugar', 'Mangasuli', 'Main'];
+        const targetBranch = validBranches.includes(branch) ? branch : 'Main';
         const classValue = trimmedName.toLowerCase().replace(/\s+/g, '_');
         const classLabel = trimmedSection ? `${trimmedName} - ${trimmedSection}` : trimmedName;
+
+        // Check if class with identical value, section, branch already exists in this year
+        const existingClass = await Class.findOne({
+            value: classValue,
+            section: trimmedSection,
+            branch: targetBranch,
+            academicYear: req.academicYearContext
+        });
+
+        if (existingClass) {
+            return res.status(409).json({
+                success: false,
+                message: `Class "${classLabel}" already exists in the ${targetBranch} branch for this academic year.`
+            });
+        }
 
         const newClass = new Class({
             name: trimmedName,
             value: classValue,
             label: classLabel,
             section: trimmedSection,
-            branch: branch || 'Main',
+            branch: targetBranch,
             classTeacher: (classTeacher && typeof classTeacher === 'string' && classTeacher.trim())
                 ? classTeacher.trim()
                 : (classTeacher && typeof classTeacher === 'object' && classTeacher._id)
@@ -256,6 +283,16 @@ router.post('/', [auth, checkRole(['super admin']), yearContext], async (req, re
 
         const savedClass = await newClass.save();
         invalidateClassesCache().catch(() => {});
+
+        // Audit Log
+        logAudit({
+            req,
+            action: 'CLASS_CREATED',
+            entityType: 'Class',
+            entityId: savedClass._id,
+            details: { name: trimmedName, section: trimmedSection, branch: targetBranch }
+        }).catch(() => {});
+
         res.json(savedClass);
     } catch (err) {
         console.error(err.message);
@@ -267,26 +304,81 @@ router.post('/', [auth, checkRole(['super admin']), yearContext], async (req, re
 // @desc    Update a class
 // @access  Super Admin
 router.put('/:id', [auth, checkRole(['super admin'])], async (req, res) => {
-    const { name, section, branch, classTeacher } = req.body;
+    const { name, section, branch, classTeacher, confirmRename } = req.body;
 
     try {
         let classData = await Class.findById(req.params.id);
-        if (!classData) return res.status(404).json({ msg: 'Class not found' });
+        if (!classData) return res.status(404).json({ success: false, message: 'Class not found' });
 
-        if (name !== undefined) {
-            classData.name = (name || '').trim();
+        const previousState = {
+            name: classData.name,
+            value: classData.value,
+            label: classData.label,
+            section: classData.section,
+            branch: classData.branch,
+            classTeacher: classData.classTeacher
+        };
+
+        const targetName = name !== undefined ? (name || '').trim() : classData.name;
+        const targetSection = section !== undefined ? (section || '').trim() : (classData.section || '');
+        const validBranches = ['Ugar', 'Mangasuli', 'Main'];
+        const targetBranch = branch !== undefined 
+            ? (validBranches.includes(branch) ? branch : classData.branch) 
+            : classData.branch;
+
+        if (name !== undefined && !targetName) {
+            return res.status(400).json({ success: false, message: 'Class name cannot be empty' });
         }
-        if (section !== undefined) {
-            classData.section = (section || '').trim();
-        }
-        if (branch !== undefined) {
-            classData.branch = branch;
+        if (targetName.length > 50) {
+            return res.status(400).json({ success: false, message: 'Class name cannot exceed 50 characters' });
         }
 
-        const finalName = classData.name || '';
-        const finalSection = classData.section || '';
-        classData.value = finalName.toLowerCase().replace(/\s+/g, '_');
-        classData.label = finalSection ? `${finalName} - ${finalSection}` : finalName;
+        const isNameChanging = targetName !== classData.name;
+        const isBranchChanging = targetBranch !== classData.branch;
+
+        // GUARD: If renaming or moving branch on a class that has active students or exams, require explicit confirmation
+        if (isNameChanging || isBranchChanging) {
+            const [studentCount, examCount] = await Promise.all([
+                User.countDocuments({ currentClass: classData._id, role: 'student' }),
+                Exam.countDocuments({ class: classData._id })
+            ]);
+
+            const requiresExplicitConsent = (studentCount > 0 || examCount > 0);
+            const isConfirmed = confirmRename === true || confirmRename === 'true';
+
+            if (requiresExplicitConsent && !isConfirmed) {
+                return res.status(400).json({
+                    success: false,
+                    requiresConfirmation: true,
+                    studentCount,
+                    examCount,
+                    message: `Class "${classData.label || classData.name}" has ${studentCount} enrolled student(s) and ${examCount} exam(s). Renaming or changing branch can disrupt student sync, fee ledgers, and exams. Pass confirmRename: true to confirm.`
+                });
+            }
+
+            // Check duplicate collision
+            const targetValue = targetName.toLowerCase().replace(/\s+/g, '_');
+            const duplicate = await Class.findOne({
+                _id: { $ne: classData._id },
+                value: targetValue,
+                section: targetSection,
+                branch: targetBranch,
+                academicYear: classData.academicYear
+            });
+
+            if (duplicate) {
+                return res.status(409).json({
+                    success: false,
+                    message: `Another class with name "${targetName}" (${targetBranch}) already exists in this academic year.`
+                });
+            }
+        }
+
+        classData.name = targetName;
+        classData.section = targetSection;
+        classData.branch = targetBranch;
+        classData.value = targetName.toLowerCase().replace(/\s+/g, '_');
+        classData.label = targetSection ? `${targetName} - ${targetSection}` : targetName;
 
         if (classTeacher !== undefined) {
             classData.classTeacher = (classTeacher && typeof classTeacher === 'string' && classTeacher.trim())
@@ -298,6 +390,28 @@ router.put('/:id', [auth, checkRole(['super admin'])], async (req, res) => {
 
         await classData.save();
         invalidateClassesCache().catch(() => {});
+
+        // Audit Log
+        logAudit({
+            req,
+            action: 'CLASS_UPDATED',
+            entityType: 'Class',
+            entityId: classData._id,
+            details: {
+                previous: previousState,
+                updated: {
+                    name: classData.name,
+                    value: classData.value,
+                    label: classData.label,
+                    section: classData.section,
+                    branch: classData.branch,
+                    classTeacher: classData.classTeacher
+                },
+                renamed: isNameChanging,
+                branchChanged: isBranchChanging
+            }
+        }).catch(() => {});
+
         res.json(classData);
     } catch (err) {
         console.error(err.message);
@@ -311,12 +425,24 @@ router.put('/:id', [auth, checkRole(['super admin'])], async (req, res) => {
 router.delete('/:id', [auth, checkRole(['super admin'])], async (req, res) => {
     try {
         const classData = await Class.findById(req.params.id);
-        if (!classData) return res.status(404).json({ msg: 'Class not found' });
+        if (!classData) return res.status(404).json({ success: false, message: 'Class not found' });
 
         // Check if class has students
         const studentCount = await User.countDocuments({ currentClass: req.params.id });
         if (studentCount > 0) {
-            return res.status(400).json({ msg: 'Cannot delete class with enrolled students' });
+            return res.status(400).json({
+                success: false,
+                message: `Cannot delete class with ${studentCount} enrolled student(s). Reassign or archive students first.`
+            });
+        }
+
+        // Check if class has exams
+        const examCount = await Exam.countDocuments({ class: req.params.id });
+        if (examCount > 0) {
+            return res.status(400).json({
+                success: false,
+                message: `Cannot delete class with ${examCount} existing exam(s).`
+            });
         }
 
         await Class.findByIdAndDelete(req.params.id);
@@ -325,12 +451,26 @@ router.delete('/:id', [auth, checkRole(['super admin'])], async (req, res) => {
         await Timetable.findOneAndDelete({ class: req.params.id });
         invalidateClassesCache().catch(() => {});
 
-        res.json({ msg: 'Class removed' });
+        // Audit Log
+        logAudit({
+            req,
+            action: 'CLASS_DELETED',
+            entityType: 'Class',
+            entityId: classData._id,
+            details: {
+                name: classData.name,
+                branch: classData.branch,
+                section: classData.section
+            }
+        }).catch(() => {});
+
+        res.json({ success: true, message: 'Class removed' });
     } catch (err) {
         console.error(err.message);
         res.status(500).send('Server Error');
     }
 });
+
 
 
 

@@ -13,11 +13,14 @@ const requestLogger = (req, res, next) => {
 
     const statusCode = res.statusCode;
 
-    // Only log server error responses (5xx) unless LOG_ALL_REQUESTS or LOG_LEVEL=info/debug is enabled
+    // Always log administrative/mutating requests (POST, PUT, PATCH, DELETE), 5xx errors,
+    // or all requests if LOG_ALL_REQUESTS=true or LOG_LEVEL=info/debug
+    const isSensitiveMutation = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) &&
+                               (req.originalUrl || req.url || '').startsWith('/api/');
     const logAll = process.env.LOG_ALL_REQUESTS === 'true' ||
                    ['info', 'debug'].includes(process.env.LOG_LEVEL?.toLowerCase());
 
-    if (statusCode < 500 && !logAll) {
+    if (statusCode < 500 && !logAll && !isSensitiveMutation) {
       return;
     }
 

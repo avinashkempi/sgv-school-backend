@@ -42,11 +42,12 @@ const login = async (req, res) => {
       });
     }
 
-    // Generate a long-lived JWT token tied to the current DB-backed session version
+    // Generate JWT token tied to DB-backed tokenVersion with configurable expiry (defaults to 30d, not 365d)
+    const tokenExpiry = process.env.JWT_EXPIRE || '30d';
     const token = jwt.sign(
       { userId: user._id, role: user.role, tokenVersion: user.tokenVersion ?? 0 },
       process.env.JWT_SECRET,
-      { expiresIn: '365d' }
+      { expiresIn: tokenExpiry }
     );
 
     // Update last active
@@ -278,9 +279,39 @@ const updateProfilePhoto = async (req, res) => {
   }
 };
 
+const revokeAllSessions = async (req, res) => {
+  try {
+    const user = await User.findById(req.user.userId);
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    user.tokenVersion = (user.tokenVersion ?? 0) + 1;
+    await user.save();
+    invalidateUserCache(user._id);
+
+    const tokenExpiry = process.env.JWT_EXPIRE || '30d';
+    const newToken = jwt.sign(
+      { userId: user._id, role: user.role, tokenVersion: user.tokenVersion },
+      process.env.JWT_SECRET,
+      { expiresIn: tokenExpiry }
+    );
+
+    res.json({
+      success: true,
+      message: 'All other active sessions have been successfully revoked',
+      token: newToken
+    });
+  } catch (error) {
+    console.error('Revoke sessions error:', error);
+    res.status(500).json({ success: false, message: 'Server error revoking sessions' });
+  }
+};
+
 module.exports = {
   login,
   getMe,
   changePassword,
-  updateProfilePhoto
+  updateProfilePhoto,
+  revokeAllSessions
 };
