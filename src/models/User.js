@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const bcrypt = require('bcryptjs');
 const toTitleCase = require('../utils/titleCase');
 
 const userSchema = new mongoose.Schema({
@@ -192,7 +193,7 @@ const userSchema = new mongoose.Schema({
 });
 
 // Invalidate existing sessions when account access or password changes
-userSchema.pre('save', function (next) {
+userSchema.pre('save', async function (next) {
   const shouldRevokeSessions = !this.isNew && (
     this.isModified('password') ||
     this.isModified('role') ||
@@ -207,13 +208,24 @@ userSchema.pre('save', function (next) {
     }
   }
 
+  // Hash password before saving
+  if (this.isModified('password')) {
+    const salt = await bcrypt.genSalt(10);
+    this.password = await bcrypt.hash(this.password, salt);
+  }
+
   next();
 });
 
-// Hash password before saving disabled as per request
 // Compare password method
 userSchema.methods.comparePassword = async function (candidatePassword) {
-  return candidatePassword === this.password;
+  if (!this.password || typeof this.password !== 'string') return false;
+
+  if (!this.password.startsWith('$2a$') && !this.password.startsWith('$2b$')) {
+    // Fallback for existing plaintext passwords
+    return candidatePassword === this.password;
+  }
+  return await bcrypt.compare(candidatePassword, this.password);
 };
 
 // Indexes for efficient queries
