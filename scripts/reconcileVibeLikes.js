@@ -9,7 +9,6 @@ require('dotenv').config();
 
 const Vibe = require('../src/models/Vibe');
 const VibeLike = require('../src/models/VibeLike');
-const logger = require('../src/utils/logger');
 
 async function reconcileVibeLikes() {
   const mongoUri = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/sgv-school';

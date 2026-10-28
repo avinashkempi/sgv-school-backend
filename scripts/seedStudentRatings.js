@@ -98,6 +98,8 @@ async function seedStudentRatings() {
                     const update = {
                         $set: {
                             teacher: teacherId,
+                            lastModifiedBy: teacherId,
+                            subjectName: sub.name,
                             classEngagement,
                             homeworkClasswork,
                             behaviourSocial,

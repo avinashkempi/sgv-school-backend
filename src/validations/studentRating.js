@@ -4,6 +4,16 @@ const VALID_RATING_RANGE = { min: 1, max: 5 };
 
 const ratingFieldValidation = (fieldName, label) => [
     body(`ratings.*.${fieldName}`)
+        .if((value, { req, path }) => {
+            const match = path.match(/ratings(?:\[(\d+)\]|\.(\d+)\.)/);
+            const indexStr = match ? (match[1] || match[2]) : null;
+            if (indexStr !== null && req.body && Array.isArray(req.body.ratings)) {
+                const index = parseInt(indexStr, 10);
+                const item = req.body.ratings[index];
+                if (item?.isExempt === true || item?.isExempt === 'true') return false;
+            }
+            return true;
+        })
         .notEmpty()
         .withMessage(`${label} is required`)
         .isInt(VALID_RATING_RANGE)
@@ -12,7 +22,7 @@ const ratingFieldValidation = (fieldName, label) => [
 
 /**
  * Validation rules for bulk student ratings submission.
- * Expects body: { subjectId, month, year, ratings: [{ studentId, classEngagement, homeworkClasswork, behaviourSocial, englishComm }] }
+ * Expects body: { subjectId, month, year, ratings: [{ studentId, classEngagement, homeworkClasswork, behaviourSocial, englishComm, remarks, isExempt, exemptionReason }] }
  */
 const bulkRatingValidation = [
     body('subjectId')
@@ -38,10 +48,23 @@ const bulkRatingValidation = [
         .withMessage('Student ID is required')
         .isMongoId()
         .withMessage('Invalid student ID'),
+    body('ratings.*.remarks')
+        .optional()
+        .isString()
+        .trim()
+        .isLength({ max: 500 })
+        .withMessage('Remarks cannot exceed 500 characters'),
+    body('ratings.*.isExempt')
+        .optional()
+        .isBoolean(),
+    body('ratings.*.exemptionReason')
+        .optional()
+        .isString()
+        .trim(),
     ...ratingFieldValidation('classEngagement', 'Class Engagement'),
     ...ratingFieldValidation('homeworkClasswork', 'Homework & Classwork'),
     ...ratingFieldValidation('behaviourSocial', 'Behaviour & Social Skills'),
-    ...ratingFieldValidation('englishComm', 'English Communication')
+    ...ratingFieldValidation('englishComm', 'English/Subject Communication')
 ];
 
 module.exports = {

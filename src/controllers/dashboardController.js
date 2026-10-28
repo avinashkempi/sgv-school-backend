@@ -964,32 +964,50 @@ exports.getStudentStats = async (req, res) => {
         // 5. Holistic Student Rating Summary (Latest Available Month)
         let latestRatingSummary = null;
         if (latestRatingRecords && latestRatingRecords.length > 0) {
-            const validRatings = latestRatingRecords.filter(r => r.subject && r.subject.ratingEnabled !== false);
+            // Keep valid ratings that are not exempt and have a score
+            const validRatings = latestRatingRecords.filter(r => !r.isExempt && r.averageScore != null && r.subject);
             if (validRatings.length > 0) {
                 const topMonth = validRatings[0].month;
                 const topYear = validRatings[0].year;
                 const topRatings = validRatings.filter(r => r.month === topMonth && r.year === topYear);
-                const avg = parseFloat((topRatings.reduce((s, r) => s + r.averageScore, 0) / topRatings.length).toFixed(1));
+                
+                if (topRatings.length > 0) {
+                    const avg = parseFloat((topRatings.reduce((s, r) => s + r.averageScore, 0) / topRatings.length).toFixed(1));
 
-                let label = 'Meets Expectation';
-                let variant = 'primary';
-                if (avg >= 4.8) { label = 'Excellent'; variant = 'success'; }
-                else if (avg >= 4.0) { label = 'Good'; variant = 'success'; }
-                else if (avg < 2.0) { label = 'Needs Significant Imp.'; variant = 'error'; }
-                else if (avg < 3.0) { label = 'Needs Improvement'; variant = 'warning'; }
+                    let label = 'Meets Expectation';
+                    let variant = 'primary';
+                    if (avg >= 4.5) { label = 'Excellent'; variant = 'success'; }
+                    else if (avg >= 3.5) { label = 'Good'; variant = 'success'; }
+                    else if (avg >= 2.5) { label = 'Meets Expectation'; variant = 'primary'; }
+                    else if (avg >= 2.0) { label = 'Needs Improvement'; variant = 'warning'; }
+                    else { label = 'Needs Significant Imp.'; variant = 'error'; }
 
-                latestRatingSummary = {
-                    averageScore: avg,
-                    month: topMonth,
-                    year: topYear,
-                    label,
-                    variant,
-                    ratedSubjectCount: topRatings.length,
-                    classEngagement: parseFloat((topRatings.reduce((s, r) => s + r.classEngagement, 0) / topRatings.length).toFixed(1)),
-                    homeworkClasswork: parseFloat((topRatings.reduce((s, r) => s + r.homeworkClasswork, 0) / topRatings.length).toFixed(1)),
-                    behaviourSocial: parseFloat((topRatings.reduce((s, r) => s + r.behaviourSocial, 0) / topRatings.length).toFixed(1)),
-                    englishComm: parseFloat((topRatings.reduce((s, r) => s + r.englishComm, 0) / topRatings.length).toFixed(1))
-                };
+                    const avgEngagement = parseFloat((topRatings.reduce((s, r) => s + r.classEngagement, 0) / topRatings.length).toFixed(1));
+                    const avgHomework = parseFloat((topRatings.reduce((s, r) => s + r.homeworkClasswork, 0) / topRatings.length).toFixed(1));
+                    const avgBehaviour = parseFloat((topRatings.reduce((s, r) => s + r.behaviourSocial, 0) / topRatings.length).toFixed(1));
+                    const avgEnglish = parseFloat((topRatings.reduce((s, r) => s + r.englishComm, 0) / topRatings.length).toFixed(1));
+
+                    latestRatingSummary = {
+                        averageScore: avg,
+                        average: avg, // Frontend StudentDashboard compatibility
+                        month: topMonth,
+                        year: topYear,
+                        label,
+                        variant,
+                        ratedSubjectCount: topRatings.length,
+                        ratedCount: topRatings.length, // Frontend StudentDashboard compatibility
+                        classEngagement: avgEngagement,
+                        homeworkClasswork: avgHomework,
+                        behaviourSocial: avgBehaviour,
+                        englishComm: avgEnglish,
+                        criteriaAverages: {
+                            classEngagement: avgEngagement,
+                            homeworkClasswork: avgHomework,
+                            behaviourSocial: avgBehaviour,
+                            englishComm: avgEnglish
+                        }
+                    };
+                }
             }
         }
 

@@ -26,18 +26,23 @@ const DATA_POINTS = [
     },
     {
         key: 'englishComm',
-        label: 'English Communication',
-        description: 'Speaks in English, expresses ideas clearly, and communicates confidently'
+        label: 'English/Subject Communication',
+        description: 'Speaks in English or subject language, expresses ideas clearly, and communicates confidently'
     }
 ];
 
 const ratingField = {
     type: Number,
-    required: true,
+    required: function () {
+        return !this.isExempt;
+    },
     min: [1, 'Rating must be at least 1'],
     max: [5, 'Rating cannot exceed 5'],
     validate: {
-        validator: Number.isInteger,
+        validator: function (v) {
+            if (v == null) return true;
+            return Number.isInteger(v);
+        },
         message: 'Rating must be a whole number (1–5)'
     }
 };
@@ -53,6 +58,11 @@ const studentRatingSchema = new mongoose.Schema({
         ref: 'Subject',
         required: [true, 'Subject is required']
     },
+    // Snapshot subject name for historical immutability
+    subjectName: {
+        type: String,
+        trim: true
+    },
     class: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Class',
@@ -62,6 +72,10 @@ const studentRatingSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
         required: [true, 'Teacher is required']
+    },
+    lastModifiedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
     },
     academicYear: {
         type: mongoose.Schema.Types.ObjectId,
@@ -83,16 +97,34 @@ const studentRatingSchema = new mongoose.Schema({
         max: [2100, 'Year must be 2100 or earlier']
     },
 
+    // Exemption / Medical leave support
+    isExempt: {
+        type: Boolean,
+        default: false
+    },
+    exemptionReason: {
+        type: String,
+        trim: true,
+        default: ''
+    },
+
     // The 4 data points (1–5 scale)
     classEngagement: ratingField,
     homeworkClasswork: ratingField,
     behaviourSocial: ratingField,
     englishComm: ratingField,
 
-    // Auto-computed average of the 4 data points
+    // Auto-computed average of the 4 data points (null if exempt)
     averageScore: {
         type: Number,
-        default: 0
+        default: null
+    },
+
+    // Optional qualitative remark/feedback
+    remarks: {
+        type: String,
+        trim: true,
+        default: ''
     },
 
     submittedAt: {
@@ -107,9 +139,18 @@ const studentRatingSchema = new mongoose.Schema({
 
 // Auto-compute averageScore before saving
 studentRatingSchema.pre('save', function (next) {
-    this.averageScore = parseFloat(
-        ((this.classEngagement + this.homeworkClasswork + this.behaviourSocial + this.englishComm) / 4).toFixed(2)
-    );
+    if (this.isExempt) {
+        this.averageScore = null;
+    } else if (
+        this.classEngagement != null &&
+        this.homeworkClasswork != null &&
+        this.behaviourSocial != null &&
+        this.englishComm != null
+    ) {
+        this.averageScore = parseFloat(
+            ((this.classEngagement + this.homeworkClasswork + this.behaviourSocial + this.englishComm) / 4).toFixed(2)
+        );
+    }
     this.updatedAt = Date.now();
     next();
 });
@@ -119,7 +160,10 @@ studentRatingSchema.pre('findOneAndUpdate', function (next) {
     const update = this.getUpdate();
     if (update.$set) {
         const s = update.$set;
-        if (s.classEngagement != null && s.homeworkClasswork != null && s.behaviourSocial != null && s.englishComm != null) {
+        if (s.isExempt) {
+            s.averageScore = null;
+            s.updatedAt = Date.now();
+        } else if (s.classEngagement != null && s.homeworkClasswork != null && s.behaviourSocial != null && s.englishComm != null) {
             s.averageScore = parseFloat(
                 ((s.classEngagement + s.homeworkClasswork + s.behaviourSocial + s.englishComm) / 4).toFixed(2)
             );
@@ -140,10 +184,23 @@ studentRatingSchema.index({ subject: 1, month: 1, year: 1 });
 studentRatingSchema.index({ teacher: 1, month: 1, year: 1 });
 studentRatingSchema.index({ class: 1, month: 1, year: 1 });
 studentRatingSchema.index({ student: 1, academicYear: 1 });
+studentRatingSchema.index({ student: 1, academicYear: 1, month: 1, year: 1 });
+studentRatingSchema.index({ class: 1, academicYear: 1, month: 1, year: 1 });
 studentRatingSchema.index({ academicYear: 1, month: 1, year: 1 });
+
+// Standardized unified performance evaluator helper
+const getPerformanceEvaluation = (score) => {
+    if (score == null || isNaN(score) || score <= 0) return { label: 'Unrated', variant: 'neutral', color: '#6B7280' };
+    if (score >= 4.5) return { label: 'Excellent', variant: 'success', color: '#059669' };
+    if (score >= 3.5) return { label: 'Good', variant: 'success', color: '#16A34A' };
+    if (score >= 2.5) return { label: 'Meets Expectation', variant: 'primary', color: '#4F46E5' };
+    if (score >= 2.0) return { label: 'Needs Improvement', variant: 'warning', color: '#EA580C' };
+    return { label: 'Needs Significant Imp.', variant: 'error', color: '#DC2626' };
+};
 
 // Expose statics for use in routes/controllers
 studentRatingSchema.statics.RATING_LABELS = RATING_LABELS;
 studentRatingSchema.statics.DATA_POINTS = DATA_POINTS;
+studentRatingSchema.statics.getPerformanceEvaluation = getPerformanceEvaluation;
 
 module.exports = mongoose.model('StudentRating', studentRatingSchema);

@@ -54,8 +54,8 @@ function getAuthClient() {
  * @returns {Promise<Array<Object>>} Array of row objects
  */
 async function fetchSheetData(options = {}) {
-    const spreadsheetId = options.spreadsheetId || SPREADSHEET_ID;
-    const tabName = options.tabName || TAB_NAME;
+    const spreadsheetId = options.spreadsheetId || process.env.GOOGLE_SHEETS_SPREADSHEET_ID || SPREADSHEET_ID;
+    const tabName = options.tabName || process.env.GOOGLE_SHEETS_TAB_NAME || TAB_NAME || 'students';
 
     if (!spreadsheetId) {
         throw new Error('GOOGLE_SHEETS_SPREADSHEET_ID is not configured.');
@@ -102,7 +102,8 @@ async function fetchSheetData(options = {}) {
  * @returns {{ configured: boolean, reason?: string }}
  */
 function isConfigured() {
-    if (!SPREADSHEET_ID) {
+    const spreadsheetId = process.env.GOOGLE_SHEETS_SPREADSHEET_ID || SPREADSHEET_ID;
+    if (!spreadsheetId) {
         return { configured: false, reason: 'GOOGLE_SHEETS_SPREADSHEET_ID not set' };
     }
     if (!process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL) {

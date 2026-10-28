@@ -132,14 +132,14 @@ async function main() {
         console.log('\n--- Step 6: Invalidate Caches ---');
         if (process.env.REDIS_URL) {
             try {
-                const redis = require('redis');
-                const client = redis.createClient({ url: process.env.REDIS_URL });
+                const Redis = require('ioredis');
+                const client = new Redis(process.env.REDIS_URL, { lazyConnect: true });
                 await client.connect();
                 const patterns = ['*classes*', '*adminClassesInit*', '*teacherDashboard*', '*adminExamSchedule*'];
                 for (const p of patterns) {
                     const keys = await client.keys(p);
                     if (keys.length > 0) {
-                        await client.del(keys);
+                        await client.del(...keys);
                         console.log(`Cleared ${keys.length} cache keys for pattern: ${p}`);
                     }
                 }

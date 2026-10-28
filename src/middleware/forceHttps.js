@@ -37,13 +37,24 @@ function forceHttps(req, res, next) {
     return next();
   }
 
-  // Check if request is running on local development environment
+  // Only enforce HTTPS redirects in production environment
+  if (process.env.NODE_ENV !== 'production') {
+    return next();
+  }
+
+  // Check if request is running on local development or private LAN network
   const rawHost = req.get('host') || req.hostname || '';
   const hostname = req.hostname || '';
-  const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
+  const isPrivateOrLocal =
+    hostname === 'localhost' ||
+    hostname === '127.0.0.1' ||
+    hostname === '::1' ||
+    hostname === '10.0.2.2' ||
+    /^192\.168\./.test(hostname) ||
+    /^10\./.test(hostname) ||
+    /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(hostname);
 
-  // Do not redirect local development traffic unless NODE_ENV is set to production
-  if (isLocalhost && process.env.NODE_ENV !== 'production') {
+  if (isPrivateOrLocal) {
     return next();
   }
 

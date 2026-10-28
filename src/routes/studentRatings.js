@@ -230,8 +230,21 @@ router.get('/subject/:subjectId', [auth, yearContext], async (req, res) => {
             year,
             academicYear: req.academicYearContext
         })
-            .select('student classEngagement homeworkClasswork behaviourSocial englishComm averageScore')
+            .populate('teacher', 'name email designation')
+            .populate('lastModifiedBy', 'name email designation')
+            .select('student classEngagement homeworkClasswork behaviourSocial englishComm averageScore isExempt exemptionReason remarks submittedAt updatedAt teacher lastModifiedBy')
             .lean();
+
+        let lastSubmissionInfo = null;
+        if (existingRatings.length > 0) {
+            const first = existingRatings[0];
+            const author = first.lastModifiedBy || first.teacher;
+            lastSubmissionInfo = {
+                teacherName: author?.name || 'A teacher',
+                teacherId: author?._id,
+                submittedAt: first.updatedAt || first.submittedAt
+            };
+        }
 
         const ratingMap = {};
         existingRatings.forEach(r => {
@@ -240,7 +253,10 @@ router.get('/subject/:subjectId', [auth, yearContext], async (req, res) => {
                 homeworkClasswork: r.homeworkClasswork,
                 behaviourSocial: r.behaviourSocial,
                 englishComm: r.englishComm,
-                averageScore: r.averageScore
+                averageScore: r.averageScore,
+                isExempt: Boolean(r.isExempt),
+                exemptionReason: r.exemptionReason || '',
+                remarks: r.remarks || ''
             };
         });
 
@@ -262,6 +278,7 @@ router.get('/subject/:subjectId', [auth, yearContext], async (req, res) => {
             },
             month,
             year,
+            lastSubmissionInfo,
             students: studentsWithRatings,
             totalStudents: students.length,
             ratedCount: existingRatings.length,
@@ -296,6 +313,17 @@ router.post('/bulk', [auth, yearContext, requireOpenYear, ...bulkRatingValidatio
         const { subjectId, month, year, ratings } = body || {};
         const userId = req.user.userId;
         const userRole = req.user.role;
+
+        // Prevent ratings for future months
+        const now = new Date();
+        const currentMonth = now.getMonth() + 1;
+        const currentYear = now.getFullYear();
+        if (year > currentYear || (year === currentYear && month > currentMonth)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Cannot submit ratings for future months.'
+            });
+        }
 
         // Validate subject exists and teacher has access
         const subject = await Subject.findById(subjectId)
@@ -341,7 +369,8 @@ router.post('/bulk', [auth, yearContext, requireOpenYear, ...bulkRatingValidatio
 
         // Upsert ratings (insert or update)
         const bulkOps = ratings.map(r => {
-            const avg = parseFloat(
+            const isExempt = Boolean(r.isExempt);
+            const avg = isExempt ? null : parseFloat(
                 ((r.classEngagement + r.homeworkClasswork + r.behaviourSocial + r.englishComm) / 4).toFixed(2)
             );
 
@@ -357,12 +386,17 @@ router.post('/bulk', [auth, yearContext, requireOpenYear, ...bulkRatingValidatio
                     update: {
                         $set: {
                             class: subject.class._id,
+                            subjectName: subject.name,
                             teacher: new mongoose.Types.ObjectId(userId),
-                            classEngagement: r.classEngagement,
-                            homeworkClasswork: r.homeworkClasswork,
-                            behaviourSocial: r.behaviourSocial,
-                            englishComm: r.englishComm,
+                            lastModifiedBy: new mongoose.Types.ObjectId(userId),
+                            isExempt,
+                            exemptionReason: r.exemptionReason || '',
+                            classEngagement: isExempt ? null : r.classEngagement,
+                            homeworkClasswork: isExempt ? null : r.homeworkClasswork,
+                            behaviourSocial: isExempt ? null : r.behaviourSocial,
+                            englishComm: isExempt ? null : r.englishComm,
                             averageScore: avg,
+                            remarks: r.remarks || '',
                             updatedAt: new Date()
                         },
                         $setOnInsert: {
@@ -521,40 +555,65 @@ router.get('/my-ratings', [auth, yearContext, checkRole(['student'])], async (re
             .populate('subject', 'name ratingEnabled')
             .lean();
 
-        // Filter ratings to only enabled subjects (or where rating exists)
-        const validRatings = ratings.filter(r => r.subject && r.subject.ratingEnabled !== false);
+        // Filter ratings for scoring: non-exempt with an averageScore and active subject
+        const scorableRatings = ratings.filter(r => !r.isExempt && r.averageScore != null && r.subject && r.subject.ratingEnabled !== false);
 
         // 4. Compute overall and criteria averages
         let avgEngagement = 0, avgHomework = 0, avgBehaviour = 0, avgEnglish = 0, overallAverage = null;
-        if (validRatings.length > 0) {
-            avgEngagement = parseFloat((validRatings.reduce((s, r) => s + r.classEngagement, 0) / validRatings.length).toFixed(2));
-            avgHomework = parseFloat((validRatings.reduce((s, r) => s + r.homeworkClasswork, 0) / validRatings.length).toFixed(2));
-            avgBehaviour = parseFloat((validRatings.reduce((s, r) => s + r.behaviourSocial, 0) / validRatings.length).toFixed(2));
-            avgEnglish = parseFloat((validRatings.reduce((s, r) => s + r.englishComm, 0) / validRatings.length).toFixed(2));
-            overallAverage = parseFloat((validRatings.reduce((s, r) => s + r.averageScore, 0) / validRatings.length).toFixed(2));
+        if (scorableRatings.length > 0) {
+            avgEngagement = parseFloat((scorableRatings.reduce((s, r) => s + (r.classEngagement || 0), 0) / scorableRatings.length).toFixed(2));
+            avgHomework = parseFloat((scorableRatings.reduce((s, r) => s + (r.homeworkClasswork || 0), 0) / scorableRatings.length).toFixed(2));
+            avgBehaviour = parseFloat((scorableRatings.reduce((s, r) => s + (r.behaviourSocial || 0), 0) / scorableRatings.length).toFixed(2));
+            avgEnglish = parseFloat((scorableRatings.reduce((s, r) => s + (r.englishComm || 0), 0) / scorableRatings.length).toFixed(2));
+            overallAverage = parseFloat((scorableRatings.reduce((s, r) => s + r.averageScore, 0) / scorableRatings.length).toFixed(2));
         }
 
-        // 5. Subject breakdown list (including ratable subjects with rating or marked unrated)
+        // 5. Subject breakdown list (including current ratable subjects + any historically rated subjects)
         const ratingMap = {};
-        validRatings.forEach(r => {
-            ratingMap[r.subject._id.toString()] = r;
+        ratings.forEach(r => {
+            if (r.subject?._id) {
+                ratingMap[r.subject._id.toString()] = r;
+            }
         });
 
-        const subjectBreakdown = classSubjects
-            .filter(s => s.ratingEnabled !== false) // Only ratable subjects
-            .map(sub => {
-                const r = ratingMap[sub._id.toString()];
-                return {
-                    subjectId: sub._id,
-                    subjectName: sub.name,
-                    isRated: !!r,
-                    averageScore: r ? r.averageScore : null,
-                    classEngagement: r ? r.classEngagement : null,
-                    homeworkClasswork: r ? r.homeworkClasswork : null,
-                    behaviourSocial: r ? r.behaviourSocial : null,
-                    englishComm: r ? r.englishComm : null
-                };
+        const allSubjectMap = new Map();
+        classSubjects.filter(s => s.ratingEnabled !== false).forEach(sub => {
+            allSubjectMap.set(sub._id.toString(), {
+                subjectId: sub._id,
+                subjectName: sub.name,
+                ratingEnabled: sub.ratingEnabled
             });
+        });
+
+        ratings.forEach(r => {
+            if (r.subject) {
+                const sid = r.subject._id.toString();
+                if (!allSubjectMap.has(sid)) {
+                    allSubjectMap.set(sid, {
+                        subjectId: r.subject._id,
+                        subjectName: r.subjectName || r.subject.name,
+                        ratingEnabled: r.subject.ratingEnabled
+                    });
+                }
+            }
+        });
+
+        const subjectBreakdown = Array.from(allSubjectMap.values()).map(sub => {
+            const r = ratingMap[sub.subjectId.toString()];
+            return {
+                subjectId: sub.subjectId,
+                subjectName: sub.subjectName,
+                isRated: !!r,
+                isExempt: Boolean(r?.isExempt),
+                exemptionReason: r?.exemptionReason || '',
+                remarks: r?.remarks || '',
+                averageScore: r ? r.averageScore : null,
+                classEngagement: r ? r.classEngagement : null,
+                homeworkClasswork: r ? r.homeworkClasswork : null,
+                behaviourSocial: r ? r.behaviourSocial : null,
+                englishComm: r ? r.englishComm : null
+            };
+        });
 
         // 6. Anonymous class benchmark for selected month (if student has class)
         let classBenchmark = null;
@@ -565,7 +624,9 @@ router.get('/my-ratings', [auth, yearContext, checkRole(['student'])], async (re
                         class: student.currentClass,
                         month,
                         year,
-                        academicYear: new mongoose.Types.ObjectId(req.academicYearContext)
+                        academicYear: new mongoose.Types.ObjectId(req.academicYearContext),
+                        isExempt: { $ne: true },
+                        averageScore: { $ne: null }
                     }
                 },
                 {
@@ -592,7 +653,7 @@ router.get('/my-ratings', [auth, yearContext, checkRole(['student'])], async (re
 
         const trendMonthMap = {};
         allStudentRatings
-            .filter(r => r.subject && r.subject.ratingEnabled !== false)
+            .filter(r => !r.isExempt && r.averageScore != null && r.subject)
             .forEach(r => {
                 const key = `${r.year}-${String(r.month).padStart(2, '0')}`;
                 if (!trendMonthMap[key]) {
@@ -615,11 +676,13 @@ router.get('/my-ratings', [auth, yearContext, checkRole(['student'])], async (re
         // 8. Cumulative Academic Year Average for this student
         let yearAverage = null;
         if (allStudentRatings.length > 0) {
-            const validYearRatings = allStudentRatings.filter(r => r.subject && r.subject.ratingEnabled !== false);
+            const validYearRatings = allStudentRatings.filter(r => !r.isExempt && r.averageScore != null && r.subject);
             if (validYearRatings.length > 0) {
                 yearAverage = parseFloat((validYearRatings.reduce((s, r) => s + r.averageScore, 0) / validYearRatings.length).toFixed(2));
             }
         }
+
+        const evaluation = StudentRating.getPerformanceEvaluation(overallAverage);
 
         res.json({
             success: true,
@@ -632,6 +695,7 @@ router.get('/my-ratings', [auth, yearContext, checkRole(['student'])], async (re
             month,
             year,
             overallAverage,
+            evaluation,
             dataPointAverages: {
                 classEngagement: avgEngagement,
                 homeworkClasswork: avgHomework,
@@ -1021,22 +1085,25 @@ router.get('/student/:studentId/details', [auth, yearContext], async (req, res) 
             year,
             academicYear: req.academicYearContext
         })
-            .populate('subject', 'name')
+            .populate('subject', 'name ratingEnabled')
             .populate('teacher', 'name')
             .lean();
 
         // Compute overall averages per data point
+        const scorableRatings = ratings.filter(r => !r.isExempt && r.averageScore != null && r.subject && r.subject.ratingEnabled !== false);
         let avgEngagement = 0, avgHomework = 0, avgBehaviour = 0, avgEnglish = 0;
-        if (ratings.length > 0) {
-            avgEngagement = parseFloat((ratings.reduce((s, r) => s + r.classEngagement, 0) / ratings.length).toFixed(2));
-            avgHomework = parseFloat((ratings.reduce((s, r) => s + r.homeworkClasswork, 0) / ratings.length).toFixed(2));
-            avgBehaviour = parseFloat((ratings.reduce((s, r) => s + r.behaviourSocial, 0) / ratings.length).toFixed(2));
-            avgEnglish = parseFloat((ratings.reduce((s, r) => s + r.englishComm, 0) / ratings.length).toFixed(2));
+        if (scorableRatings.length > 0) {
+            avgEngagement = parseFloat((scorableRatings.reduce((s, r) => s + (r.classEngagement || 0), 0) / scorableRatings.length).toFixed(2));
+            avgHomework = parseFloat((scorableRatings.reduce((s, r) => s + (r.homeworkClasswork || 0), 0) / scorableRatings.length).toFixed(2));
+            avgBehaviour = parseFloat((scorableRatings.reduce((s, r) => s + (r.behaviourSocial || 0), 0) / scorableRatings.length).toFixed(2));
+            avgEnglish = parseFloat((scorableRatings.reduce((s, r) => s + (r.englishComm || 0), 0) / scorableRatings.length).toFixed(2));
         }
 
-        const overallAverage = ratings.length > 0
-            ? parseFloat((ratings.reduce((s, r) => s + r.averageScore, 0) / ratings.length).toFixed(2))
+        const overallAverage = scorableRatings.length > 0
+            ? parseFloat((scorableRatings.reduce((s, r) => s + r.averageScore, 0) / scorableRatings.length).toFixed(2))
             : null;
+
+        const evaluation = StudentRating.getPerformanceEvaluation(overallAverage);
 
         res.json({
             success: true,
@@ -1044,6 +1111,7 @@ router.get('/student/:studentId/details', [auth, yearContext], async (req, res) 
             month,
             year,
             overallAverage,
+            evaluation,
             dataPointAverages: {
                 classEngagement: avgEngagement,
                 homeworkClasswork: avgHomework,
@@ -1051,8 +1119,11 @@ router.get('/student/:studentId/details', [auth, yearContext], async (req, res) 
                 englishComm: avgEnglish
             },
             subjectRatings: ratings.map(r => ({
-                subject: r.subject,
-                teacher: r.teacher,
+                subject: r.subject || { _id: null, name: r.subjectName || 'Subject', ratingEnabled: true },
+                teacher: r.teacher || { name: 'Subject Teacher' },
+                isExempt: Boolean(r.isExempt),
+                exemptionReason: r.exemptionReason || '',
+                remarks: r.remarks || '',
                 classEngagement: r.classEngagement,
                 homeworkClasswork: r.homeworkClasswork,
                 behaviourSocial: r.behaviourSocial,
@@ -1081,7 +1152,9 @@ router.get('/school/summary', [auth, yearContext, requireAdmin], async (req, res
                 $match: {
                     month,
                     year,
-                    academicYear: new mongoose.Types.ObjectId(req.academicYearContext)
+                    academicYear: new mongoose.Types.ObjectId(req.academicYearContext),
+                    isExempt: { $ne: true },
+                    averageScore: { $ne: null }
                 }
             },
             {
@@ -1166,6 +1239,8 @@ router.get('/school/movers', [auth, yearContext, requireAdmin], async (req, res)
 
         const matchFilter = {
             academicYear: new mongoose.Types.ObjectId(req.academicYearContext),
+            isExempt: { $ne: true },
+            averageScore: { $ne: null },
             $or: [
                 { month, year },
                 { month: prevMonth, year: prevYear }
@@ -1181,6 +1256,7 @@ router.get('/school/movers', [auth, yearContext, requireAdmin], async (req, res)
                 $group: {
                     _id: { student: '$student', month: '$month', year: '$year' },
                     avgScore: { $avg: '$averageScore' },
+                    subjectCount: { $sum: 1 },
                     class: { $first: '$class' }
                 }
             },
@@ -1191,7 +1267,8 @@ router.get('/school/movers', [auth, yearContext, requireAdmin], async (req, res)
                         $push: {
                             month: '$_id.month',
                             year: '$_id.year',
-                            avgScore: '$avgScore'
+                            avgScore: '$avgScore',
+                            subjectCount: '$subjectCount'
                         }
                     },
                     class: { $first: '$class' }
@@ -1243,6 +1320,8 @@ router.get('/school/movers', [auth, yearContext, requireAdmin], async (req, res)
                 } : null,
                 currentAvg: parseFloat(current.avgScore.toFixed(2)),
                 previousAvg: parseFloat(previous.avgScore.toFixed(2)),
+                currentSubjectCount: current.subjectCount,
+                previousSubjectCount: previous.subjectCount,
                 change
             };
 
