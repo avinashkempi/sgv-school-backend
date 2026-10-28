@@ -121,7 +121,7 @@ exports.listVibes = async (req, res) => {
       isBookmarked: bookmarkedVibeIds.has(vibe._id.toString())
     }));
 
-    res.set('Cache-Control', 'public, max-age=1800, stale-while-revalidate=86400');
+    res.set('Cache-Control', 'private, no-cache, no-store, must-revalidate');
     res.status(200).json({
       success: true,
       data: enhancedVibes,
@@ -1762,7 +1762,7 @@ exports.getVibeHighlights = async (req, res) => {
 
     const recentAuthorStories = Array.from(authorStoriesMap.values()).slice(0, 10);
 
-    res.set('Cache-Control', 'public, max-age=1800, stale-while-revalidate=86400');
+    res.set('Cache-Control', 'private, no-cache, no-store, must-revalidate');
     res.status(200).json({
       success: true,
       data: {
@@ -1972,7 +1972,7 @@ exports.getSpotlightVibe = async (req, res) => {
       };
     }
 
-    res.set('Cache-Control', 'public, max-age=1800, stale-while-revalidate=86400');
+    res.set('Cache-Control', 'private, no-cache, no-store, must-revalidate');
     res.status(200).json({
       success: true,
       data: enhancedSpotlight
