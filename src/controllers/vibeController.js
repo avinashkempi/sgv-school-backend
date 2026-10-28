@@ -11,6 +11,8 @@ const logger = require('../utils/logger');
 
 const isValidObjectId = (id) => Boolean(id && id !== 'undefined' && id !== 'null' && mongoose.Types.ObjectId.isValid(id));
 
+const escapeRegex = (value) => value.toString().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 /**
  * GET /api/vibes/categories
  * Fetch available vibe categories.
@@ -77,7 +79,7 @@ exports.listVibes = async (req, res) => {
     }
 
     if (search) {
-      query.caption = { $regex: search.trim(), $options: 'i' };
+      query.caption = { $regex: escapeRegex(search.trim()), $options: 'i' };
     }
 
     const [vibes, total] = await Promise.all([
@@ -1249,7 +1251,7 @@ exports.listPendingVibes = async (req, res) => {
     }
 
     if (req.query.search && req.query.search.trim()) {
-      filter.caption = { $regex: req.query.search.trim(), $options: 'i' };
+      filter.caption = { $regex: escapeRegex(req.query.search.trim()), $options: 'i' };
     }
 
     // Determine sort based on status
