@@ -572,7 +572,9 @@ exports.deleteVibe = async (req, res) => {
 
 /**
  * POST /api/vibes/:id/like
- * Toggle like on a vibe with atomic count increment.
+ * Toggle like on a vibe with atomic count update.
+ * Always reconciles the denormalized likesCount with the true VibeLike count
+ * to self-heal any previously accumulated drift.
  */
 exports.toggleLike = async (req, res) => {
   try {
@@ -591,79 +593,80 @@ exports.toggleLike = async (req, res) => {
     const existingLike = await VibeLike.findOne({ vibe: vibeId, user: userId });
 
     let isLiked = false;
-    let updatedLikesCount = vibe.likesCount;
+    let sendNotification = false;
 
     if (existingLike) {
+      // Unlike: remove the record, decrement atomically (floor at 0)
       await VibeLike.deleteOne({ _id: existingLike._id });
-      const updated = await Vibe.findByIdAndUpdate(
+      await Vibe.findByIdAndUpdate(
         vibeId,
         [
           {
             $set: {
               likesCount: {
-                $max: [0, { $subtract: [{ $ifNull: ["$likesCount", 1] }, 1] }]
+                $max: [0, { $subtract: [{ $ifNull: ['$likesCount', 1] }, 1] }]
               }
             }
           }
-        ],
-        { new: true }
+        ]
       );
-      updatedLikesCount = updated ? Math.max(0, Number(updated.likesCount) || 0) : 0;
       isLiked = false;
     } else {
       try {
         await VibeLike.create({ vibe: vibeId, user: userId });
-        const updated = await Vibe.findByIdAndUpdate(
-          vibeId,
-          { $inc: { likesCount: 1 } },
-          { new: true }
-        );
-        updatedLikesCount = updated ? Math.max(0, Number(updated.likesCount) || 0) : 1;
+        await Vibe.findByIdAndUpdate(vibeId, { $inc: { likesCount: 1 } });
         isLiked = true;
-
-        // Trigger notification to vibe author if liked by another user
-        if (vibe.author && vibe.author.toString() !== userId) {
-          (async () => {
-            try {
-              const likerName = req.user.name || 'Someone';
-              const title = '❤️ New Like on your Vibe';
-              const message = `${likerName} liked your vibe.`;
-
-              await Notification.create({
-                title,
-                message,
-                type: 'General',
-                category: 'general',
-                recipient: vibe.author,
-                actionType: 'navigate',
-                actionData: '/vibes'
-              }).catch(() => { });
-
-              await sendTargetedNotification('user', vibe.author, {
-                title,
-                message,
-                type: 'General'
-              }).catch(() => { });
-            } catch (notifErr) {
-              logger.error('[Vibe Like] Notification error:', notifErr);
-            }
-          })();
-        }
+        sendNotification = true;
       } catch (err) {
         if (err.code === 11000) {
+          // Duplicate key: already liked via a concurrent request — treat as liked
           isLiked = true;
-          updatedLikesCount = Math.max(0, Number(vibe.likesCount) || 0);
         } else {
           throw err;
         }
       }
     }
 
+    // Always reconcile the denormalized counter with the source-of-truth.
+    // This fixes any existing drift and prevents future mismatches after
+    // race conditions, retries, or historical bugs.
+    const trueCount = await VibeLike.countDocuments({ vibe: vibeId });
+    await Vibe.findByIdAndUpdate(vibeId, { $set: { likesCount: trueCount } });
+
+    // Fire-and-forget notification (does not block the response)
+    if (sendNotification && vibe.author && vibe.author.toString() !== userId) {
+      (async () => {
+        try {
+          const likerName = req.user.name || 'Someone';
+          const title = '❤️ New Like on your Vibe';
+          const message = `${likerName} liked your vibe.`;
+
+          await Notification.create({
+            title,
+            message,
+            type: 'General',
+            category: 'general',
+            recipient: vibe.author,
+            actionType: 'navigate',
+            actionData: '/vibes'
+          }).catch(() => { });
+
+          await sendTargetedNotification('user', vibe.author, {
+            title,
+            message,
+            type: 'General'
+          }).catch(() => { });
+        } catch (notifErr) {
+          logger.error('[Vibe Like] Notification error:', notifErr);
+        }
+      })();
+    }
+
     res.status(200).json({
       success: true,
       data: {
         isLiked,
-        likesCount: updatedLikesCount
+        likesCount: trueCount
       }
     });
   } catch (error) {
