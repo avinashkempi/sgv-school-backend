@@ -832,10 +832,10 @@ router.get('/admin/subjects-config', [auth, yearContext, requireAdmin], async (r
     }
 });
 
-// @route   PATCH /api/student-ratings/admin/toggle-subject
+// @route   PATCH/POST/PUT /api/student-ratings/admin/toggle-subject
 // @desc    Toggle ratingEnabled for a subject across ALL classes school-wide
 // @access  Private (Admin)
-router.patch('/admin/toggle-subject', [auth, yearContext, requireAdmin], async (req, res) => {
+const toggleSubjectHandler = async (req, res) => {
     try {
         let body = req.body;
         if (typeof body === 'string') {
@@ -869,12 +869,17 @@ router.patch('/admin/toggle-subject', [auth, yearContext, requireAdmin], async (
         console.error('Error toggling subject rating school-wide:', err);
         res.status(500).json({ success: false, message: 'Server error' });
     }
-});
+};
 
-// @route   PATCH /api/student-ratings/admin/subject/:subjectId/toggle-rating
+router.route('/admin/toggle-subject')
+    .patch(auth, yearContext, requireAdmin, toggleSubjectHandler)
+    .post(auth, yearContext, requireAdmin, toggleSubjectHandler)
+    .put(auth, yearContext, requireAdmin, toggleSubjectHandler);
+
+// @route   PATCH/POST/PUT /api/student-ratings/admin/subject/:subjectId/toggle-rating
 // @desc    Toggle ratingEnabled for a subject — updates ALL classes with that subject name
 // @access  Private (Admin)
-router.patch('/admin/subject/:subjectId/toggle-rating', [auth, yearContext, requireAdmin], async (req, res) => {
+const toggleRatingBySubjectIdHandler = async (req, res) => {
     try {
         const { subjectId } = req.params;
         let body = req.body;
@@ -914,7 +919,12 @@ router.patch('/admin/subject/:subjectId/toggle-rating', [auth, yearContext, requ
         console.error('Error toggling subject rating:', err);
         res.status(500).json({ success: false, message: 'Server error' });
     }
-});
+};
+
+router.route('/admin/subject/:subjectId/toggle-rating')
+    .patch(auth, yearContext, requireAdmin, toggleRatingBySubjectIdHandler)
+    .post(auth, yearContext, requireAdmin, toggleRatingBySubjectIdHandler)
+    .put(auth, yearContext, requireAdmin, toggleRatingBySubjectIdHandler);
 
 // @route   POST /api/student-ratings/admin/bulk-configure-ratings
 // @desc    Bulk configure ratingEnabled school-wide (all subjects or list of subject names/ids)
