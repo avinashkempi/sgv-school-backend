@@ -1,0 +1,4 @@
+## 2025-02-15 - [CRITICAL] Fix plaintext password storage
+**Vulnerability:** User passwords were saved in plaintext (the hashing step was disabled "as per request"). A comment explicitly stated `// Hash password before saving disabled as per request` and the code checked passwords via strict equality `candidatePassword === this.password`.
+**Learning:** This is a critical security vulnerability and shouldn't have been left disabled. Although backwards compatibility was needed for existing unhashed passwords, future updates must hash new passwords.
+**Prevention:** Ensured the mongoose `pre('save')` hook utilizes `bcrypt.hash` before storing. For the `comparePassword` method, it first checks if the stored string starts with a bcrypt marker (like `$2a$`, `$2b$`, `$2y$`) and uses `bcrypt.compare`, falling back to strict equality to handle legacy plaintext accounts.
