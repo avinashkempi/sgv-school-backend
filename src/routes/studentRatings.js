@@ -219,7 +219,7 @@ router.get('/subject/:subjectId', [auth, yearContext], async (req, res) => {
             academicYear: req.academicYearContext,
             isActive: true
         })
-            .select('name phone gender regNo')
+            .select('name phone gender regNo profilePhoto')
             .sort({ name: 1 })
             .lean();
 
@@ -266,6 +266,7 @@ router.get('/subject/:subjectId', [auth, yearContext], async (req, res) => {
             name: student.name,
             gender: student.gender,
             regNo: student.regNo,
+            profilePhoto: student.profilePhoto,
             rating: ratingMap[student._id.toString()] || null
         }));
 
@@ -451,7 +452,7 @@ router.get('/class/:classId/summary', [auth, yearContext, requireAdmin], async (
             year,
             academicYear: req.academicYearContext
         })
-            .populate('student', 'name gender regNo')
+            .populate('student', 'name gender regNo profilePhoto')
             .populate('subject', 'name')
             .lean();
 
@@ -469,6 +470,7 @@ router.get('/class/:classId/summary', [auth, yearContext, requireAdmin], async (
         // Group by student
         const studentMap = {};
         ratings.forEach(r => {
+            if (!r.student || !r.student._id) return;
             const sid = r.student._id.toString();
             if (!studentMap[sid]) {
                 studentMap[sid] = {
@@ -484,25 +486,36 @@ router.get('/class/:classId/summary', [auth, yearContext, requireAdmin], async (
                 homeworkClasswork: r.homeworkClasswork,
                 behaviourSocial: r.behaviourSocial,
                 englishComm: r.englishComm,
-                averageScore: r.averageScore
+                averageScore: r.averageScore,
+                isExempt: Boolean(r.isExempt),
+                exemptionReason: r.exemptionReason || '',
+                remarks: r.remarks || ''
             });
-            studentMap[sid].totalAvg += r.averageScore;
-            studentMap[sid].count += 1;
+            if (!r.isExempt && r.averageScore != null && !isNaN(r.averageScore)) {
+                studentMap[sid].totalAvg += r.averageScore;
+                studentMap[sid].count += 1;
+            }
         });
 
-        const students = Object.values(studentMap).map(s => ({
-            student: s.student,
-            overallAverage: parseFloat((s.totalAvg / s.count).toFixed(2)),
-            subjectCount: s.count,
-            subjects: s.subjects
-        }));
+        const students = Object.values(studentMap).map(s => {
+            const overallAverage = s.count > 0 ? parseFloat((s.totalAvg / s.count).toFixed(2)) : 0;
+            return {
+                student: s.student,
+                overallAverage,
+                subjectCount: s.subjects.length,
+                ratedCount: s.count,
+                subjects: s.subjects
+            };
+        });
 
         // Sort by overall average descending
         students.sort((a, b) => b.overallAverage - a.overallAverage);
 
-        // Class-level averages
-        const allAvgs = students.map(s => s.overallAverage);
-        const classAverage = parseFloat((allAvgs.reduce((a, b) => a + b, 0) / allAvgs.length).toFixed(2));
+        // Class-level averages (only from students with valid rated scores)
+        const ratedStudents = students.filter(s => s.overallAverage > 0);
+        const classAverage = ratedStudents.length > 0
+            ? parseFloat((ratedStudents.reduce((a, b) => a + b.overallAverage, 0) / ratedStudents.length).toFixed(2))
+            : null;
 
         res.json({
             success: true,
