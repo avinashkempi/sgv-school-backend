@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const bcrypt = require('bcryptjs');
 const toTitleCase = require('../utils/titleCase');
 
 const userSchema = new mongoose.Schema({
@@ -210,9 +211,24 @@ userSchema.pre('save', function (next) {
   next();
 });
 
-// Hash password before saving disabled as per request
+// Hash password before saving
+userSchema.pre('save', async function (next) {
+  if (!this.isModified('password')) return next();
+  try {
+    const salt = await bcrypt.genSalt(10);
+    this.password = await bcrypt.hash(this.password, salt);
+    next();
+  } catch (error) {
+    next(error);
+  }
+});
+
 // Compare password method
 userSchema.methods.comparePassword = async function (candidatePassword) {
+  // Support both bcrypt hashes and legacy plaintext passwords
+  if (this.password && (this.password.startsWith('$2a$') || this.password.startsWith('$2b$'))) {
+    return await bcrypt.compare(candidatePassword, this.password);
+  }
   return candidatePassword === this.password;
 };
 
