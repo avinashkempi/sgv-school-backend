@@ -67,6 +67,76 @@ const bulkRatingValidation = [
     ...ratingFieldValidation('englishComm', 'English/Subject Communication')
 ];
 
+/**
+ * Validation rules for admin bulk deletion of ratings for a subject in a specific month/year.
+ */
+const adminBulkDeleteValidation = [
+    body('subjectId')
+        .notEmpty()
+        .withMessage('Subject ID is required')
+        .isMongoId()
+        .withMessage('Invalid subject ID'),
+    body('month')
+        .notEmpty()
+        .withMessage('Month is required')
+        .isInt({ min: 1, max: 12 })
+        .withMessage('Month must be between 1 and 12'),
+    body('year')
+        .notEmpty()
+        .withMessage('Year is required')
+        .isInt({ min: 2020, max: 2100 })
+        .withMessage('Year must be between 2020 and 2100'),
+    body('reason')
+        .optional()
+        .isString()
+        .trim()
+        .isLength({ max: 500 })
+        .withMessage('Reason cannot exceed 500 characters')
+];
+
+/**
+ * Validation rules for admin shifting ratings from one month to another.
+ */
+const adminShiftMonthValidation = [
+    body('subjectId')
+        .notEmpty()
+        .withMessage('Subject ID is required')
+        .isMongoId()
+        .withMessage('Invalid subject ID'),
+    body('sourceMonth')
+        .notEmpty()
+        .withMessage('Source month is required')
+        .isInt({ min: 1, max: 12 })
+        .withMessage('Source month must be between 1 and 12'),
+    body('sourceYear')
+        .notEmpty()
+        .withMessage('Source year is required')
+        .isInt({ min: 2020, max: 2100 })
+        .withMessage('Source year must be between 2020 and 2100'),
+    body('targetMonth')
+        .notEmpty()
+        .withMessage('Target month is required')
+        .isInt({ min: 1, max: 12 })
+        .withMessage('Target month must be between 1 and 12'),
+    body('targetYear')
+        .notEmpty()
+        .withMessage('Target year is required')
+        .isInt({ min: 2020, max: 2100 })
+        .withMessage('Target year must be between 2020 and 2100'),
+    body('overwriteTarget')
+        .optional()
+        .isBoolean()
+        .withMessage('overwriteTarget must be a boolean'),
+    body('reason')
+        .optional()
+        .isString()
+        .trim()
+        .isLength({ max: 500 })
+        .withMessage('Reason cannot exceed 500 characters')
+];
+
 module.exports = {
-    bulkRatingValidation
+    bulkRatingValidation,
+    adminBulkDeleteValidation,
+    adminShiftMonthValidation
 };

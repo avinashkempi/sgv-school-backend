@@ -7,8 +7,15 @@ const { yearContext, requireOpenYear } = require('../middleware/yearContext');
 const StudentRating = require('../models/StudentRating');
 const Subject = require('../models/Subject');
 const User = require('../models/User');
-const { bulkRatingValidation } = require('../validations/studentRating');
+const { bulkRatingValidation, adminBulkDeleteValidation, adminShiftMonthValidation } = require('../validations/studentRating');
 const { getISTMonthYear } = require('../utils/dateUtils');
+const { logAudit } = require('../utils/auditLogger');
+const { cacheInvalidatePattern } = require('../config/redis');
+
+const MONTH_NAMES = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'
+];
 
 const hasObjectIdMatch = (ids = [], userId) => ids.some((id) => id && id.toString() === userId);
 
@@ -992,6 +999,227 @@ router.post('/admin/bulk-configure-ratings', [auth, yearContext, requireAdmin], 
     } catch (err) {
         console.error('Error bulk configuring subject ratings:', err);
         res.status(500).json({ success: false, message: 'Server error' });
+    }
+});
+
+// @route   DELETE /api/student-ratings/admin/bulk
+// @desc    Admin bulk deletion of ratings for a subject in a specific month/year
+// @access  Private (Admin / Super Admin)
+router.delete('/admin/bulk', [auth, yearContext, requireOpenYear, requireAdmin, ...adminBulkDeleteValidation], async (req, res) => {
+    try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({ success: false, message: 'Validation failed', errors: errors.array() });
+        }
+
+        let body = req.body;
+        if (typeof body === 'string') {
+            try { body = JSON.parse(body); } catch (_) {}
+        }
+        const { subjectId, month, year, reason = '' } = body || {};
+        const parsedMonth = parseInt(month, 10);
+        const parsedYear = parseInt(year, 10);
+
+        const subject = await Subject.findById(subjectId).populate('class', 'value label name section branch');
+        if (!subject) {
+            return res.status(404).json({ success: false, message: 'Subject not found' });
+        }
+
+        const filter = {
+            subject: new mongoose.Types.ObjectId(subjectId),
+            month: parsedMonth,
+            year: parsedYear,
+            academicYear: new mongoose.Types.ObjectId(req.academicYearContext)
+        };
+
+        const existingCount = await StudentRating.countDocuments(filter);
+        if (existingCount === 0) {
+            return res.status(404).json({
+                success: false,
+                message: `No ratings found for ${subject.name} in ${MONTH_NAMES[parsedMonth - 1] || parsedMonth} ${parsedYear}`
+            });
+        }
+
+        const deleteResult = await StudentRating.deleteMany(filter);
+
+        // Audit Log
+        await logAudit({
+            req,
+            action: 'RATINGS_BULK_DELETE',
+            entityType: 'StudentRating',
+            entityId: subject._id,
+            details: {
+                subjectId: subject._id,
+                subjectName: subject.name,
+                classId: subject.class?._id,
+                className: subject.class?.label || subject.class?.name,
+                month: parsedMonth,
+                year: parsedYear,
+                deletedCount: deleteResult.deletedCount,
+                reason
+            }
+        });
+
+        // Invalidate Redis cache if available
+        try {
+            await cacheInvalidatePattern('ratings:*');
+            await cacheInvalidatePattern('student-ratings:*');
+        } catch (_) {}
+
+        return res.json({
+            success: true,
+            message: `Successfully deleted ${deleteResult.deletedCount} rating(s) for ${subject.name} (${MONTH_NAMES[parsedMonth - 1] || parsedMonth} ${parsedYear}).`,
+            data: {
+                deletedCount: deleteResult.deletedCount,
+                subjectId,
+                subjectName: subject.name,
+                classId: subject.class?._id,
+                month: parsedMonth,
+                year: parsedYear
+            }
+        });
+    } catch (err) {
+        console.error('Error bulk deleting student ratings:', err);
+        return res.status(500).json({ success: false, message: 'Server error while deleting ratings' });
+    }
+});
+
+// @route   POST /api/student-ratings/admin/shift-month
+// @desc    Admin correction: Move ratings from mistaken source month to target month
+// @access  Private (Admin / Super Admin)
+router.post('/admin/shift-month', [auth, yearContext, requireOpenYear, requireAdmin, ...adminShiftMonthValidation], async (req, res) => {
+    try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({ success: false, message: 'Validation failed', errors: errors.array() });
+        }
+
+        let body = req.body;
+        if (typeof body === 'string') {
+            try { body = JSON.parse(body); } catch (_) {}
+        }
+        const {
+            subjectId,
+            sourceMonth,
+            sourceYear,
+            targetMonth,
+            targetYear,
+            overwriteTarget = false,
+            reason = ''
+        } = body || {};
+
+        const sMonth = parseInt(sourceMonth, 10);
+        const sYear = parseInt(sourceYear, 10);
+        const tMonth = parseInt(targetMonth, 10);
+        const tYear = parseInt(targetYear, 10);
+
+        if (sMonth === tMonth && sYear === tYear) {
+            return res.status(400).json({
+                success: false,
+                message: 'Source month/year and target month/year cannot be identical'
+            });
+        }
+
+        // Prevent moving to future months
+        const istNow = getISTMonthYear();
+        if (tYear > istNow.year || (tYear === istNow.year && tMonth > istNow.month)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Cannot move ratings to a future month.'
+            });
+        }
+
+        const subject = await Subject.findById(subjectId).populate('class', 'value label name section branch');
+        if (!subject) {
+            return res.status(404).json({ success: false, message: 'Subject not found' });
+        }
+
+        const sourceFilter = {
+            subject: new mongoose.Types.ObjectId(subjectId),
+            month: sMonth,
+            year: sYear,
+            academicYear: new mongoose.Types.ObjectId(req.academicYearContext)
+        };
+
+        const sourceCount = await StudentRating.countDocuments(sourceFilter);
+        if (sourceCount === 0) {
+            return res.status(404).json({
+                success: false,
+                message: `No ratings found in source period (${MONTH_NAMES[sMonth - 1] || sMonth} ${sYear}) to move.`
+            });
+        }
+
+        const targetFilter = {
+            subject: new mongoose.Types.ObjectId(subjectId),
+            month: tMonth,
+            year: tYear,
+            academicYear: new mongoose.Types.ObjectId(req.academicYearContext)
+        };
+
+        const targetCount = await StudentRating.countDocuments(targetFilter);
+        if (targetCount > 0 && !overwriteTarget) {
+            return res.status(409).json({
+                success: false,
+                hasConflict: true,
+                message: `Target period (${MONTH_NAMES[tMonth - 1] || tMonth} ${tYear}) already contains ${targetCount} rating(s). Enable overwrite to replace them.`,
+                targetCount
+            });
+        }
+
+        // If overwriteTarget is true and target has ratings, remove target ratings first to avoid duplicate key conflicts
+        if (targetCount > 0 && overwriteTarget) {
+            await StudentRating.deleteMany(targetFilter);
+        }
+
+        // Atomically update source ratings to target month/year
+        const updateResult = await StudentRating.updateMany(sourceFilter, {
+            $set: {
+                month: tMonth,
+                year: tYear,
+                lastModifiedBy: new mongoose.Types.ObjectId(req.user.userId),
+                updatedAt: new Date()
+            }
+        });
+
+        // Audit Log
+        await logAudit({
+            req,
+            action: 'RATINGS_MONTH_SHIFT',
+            entityType: 'StudentRating',
+            entityId: subject._id,
+            details: {
+                subjectId: subject._id,
+                subjectName: subject.name,
+                classId: subject.class?._id,
+                className: subject.class?.label || subject.class?.name,
+                from: { month: sMonth, year: sYear },
+                to: { month: tMonth, year: tYear },
+                movedCount: updateResult.modifiedCount,
+                overwrittenCount: targetCount > 0 && overwriteTarget ? targetCount : 0,
+                reason
+            }
+        });
+
+        // Invalidate Redis cache
+        try {
+            await cacheInvalidatePattern('ratings:*');
+            await cacheInvalidatePattern('student-ratings:*');
+        } catch (_) {}
+
+        return res.json({
+            success: true,
+            message: `Successfully moved ${updateResult.modifiedCount} rating(s) from ${MONTH_NAMES[sMonth - 1] || sMonth} ${sYear} to ${MONTH_NAMES[tMonth - 1] || tMonth} ${tYear}.`,
+            data: {
+                movedCount: updateResult.modifiedCount,
+                from: { month: sMonth, year: sYear },
+                to: { month: tMonth, year: tYear },
+                subjectId: subject._id,
+                subjectName: subject.name
+            }
+        });
+    } catch (err) {
+        console.error('Error shifting student ratings month:', err);
+        return res.status(500).json({ success: false, message: 'Server error while shifting ratings month' });
     }
 });
 
