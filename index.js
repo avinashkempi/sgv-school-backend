@@ -1,3 +1,5 @@
+// Force global timezone for school operations in Karnataka, India (IST, UTC+5:30)
+process.env.TZ = process.env.TZ || 'Asia/Kolkata';
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');

@@ -9,7 +9,13 @@ const Class = require('../models/Class');
 const Exam = require('../models/Exam');
 const AcademicYear = require('../models/AcademicYear');
 const Subject = require('../models/Subject');
-const { getISTDateString } = require('../utils/dateUtils');
+const {
+    getISTDateString,
+    getISTDayBounds,
+    getISTMonthBounds,
+    getISTMonthYear,
+    isISTSunday
+} = require('../utils/dateUtils');
 const { cacheGet, cacheSet, cacheInvalidatePattern } = require('../config/redis');
 
 /**
@@ -82,43 +88,54 @@ const adminStatsCache = new BoundedCache(50, MEMORY_CACHE_TTL);
 const teacherStatsCache = new BoundedCache(200, MEMORY_CACHE_TTL);
 const studentStatsCache = new BoundedCache(500, MEMORY_CACHE_TTL);
 
-// Helper to calculate date range
+// Helper to calculate date range in Asia/Kolkata
 const getDateRange = (range) => {
-    const now = new Date();
-    let startDate, endDate = new Date(now);
+    const { year: curYear, month: curMonth } = getISTMonthYear();
+    const { startOfDay: todayStart, endOfDay: todayEnd } = getISTDayBounds();
+
+    let startDate;
+    let endDate = todayEnd;
 
     switch (range) {
         case 'today':
-            startDate = new Date(now);
-            startDate.setHours(0, 0, 0, 0);
-            endDate = new Date(now);
-            endDate.setHours(23, 59, 59, 999);
+            startDate = todayStart;
+            endDate = todayEnd;
             break;
         case 'thisWeek': {
-            const startOfWeek = new Date(now);
-            startOfWeek.setDate(now.getDate() - now.getDay());
-            startOfWeek.setHours(0, 0, 0, 0);
-            startDate = startOfWeek;
+            // Monday as start of week in IST
+            const dateStr = getISTDateString();
+            const refDate = new Date(`${dateStr}T12:00:00+05:30`);
+            const dayOfWeek = refDate.getDay(); // 0 is Sun, 1 is Mon...
+            const diffToMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+            const mondayTimestamp = refDate.getTime() - diffToMonday * 24 * 60 * 60 * 1000;
+            const mondayStr = getISTDateString(new Date(mondayTimestamp));
+            startDate = getISTDayBounds(mondayStr).startOfDay;
+            endDate = todayEnd;
             break;
         }
         case 'last30Days':
-            startDate = new Date(now);
-            startDate.setDate(now.getDate() - 30);
+            startDate = new Date(todayStart.getTime() - 29 * 24 * 60 * 60 * 1000);
+            endDate = todayEnd;
             break;
         case 'thisYear':
-            startDate = new Date(now.getFullYear(), 0, 1);
+            startDate = new Date(`${curYear}-01-01T00:00:00+05:30`);
+            endDate = todayEnd;
             break;
         case 'lastYear':
-            startDate = new Date(now.getFullYear() - 1, 0, 1);
-            endDate = new Date(now.getFullYear() - 1, 11, 31);
+            startDate = new Date(`${curYear - 1}-01-01T00:00:00+05:30`);
+            endDate = new Date(`${curYear - 1}-12-31T23:59:59.999+05:30`);
             break;
         case 'allTime':
-            startDate = new Date(2020, 0, 1);
+            startDate = new Date('2020-01-01T00:00:00+05:30');
+            endDate = todayEnd;
             break;
         case 'thisMonth':
-        default:
-            startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+        default: {
+            const monthBounds = getISTMonthBounds(curYear, curMonth);
+            startDate = monthBounds.startOfMonth;
+            endDate = todayEnd;
             break;
+        }
     }
 
     return { startDate, endDate };
@@ -148,10 +165,8 @@ exports.getAdminStats = async (req, res) => {
 
         const { startDate, endDate } = getDateRange(range);
 
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const tomorrow = new Date(today);
-        tomorrow.setDate(tomorrow.getDate() + 1);
+        const { startOfDay: today } = getISTDayBounds();
+        const tomorrow = new Date(today.getTime() + 24 * 60 * 60 * 1000);
 
         // Get previous period for trend calculation
         const periodDuration = endDate - startDate;
@@ -408,8 +423,7 @@ exports.getTeacherStats = async (req, res) => {
             }
         } catch (_) {}
 
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
+        const { startOfDay: today } = getISTDayBounds();
         const currentDay = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Kolkata', weekday: 'long' }).format(new Date());
 
         const activeYear = req.activeYear || (req.academicYearContext ? { _id: req.academicYearContext } : await AcademicYear.findOne({ isActive: true }).lean());
@@ -523,20 +537,20 @@ exports.getTeacherStats = async (req, res) => {
                 return pct < 90;
             }).length;
 
-            // 5. Attendance Trend — Last 7 working days
+            // 5. Attendance Trend — Last 7 working days in IST
             const trendDays = [];
-            let d = new Date(today);
+            let checkTime = today.getTime();
             while (trendDays.length < 7) {
-                d.setDate(d.getDate() - 1);
-                if (d.getDay() !== 0) { // Skip Sunday
-                    trendDays.push(new Date(d));
+                checkTime -= 24 * 60 * 60 * 1000;
+                const dStr = getISTDateString(new Date(checkTime));
+                if (!isISTSunday(dStr)) {
+                    trendDays.push(getISTDayBounds(dStr).startOfDay);
                 }
             }
             trendDays.reverse(); // oldest first
 
             const trendStart = trendDays[0];
-            const trendEnd = new Date(today);
-            trendEnd.setHours(23, 59, 59, 999);
+            const trendEnd = getISTDayBounds(today).endOfDay;
 
             const trendFilter = {
                 user: { $in: studentIds },
@@ -843,24 +857,30 @@ exports.getStudentStats = async (req, res) => {
                 status: 'present',
                 date: { $gte: ayStart, $lte: ayEnd }
             }),
-            // Previous month for trend
-            Attendance.countDocuments({
-                user: studentId,
-                role: 'student',
-                date: {
-                    $gte: new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1),
-                    $lt: new Date(new Date().getFullYear(), new Date().getMonth(), 1)
-                }
-            }),
-            Attendance.countDocuments({
-                user: studentId,
-                role: 'student',
-                status: 'present',
-                date: {
-                    $gte: new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1),
-                    $lt: new Date(new Date().getFullYear(), new Date().getMonth(), 1)
-                }
-            }),
+            // Previous month for trend (in IST)
+            (() => {
+                const { year: curY, month: curM } = getISTMonthYear();
+                const prevY = curM === 1 ? curY - 1 : curY;
+                const prevM = curM === 1 ? 12 : curM - 1;
+                const { startOfMonth, endOfMonth } = getISTMonthBounds(prevY, prevM);
+                return Attendance.countDocuments({
+                    user: studentId,
+                    role: 'student',
+                    date: { $gte: startOfMonth, $lte: endOfMonth }
+                });
+            })(),
+            (() => {
+                const { year: curY, month: curM } = getISTMonthYear();
+                const prevY = curM === 1 ? curY - 1 : curY;
+                const prevM = curM === 1 ? 12 : curM - 1;
+                const { startOfMonth, endOfMonth } = getISTMonthBounds(prevY, prevM);
+                return Attendance.countDocuments({
+                    user: studentId,
+                    role: 'student',
+                    status: 'present',
+                    date: { $gte: startOfMonth, $lte: endOfMonth }
+                });
+            })(),
             // Fee record - total pending irrespective of date
             require('../models/StudentFee').findOne({
                 student: studentId,
@@ -905,8 +925,7 @@ exports.getStudentStats = async (req, res) => {
             ]),
             // Next exam filtered to student's class
             (() => {
-                const todayStart = new Date();
-                todayStart.setHours(0, 0, 0, 0);
+                const { startOfDay: todayStart } = getISTDayBounds();
                 const query = {
                     $or: [
                         { date: { $gte: todayStart } },

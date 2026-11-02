@@ -8,6 +8,7 @@ const StudentRating = require('../models/StudentRating');
 const Subject = require('../models/Subject');
 const User = require('../models/User');
 const { bulkRatingValidation } = require('../validations/studentRating');
+const { getISTMonthYear } = require('../utils/dateUtils');
 
 const hasObjectIdMatch = (ids = [], userId) => ids.some((id) => id && id.toString() === userId);
 
@@ -57,10 +58,10 @@ const canAccessStudentRatings = async (callerUser, targetStudentId, academicYear
 router.get('/my-subjects', [auth, yearContext, checkRole(['teacher', 'staff', 'support_staff', 'admin', 'super admin'])], async (req, res) => {
     try {
         const userId = req.user.userId;
-        const month = parseInt(req.query.month) || new Date().getMonth() + 1;
-        const year = parseInt(req.query.year) || new Date().getFullYear();
-        const now = new Date();
-        const isPastMonth = year < now.getFullYear() || (year === now.getFullYear() && month < (now.getMonth() + 1));
+        const istNow = getISTMonthYear();
+        const month = parseInt(req.query.month) || istNow.month;
+        const year = parseInt(req.query.year) || istNow.year;
+        const isPastMonth = year < istNow.year || (year === istNow.year && month < istNow.month);
 
         // Get all subjects this teacher teaches in the current academic year that are enabled for ratings
         let subjects = await Subject.find({
@@ -137,24 +138,30 @@ router.get('/my-subjects', [auth, yearContext, checkRole(['teacher', 'staff', 's
             studentCountMap[sc._id.toString()] = sc.count;
         });
 
-        // Build response
-        const subjectsWithStatus = subjects.map(subject => {
-            const classId = subject.class._id.toString();
-            const totalStudents = studentCountMap[classId] || 0;
-            const rData = ratingCountMap[subject._id.toString()] || { count: 0, submittedBy: [] };
-            const ratedCount = rData.count;
-            const isCompleted = totalStudents > 0 && ratedCount >= totalStudents;
-            const status = isCompleted ? 'submitted' : (isPastMonth ? 'missed' : 'pending');
+        // Build response (filter out empty classes with 0 students and 0 ratings)
+        const subjectsWithStatus = subjects
+            .filter(subject => {
+                const totalStudents = studentCountMap[subject.class._id.toString()] || 0;
+                const rData = ratingCountMap[subject._id.toString()] || { count: 0, submittedBy: [] };
+                return totalStudents > 0 || rData.count > 0;
+            })
+            .map(subject => {
+                const classId = subject.class._id.toString();
+                const totalStudents = studentCountMap[classId] || 0;
+                const rData = ratingCountMap[subject._id.toString()] || { count: 0, submittedBy: [] };
+                const ratedCount = rData.count;
+                const isCompleted = totalStudents > 0 && ratedCount >= totalStudents;
+                const status = isCompleted ? 'submitted' : (isPastMonth ? 'missed' : 'pending');
 
-            return {
-                _id: subject._id,
-                name: subject.name,
-                class: subject.class,
-                totalStudents,
-                ratedCount,
-                status
-            };
-        });
+                return {
+                    _id: subject._id,
+                    name: subject.name,
+                    class: subject.class,
+                    totalStudents,
+                    ratedCount,
+                    status
+                };
+            });
 
         const completed = subjectsWithStatus.filter(s => s.status === 'submitted').length;
         const missed = subjectsWithStatus.filter(s => s.status === 'missed').length;
@@ -185,8 +192,9 @@ router.get('/my-subjects', [auth, yearContext, checkRole(['teacher', 'staff', 's
 router.get('/subject/:subjectId', [auth, yearContext], async (req, res) => {
     try {
         const { subjectId } = req.params;
-        const month = parseInt(req.query.month) || new Date().getMonth() + 1;
-        const year = parseInt(req.query.year) || new Date().getFullYear();
+        const defaultMY = getISTMonthYear();
+        const month = parseInt(req.query.month) || defaultMY.month;
+        const year = parseInt(req.query.year) || defaultMY.year;
         const userId = req.user.userId;
         const userRole = req.user.role;
 
@@ -316,10 +324,8 @@ router.post('/bulk', [auth, yearContext, requireOpenYear, ...bulkRatingValidatio
         const userRole = req.user.role;
 
         // Prevent ratings for future months
-        const now = new Date();
-        const currentMonth = now.getMonth() + 1;
-        const currentYear = now.getFullYear();
-        if (year > currentYear || (year === currentYear && month > currentMonth)) {
+        const istNow = getISTMonthYear();
+        if (year > istNow.year || (year === istNow.year && month > istNow.month)) {
             return res.status(400).json({
                 success: false,
                 message: 'Cannot submit ratings for future months.'
@@ -443,8 +449,9 @@ router.post('/bulk', [auth, yearContext, requireOpenYear, ...bulkRatingValidatio
 router.get('/class/:classId/summary', [auth, yearContext, requireAdmin], async (req, res) => {
     try {
         const { classId } = req.params;
-        const month = parseInt(req.query.month) || new Date().getMonth() + 1;
-        const year = parseInt(req.query.year) || new Date().getFullYear();
+        const defaultMY = getISTMonthYear();
+        const month = parseInt(req.query.month) || defaultMY.month;
+        const year = parseInt(req.query.year) || defaultMY.year;
 
         const ratings = await StudentRating.find({
             class: classId,
@@ -543,8 +550,9 @@ router.get('/class/:classId/summary', [auth, yearContext, requireAdmin], async (
 router.get('/my-ratings', [auth, yearContext, checkRole(['student'])], async (req, res) => {
     try {
         const studentId = req.user.userId;
-        const month = parseInt(req.query.month) || new Date().getMonth() + 1;
-        const year = parseInt(req.query.year) || new Date().getFullYear();
+        const defaultMY = getISTMonthYear();
+        const month = parseInt(req.query.month) || defaultMY.month;
+        const year = parseInt(req.query.year) || defaultMY.year;
 
         // 1. Fetch student info to know their current class
         const student = await User.findById(studentId).select('name gender regNo currentClass').lean();
@@ -1088,8 +1096,9 @@ router.get('/student/:studentId/trend', [auth, yearContext], async (req, res) =>
 router.get('/student/:studentId/details', [auth, yearContext], async (req, res) => {
     try {
         const { studentId } = req.params;
-        const month = parseInt(req.query.month) || new Date().getMonth() + 1;
-        const year = parseInt(req.query.year) || new Date().getFullYear();
+        const defaultMY = getISTMonthYear();
+        const month = parseInt(req.query.month) || defaultMY.month;
+        const year = parseInt(req.query.year) || defaultMY.year;
 
         // Security check: prevent cross-role student rating leaks
         const authorized = await canAccessStudentRatings(req.user, studentId, req.academicYearContext);
@@ -1167,8 +1176,9 @@ router.get('/student/:studentId/details', [auth, yearContext], async (req, res) 
 // @access  Private (Admin)
 router.get('/school/summary', [auth, yearContext, requireAdmin], async (req, res) => {
     try {
-        const month = parseInt(req.query.month) || new Date().getMonth() + 1;
-        const year = parseInt(req.query.year) || new Date().getFullYear();
+        const defaultMY = getISTMonthYear();
+        const month = parseInt(req.query.month) || defaultMY.month;
+        const year = parseInt(req.query.year) || defaultMY.year;
 
         const classAverages = await StudentRating.aggregate([
             {
@@ -1248,8 +1258,9 @@ router.get('/school/summary', [auth, yearContext, requireAdmin], async (req, res
 // @access  Private (Admin)
 router.get('/school/movers', [auth, yearContext, requireAdmin], async (req, res) => {
     try {
-        const month = parseInt(req.query.month) || new Date().getMonth() + 1;
-        const year = parseInt(req.query.year) || new Date().getFullYear();
+        const defaultMY = getISTMonthYear();
+        const month = parseInt(req.query.month) || defaultMY.month;
+        const year = parseInt(req.query.year) || defaultMY.year;
         const classId = req.query.classId; // Optional class filter
 
         // Calculate previous month
@@ -1388,10 +1399,10 @@ router.get('/school/movers', [auth, yearContext, requireAdmin], async (req, res)
 // @access  Private (Admin)
 router.get('/tracker', [auth, yearContext, requireAdmin], async (req, res) => {
     try {
-        const month = parseInt(req.query.month) || new Date().getMonth() + 1;
-        const year = parseInt(req.query.year) || new Date().getFullYear();
-        const now = new Date();
-        const isPastMonth = year < now.getFullYear() || (year === now.getFullYear() && month < (now.getMonth() + 1));
+        const istNow = getISTMonthYear();
+        const month = parseInt(req.query.month) || istNow.month;
+        const year = parseInt(req.query.year) || istNow.year;
+        const isPastMonth = year < istNow.year || (year === istNow.year && month < istNow.month);
 
         // Get all subjects for the academic year with their teachers and classes (ONLY ratable subjects)
         const allSubjects = await Subject.find({
@@ -1450,11 +1461,18 @@ router.get('/tracker', [auth, yearContext, requireAdmin], async (req, res) => {
             };
         });
 
+        // Filter out empty classes (0 students and 0 ratings) to avoid false misses
+        const ratableSubjects = validSubjects.filter(s => {
+            const studentCount = studentCountMap[s.class._id.toString()] || 0;
+            const rData = subjectRatingMap[s._id.toString()];
+            return studentCount > 0 || (rData && rData.count > 0);
+        });
+
         // Build teacher-wise view and class-wise view
         const teacherMap = {};
         const classMap = {};
 
-        validSubjects.forEach(subject => {
+        ratableSubjects.forEach(subject => {
             const classIdStr = subject.class._id.toString();
             const totalStudents = studentCountMap[classIdStr] || 0;
             const rData = subjectRatingMap[subject._id.toString()] || { count: 0, teachers: [] };
@@ -1536,8 +1554,8 @@ router.get('/tracker', [auth, yearContext, requireAdmin], async (req, res) => {
             return (a.class.label || '').localeCompare(b.class.label || '');
         });
 
-        const totalSubjects = validSubjects.length;
-        const totalCompleted = validSubjects.filter(s => {
+        const totalSubjects = ratableSubjects.length;
+        const totalCompleted = ratableSubjects.filter(s => {
             const totalStudents = studentCountMap[s.class._id.toString()] || 0;
             const ratedCount = (subjectRatingMap[s._id.toString()] || {}).count || 0;
             return totalStudents > 0 && ratedCount >= totalStudents;
@@ -1576,10 +1594,10 @@ router.get('/tracker', [auth, yearContext, requireAdmin], async (req, res) => {
 router.get('/tracker/my-status', [auth, yearContext, checkRole(['teacher', 'staff', 'support_staff', 'admin', 'super admin'])], async (req, res) => {
     try {
         const userId = req.user.userId;
-        const month = parseInt(req.query.month) || new Date().getMonth() + 1;
-        const year = parseInt(req.query.year) || new Date().getFullYear();
-        const now = new Date();
-        const isPastMonth = year < now.getFullYear() || (year === now.getFullYear() && month < (now.getMonth() + 1));
+        const istNow = getISTMonthYear();
+        const month = parseInt(req.query.month) || istNow.month;
+        const year = parseInt(req.query.year) || istNow.year;
+        const isPastMonth = year < istNow.year || (year === istNow.year && month < istNow.month);
 
         // Get subjects this teacher teaches that have ratings enabled
         let subjects = await Subject.find({
@@ -1633,24 +1651,30 @@ router.get('/tracker/my-status', [auth, yearContext, checkRole(['teacher', 'staf
         let missed = 0;
         let pending = 0;
 
-        const subjectStatuses = subjects.map(subject => {
-            const totalStudents = studentCountMap[subject.class._id.toString()] || 0;
-            const ratedCount = ratingCountMap[subject._id.toString()] || 0;
-            const isCompleted = totalStudents > 0 && ratedCount >= totalStudents;
-            const status = isCompleted ? 'submitted' : (isPastMonth ? 'missed' : 'pending');
+        const subjectStatuses = subjects
+            .filter(subject => {
+                const totalStudents = studentCountMap[subject.class._id.toString()] || 0;
+                const ratedCount = ratingCountMap[subject._id.toString()] || 0;
+                return totalStudents > 0 || ratedCount > 0;
+            })
+            .map(subject => {
+                const totalStudents = studentCountMap[subject.class._id.toString()] || 0;
+                const ratedCount = ratingCountMap[subject._id.toString()] || 0;
+                const isCompleted = totalStudents > 0 && ratedCount >= totalStudents;
+                const status = isCompleted ? 'submitted' : (isPastMonth ? 'missed' : 'pending');
 
-            if (isCompleted) completed += 1;
-            else if (isPastMonth) missed += 1;
-            else pending += 1;
+                if (isCompleted) completed += 1;
+                else if (isPastMonth) missed += 1;
+                else pending += 1;
 
-            return {
-                subject: { _id: subject._id, name: subject.name },
-                class: subject.class,
-                totalStudents,
-                ratedCount,
-                status
-            };
-        });
+                return {
+                    subject: { _id: subject._id, name: subject.name },
+                    class: subject.class,
+                    totalStudents,
+                    ratedCount,
+                    status
+                };
+            });
 
         res.json({
             success: true,

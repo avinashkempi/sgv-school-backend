@@ -7,7 +7,9 @@ const Attendance = require('../models/Attendance');
 const User = require('../models/User');
 const {
     getISTDateString,
-    validateAttendanceDate
+    validateAttendanceDate,
+    getISTMonthBounds,
+    getISTDayBounds
 } = require('../utils/dateUtils');
 
 // @route   POST /api/attendance/bulk-quick-mark
@@ -94,11 +96,7 @@ router.get('/calendar/:classId', auth, async (req, res) => {
         const { classId } = req.params;
         const { month, year } = req.query;
 
-        const targetMonth = month ? parseInt(month) - 1 : new Date().getMonth();
-        const targetYear = year ? parseInt(year) : new Date().getFullYear();
-
-        const startDate = new Date(targetYear, targetMonth, 1);
-        const endDate = new Date(targetYear, targetMonth + 1, 0, 23, 59, 59);
+        const { startOfMonth: startDate, endOfMonth: endDate, year: targetYear, month: targetMonth } = getISTMonthBounds(year, month);
 
         const attendance = await Attendance.find({
             class: classId,
@@ -139,7 +137,7 @@ router.get('/calendar/:classId', auth, async (req, res) => {
             success: true,
             calendarData,
             studentCount,
-            month: targetMonth + 1,
+            month: targetMonth,
             year: targetYear
         });
     } catch (err) {
@@ -155,9 +153,8 @@ router.get('/low-attendance-alerts', auth, async (req, res) => {
     try {
         const { classId, threshold = 90, days = 30 } = req.query;
 
-        const startDate = new Date();
-        startDate.setDate(startDate.getDate() - parseInt(days));
-        startDate.setHours(0, 0, 0, 0);
+        const daysNum = Math.max(1, parseInt(days, 10) || 30);
+        const { startOfDay: startDate } = getISTDayBounds(new Date(Date.now() - (daysNum - 1) * 24 * 60 * 60 * 1000));
 
         if (classId) {
             if (!(await canAccessClass(req.user, classId))) {

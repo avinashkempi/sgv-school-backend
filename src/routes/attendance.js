@@ -327,8 +327,14 @@ router.get('/my-attendance', [auth, yearContext], async (req, res) => {
 
         if (startDate || endDate) {
             filter.date = {};
-            if (startDate) filter.date.$gte = new Date(startDate).setHours(0, 0, 0, 0);
-            if (endDate) filter.date.$lte = new Date(endDate).setHours(23, 59, 59, 999);
+            if (startDate) {
+                const { startOfDay } = getISTDayBounds(startDate);
+                filter.date.$gte = startOfDay;
+            }
+            if (endDate) {
+                const { endOfDay } = getISTDayBounds(endDate);
+                filter.date.$lte = endOfDay;
+            }
         }
 
         // Fetch all records for accurate summary stats
@@ -347,7 +353,7 @@ router.get('/my-attendance', [auth, yearContext], async (req, res) => {
         const monthlyStats = {};
         allAttendance.forEach(record => {
             const date = new Date(record.date);
-            const monthKey = date.toLocaleString('default', { month: 'long', year: 'numeric' });
+            const monthKey = date.toLocaleString('default', { month: 'long', year: 'numeric', timeZone: 'Asia/Kolkata' });
 
             if (!monthlyStats[monthKey]) {
                 monthlyStats[monthKey] = { total: 0, present: 0 };
@@ -460,7 +466,7 @@ router.get('/student/:studentId/summary', [auth, yearContext], async (req, res) 
         const monthlyStats = {};
         allAttendance.forEach(record => {
             const date = new Date(record.date);
-            const monthKey = date.toLocaleString('default', { month: 'long', year: 'numeric' });
+            const monthKey = date.toLocaleString('default', { month: 'long', year: 'numeric', timeZone: 'Asia/Kolkata' });
 
             if (!monthlyStats[monthKey]) {
                 monthlyStats[monthKey] = { month: monthKey, total: 0, present: 0 };
@@ -516,8 +522,14 @@ router.get('/student/:studentId', [auth, yearContext], async (req, res) => {
 
         if (startDate || endDate) {
             filter.date = {};
-            if (startDate) filter.date.$gte = new Date(startDate).setHours(0, 0, 0, 0);
-            if (endDate) filter.date.$lte = new Date(endDate).setHours(23, 59, 59, 999);
+            if (startDate) {
+                const { startOfDay } = getISTDayBounds(startDate);
+                filter.date.$gte = startOfDay;
+            }
+            if (endDate) {
+                const { endOfDay } = getISTDayBounds(endDate);
+                filter.date.$lte = endOfDay;
+            }
         }
 
         if (subject) filter.subject = subject;

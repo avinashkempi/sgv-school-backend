@@ -11,6 +11,7 @@ const Class = require('../models/Class');
 const AcademicYear = require('../models/AcademicYear');
 const { sendTargetedNotification } = require('../services/notificationService');
 const { invalidateDashboardCaches } = require('../controllers/dashboardController');
+const { getISTDayBounds } = require('../utils/dateUtils');
 
 const hasObjectIdMatch = (ids = [], userId) => ids.some((id) => id && id.toString() === userId);
 
@@ -496,7 +497,7 @@ router.get('/schedule/class/:classId', [auth, yearContext], async (req, res) => 
 router.get('/history', [auth, yearContext], async (req, res) => {
     try {
         const user = await User.findById(req.user.userId);
-        const today = new Date(); today.setHours(0, 0, 0, 0);
+        const { startOfDay: today } = getISTDayBounds();
         let query = { date: { $lt: today }, academicYear: req.academicYearContext, isStandardized: true };
         if (user.role === 'teacher' || user.role === 'staff') query.createdBy = req.user.userId;
         const exams = await Exam.find(query).populate('class subject createdBy').sort({ date: -1 }).lean();

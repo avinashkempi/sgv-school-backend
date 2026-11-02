@@ -13,6 +13,13 @@ const { sendTargetedNotification } = require('./notificationService');
 const logger = require('../utils/logger');
 const toTitleCase = require('../utils/titleCase');
 const { runFeeSync } = require('./feeSyncService');
+const {
+    getISTDayBounds,
+    getISTTomorrowBounds,
+    getISTDateComponents,
+    formatISTDate,
+    IST_OFFSET_MS
+} = require('../utils/dateUtils');
 
 // ─────────────────────────────────────────────────────────────
 // Helpers & Audit Logging
@@ -50,79 +57,21 @@ async function getCronLogs(options = {}) {
         .lean();
 }
 
-/** Return { startOfDay, endOfDay } in UTC for the current IST date. */
-function getISTDayBounds() {
-    // IST = UTC+5:30 → offset in ms
-    const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
-    const nowUTC = Date.now();
-    const istNow = new Date(nowUTC + IST_OFFSET_MS);
-
-    const startOfDay = new Date(Date.UTC(
-        istNow.getUTCFullYear(),
-        istNow.getUTCMonth(),
-        istNow.getUTCDate(),
-        0, 0, 0, 0
-    ));
-    startOfDay.setTime(startOfDay.getTime() - IST_OFFSET_MS); // convert back to UTC
-
-    const endOfDay = new Date(startOfDay.getTime() + 24 * 60 * 60 * 1000 - 1);
-
-    return { startOfDay, endOfDay };
-}
-
-/** Return { startOfDay, endOfDay } in UTC for *tomorrow* in IST. */
-function getISTTomorrowBounds() {
-    const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
-    const nowUTC = Date.now();
-    const istNow = new Date(nowUTC + IST_OFFSET_MS);
-
-    const tomorrow = new Date(Date.UTC(
-        istNow.getUTCFullYear(),
-        istNow.getUTCMonth(),
-        istNow.getUTCDate() + 1,
-        0, 0, 0, 0
-    ));
-    tomorrow.setTime(tomorrow.getTime() - IST_OFFSET_MS);
-
-    const endOfTomorrow = new Date(tomorrow.getTime() + 24 * 60 * 60 * 1000 - 1);
-
-    return { startOfDay: tomorrow, endOfDay: endOfTomorrow };
-}
-
 /** Get current IST hour (0-23) reliably using offset math. */
 function getISTHour() {
-    const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
     const istNow = new Date(Date.now() + IST_OFFSET_MS);
     return istNow.getUTCHours();
 }
 
 /** Get current IST day of month (1-31) reliably using offset math. */
 function getISTDate() {
-    const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
     const istNow = new Date(Date.now() + IST_OFFSET_MS);
     return istNow.getUTCDate();
 }
 
-/** Get current IST date components reliably using offset math. */
-function getISTDateComponents() {
-    const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
-    const istNow = new Date(Date.now() + IST_OFFSET_MS);
-    return {
-        year: istNow.getUTCFullYear(),
-        month: istNow.getUTCMonth() + 1,
-        day: istNow.getUTCDate(),
-    };
-}
-
 /** Format a Date object into a readable string like "15 Aug 2026" */
 function formatDate(date) {
-    const d = new Date(date);
-    return d.toLocaleDateString('en-IN', {
-        day: 'numeric',
-        month: 'short',
-        year: 'numeric',
-        timeZone: 'Asia/Kolkata'
-    });
+    return formatISTDate(date);
 }
 
 // ─────────────────────────────────────────────────────────────
