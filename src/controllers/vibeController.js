@@ -140,6 +140,195 @@ exports.listVibes = async (req, res) => {
 };
 
 /**
+ * POST or GET /api/vibes/sync
+ * Bandwidth-Optimized Delta Sync:
+ * - Fetches ONLY new vibes created after `since` timestamp (avoids re-fetching existing assets).
+ * - For assets already on the user's device (`existingIds`), retrieves ONLY latest interaction stats
+ *   (likesCount, commentsCount, isLiked, isBookmarked, isPinned, status).
+ * - Identifies deleted/rejected vibes so the client can purge them from local storage.
+ * - Returns `serverTime` for precise timestamp synchronization without client clock skew.
+ */
+exports.syncVibes = async (req, res) => {
+  try {
+    const since = req.body?.since || req.query?.since;
+    const rawExistingIds = req.body?.existingIds || (req.query?.existingIds ? req.query.existingIds.split(',') : []);
+    const { category, tag, search, demo } = req.method === 'POST' ? req.body : req.query;
+    const limit = Math.min(Math.max(parseInt(req.body?.limit || req.query?.limit) || 20, 1), 50);
+
+    const query = {
+      status: 'approved',
+      isActive: true
+    };
+
+    if (demo === 'true') {
+      query.$or = [
+        { isVisibleToDemo: true },
+        { category: 'achievement' }
+      ];
+    }
+
+    if (category && category !== 'all') {
+      const categoryFilter = category === 'official'
+        ? {
+          $or: [
+            { category: 'official' },
+            { postAs: 'school', category: { $in: [null, undefined, '', 'official'] } }
+          ]
+        }
+        : { category };
+
+      if (query.$or) {
+        query.$and = [
+          { $or: query.$or },
+          categoryFilter
+        ];
+        delete query.$or;
+      } else {
+        Object.assign(query, categoryFilter);
+      }
+    }
+
+    if (tag) {
+      query.tags = tag.toLowerCase().replace('#', '');
+    }
+
+    if (search) {
+      query.caption = { $regex: search.trim(), $options: 'i' };
+    }
+
+    // Determine query for new vibes:
+    // If a valid `since` timestamp is provided, fetch items created after that timestamp.
+    // If no `since` is provided (e.g. cold start), fetch latest `limit` items.
+    let sinceDate = null;
+    if (since) {
+      const parsed = new Date(since);
+      if (!isNaN(parsed.getTime())) {
+        sinceDate = parsed;
+      }
+    }
+
+    const newVibesQuery = { ...query };
+    if (sinceDate) {
+      newVibesQuery.createdAt = { $gt: sinceDate };
+    }
+
+    const newVibes = await Vibe.find(newVibesQuery)
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .populate({
+        path: 'author',
+        select: 'name role profilePhoto currentClass designation',
+        populate: {
+          path: 'currentClass',
+          select: 'label name section',
+        },
+      })
+      .lean();
+
+    // Check interaction flags for logged-in users for new vibes
+    const currentUserId = req.user?.userId;
+    let likedNewIds = new Set();
+    let bookmarkedNewIds = new Set();
+
+    if (currentUserId && newVibes.length > 0) {
+      const newIds = newVibes.map(v => v._id);
+      const [newLikes, newBookmarks] = await Promise.all([
+        VibeLike.find({ vibe: { $in: newIds }, user: currentUserId }).select('vibe').lean(),
+        VibeBookmark.find({ vibe: { $in: newIds }, user: currentUserId }).select('vibe').lean()
+      ]);
+      likedNewIds = new Set(newLikes.map(l => l.vibe.toString()));
+      bookmarkedNewIds = new Set(newBookmarks.map(b => b.vibe.toString()));
+    }
+
+    const enhancedNewVibes = newVibes.map(vibe => ({
+      ...vibe,
+      likesCount: Math.max(0, Number(vibe.likesCount) || 0),
+      commentsCount: Math.max(0, Number(vibe.commentsCount) || 0),
+      isLiked: likedNewIds.has(vibe._id.toString()),
+      isBookmarked: bookmarkedNewIds.has(vibe._id.toString())
+    }));
+
+    // Process existing vibes to return lightweight interaction stats ONLY
+    // No images, no descriptions, no video assets returned for existing assets!
+    const validExistingIds = Array.isArray(rawExistingIds)
+      ? rawExistingIds.filter(id => isValidObjectId(id))
+      : [];
+
+    const interactions = {};
+    const deletedIds = [];
+
+    if (validExistingIds.length > 0) {
+      // Fetch only the lightweight dynamic fields for existing vibes
+      const existingDocs = await Vibe.find({ _id: { $in: validExistingIds } })
+        .select('_id likesCount commentsCount isPinned isSpotlight status isActive')
+        .lean();
+
+      const existingDocMap = new Map();
+      const activeApprovedIds = [];
+
+      existingDocs.forEach(doc => {
+        const idStr = doc._id.toString();
+        existingDocMap.set(idStr, doc);
+        if (doc.status === 'approved' && doc.isActive !== false) {
+          activeApprovedIds.push(doc._id);
+        } else {
+          deletedIds.push(idStr);
+        }
+      });
+
+      // Find any requested IDs that no longer exist in DB at all
+      validExistingIds.forEach(id => {
+        const idStr = id.toString();
+        if (!existingDocMap.has(idStr) && !deletedIds.includes(idStr)) {
+          deletedIds.push(idStr);
+        }
+      });
+
+      // Query user interaction status for active existing vibes
+      let userLikedExisting = new Set();
+      let userBookmarkedExisting = new Set();
+
+      if (currentUserId && activeApprovedIds.length > 0) {
+        const [likes, bookmarks] = await Promise.all([
+          VibeLike.find({ vibe: { $in: activeApprovedIds }, user: currentUserId }).select('vibe').lean(),
+          VibeBookmark.find({ vibe: { $in: activeApprovedIds }, user: currentUserId }).select('vibe').lean()
+        ]);
+        userLikedExisting = new Set(likes.map(l => l.vibe.toString()));
+        userBookmarkedExisting = new Set(bookmarks.map(b => b.vibe.toString()));
+      }
+
+      activeApprovedIds.forEach(id => {
+        const idStr = id.toString();
+        const doc = existingDocMap.get(idStr);
+        if (doc) {
+          interactions[idStr] = {
+            likesCount: Math.max(0, Number(doc.likesCount) || 0),
+            commentsCount: Math.max(0, Number(doc.commentsCount) || 0),
+            isLiked: userLikedExisting.has(idStr),
+            isBookmarked: userBookmarkedExisting.has(idStr),
+            isPinned: Boolean(doc.isPinned),
+            isSpotlight: Boolean(doc.isSpotlight)
+          };
+        }
+      });
+    }
+
+    res.set('Cache-Control', 'private, no-cache, no-store, must-revalidate');
+    res.status(200).json({
+      success: true,
+      serverTime: new Date().toISOString(),
+      newVibes: enhancedNewVibes,
+      interactions,
+      deletedIds,
+      hasNew: enhancedNewVibes.length > 0
+    });
+  } catch (error) {
+    logger.error('Error in syncVibes:', error);
+    res.status(500).json({ success: false, message: 'Server error during vibes delta sync' });
+  }
+};
+
+/**
  * GET /api/vibes/:id
  * Get a single vibe with interaction flags.
  */

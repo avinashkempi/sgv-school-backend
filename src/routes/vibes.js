@@ -30,7 +30,8 @@ const {
   getSpotlightVibe,
   getUserVibes,
   recordVibeViews,
-  getVibeViewers
+  getVibeViewers,
+  syncVibes
 } = require('../controllers/vibeController');
 
 const router = express.Router();
@@ -79,6 +80,10 @@ router.route('/admin/:id/demo-visibility')
 router.get('/user/my-vibes', authenticateToken, getMyVibes);
 router.get('/user/saved', authenticateToken, getMySavedVibes);
 router.get('/user/:userId', optionalAuthenticateToken, getUserVibes);
+
+// ── Delta Sync (Fetch only new vibes & update interactions for existing assets) ──
+router.post('/sync', optionalAuthenticateToken, syncVibes);
+router.get('/sync', optionalAuthenticateToken, syncVibes);
 
 // ── Public & Authenticated Feed Endpoints ──
 router.get('/', optionalAuthenticateToken, listVibes);
