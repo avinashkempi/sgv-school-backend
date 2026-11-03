@@ -1,4 +1,4 @@
-const { body } = require('express-validator');
+const { body, check } = require('express-validator');
 
 const VALID_RATING_RANGE = { min: 1, max: 5 };
 
@@ -68,25 +68,45 @@ const bulkRatingValidation = [
 ];
 
 /**
- * Validation rules for admin bulk deletion of ratings for a subject in a specific month/year.
+ * Validation rules for admin bulk deletion of ratings for a subject, class, or entire month.
+ * Accepts parameters in body or query parameters (in case proxy strips DELETE body).
  */
 const adminBulkDeleteValidation = [
-    body('subjectId')
-        .notEmpty()
-        .withMessage('Subject ID is required')
+    check('subjectId')
+        .optional()
         .isMongoId()
         .withMessage('Invalid subject ID'),
-    body('month')
+    check('classId')
+        .optional()
+        .isMongoId()
+        .withMessage('Invalid class ID'),
+    check('allInMonth')
+        .optional()
+        .custom((val) => {
+            if (val === true || val === 'true' || val === false || val === 'false') return true;
+            throw new Error('allInMonth must be a boolean');
+        }),
+    check().custom((val, { req }) => {
+        const bodyObj = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
+        const subjectId = bodyObj.subjectId || req.query?.subjectId;
+        const classId = bodyObj.classId || req.query?.classId;
+        const allInMonth = bodyObj.allInMonth ?? (req.query?.allInMonth === 'true' || req.query?.allInMonth === true);
+        if (!subjectId && !classId && !allInMonth) {
+            throw new Error('Either subjectId, classId, or allInMonth is required');
+        }
+        return true;
+    }),
+    check('month')
         .notEmpty()
         .withMessage('Month is required')
         .isInt({ min: 1, max: 12 })
         .withMessage('Month must be between 1 and 12'),
-    body('year')
+    check('year')
         .notEmpty()
         .withMessage('Year is required')
         .isInt({ min: 2020, max: 2100 })
         .withMessage('Year must be between 2020 and 2100'),
-    body('reason')
+    check('reason')
         .optional()
         .isString()
         .trim()
@@ -95,39 +115,58 @@ const adminBulkDeleteValidation = [
 ];
 
 /**
- * Validation rules for admin shifting ratings from one month to another.
+ * Validation rules for admin shifting ratings from one month to another (by subject, class, or entire month).
  */
 const adminShiftMonthValidation = [
-    body('subjectId')
-        .notEmpty()
-        .withMessage('Subject ID is required')
+    check('subjectId')
+        .optional()
         .isMongoId()
         .withMessage('Invalid subject ID'),
-    body('sourceMonth')
+    check('classId')
+        .optional()
+        .isMongoId()
+        .withMessage('Invalid class ID'),
+    check('allInMonth')
+        .optional()
+        .custom((val) => {
+            if (val === true || val === 'true' || val === false || val === 'false') return true;
+            throw new Error('allInMonth must be a boolean');
+        }),
+    check().custom((val, { req }) => {
+        const bodyObj = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
+        const subjectId = bodyObj.subjectId || req.query?.subjectId;
+        const classId = bodyObj.classId || req.query?.classId;
+        const allInMonth = bodyObj.allInMonth ?? (req.query?.allInMonth === 'true' || req.query?.allInMonth === true);
+        if (!subjectId && !classId && !allInMonth) {
+            throw new Error('Either subjectId, classId, or allInMonth is required');
+        }
+        return true;
+    }),
+    check('sourceMonth')
         .notEmpty()
         .withMessage('Source month is required')
         .isInt({ min: 1, max: 12 })
         .withMessage('Source month must be between 1 and 12'),
-    body('sourceYear')
+    check('sourceYear')
         .notEmpty()
         .withMessage('Source year is required')
         .isInt({ min: 2020, max: 2100 })
         .withMessage('Source year must be between 2020 and 2100'),
-    body('targetMonth')
+    check('targetMonth')
         .notEmpty()
         .withMessage('Target month is required')
         .isInt({ min: 1, max: 12 })
         .withMessage('Target month must be between 1 and 12'),
-    body('targetYear')
+    check('targetYear')
         .notEmpty()
         .withMessage('Target year is required')
         .isInt({ min: 2020, max: 2100 })
         .withMessage('Target year must be between 2020 and 2100'),
-    body('overwriteTarget')
+    check('overwriteTarget')
         .optional()
         .isBoolean()
         .withMessage('overwriteTarget must be a boolean'),
-    body('reason')
+    check('reason')
         .optional()
         .isString()
         .trim()
@@ -135,8 +174,30 @@ const adminShiftMonthValidation = [
         .withMessage('Reason cannot exceed 500 characters')
 ];
 
+/**
+ * Validation rules for single student rating deletion.
+ */
+const singleStudentRatingDeleteValidation = [
+    check('subjectId')
+        .notEmpty()
+        .withMessage('Subject ID is required')
+        .isMongoId()
+        .withMessage('Invalid subject ID'),
+    check('month')
+        .notEmpty()
+        .withMessage('Month is required')
+        .isInt({ min: 1, max: 12 })
+        .withMessage('Month must be between 1 and 12'),
+    check('year')
+        .notEmpty()
+        .withMessage('Year is required')
+        .isInt({ min: 2020, max: 2100 })
+        .withMessage('Year must be between 2020 and 2100')
+];
+
 module.exports = {
     bulkRatingValidation,
     adminBulkDeleteValidation,
-    adminShiftMonthValidation
+    adminShiftMonthValidation,
+    singleStudentRatingDeleteValidation
 };

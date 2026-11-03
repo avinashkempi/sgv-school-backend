@@ -7,7 +7,12 @@ const { yearContext, requireOpenYear } = require('../middleware/yearContext');
 const StudentRating = require('../models/StudentRating');
 const Subject = require('../models/Subject');
 const User = require('../models/User');
-const { bulkRatingValidation, adminBulkDeleteValidation, adminShiftMonthValidation } = require('../validations/studentRating');
+const {
+    bulkRatingValidation,
+    adminBulkDeleteValidation,
+    adminShiftMonthValidation,
+    singleStudentRatingDeleteValidation
+} = require('../validations/studentRating');
 const { getISTMonthYear } = require('../utils/dateUtils');
 const { logAudit } = require('../utils/auditLogger');
 const { cacheInvalidatePattern } = require('../config/redis');
@@ -1002,10 +1007,15 @@ router.post('/admin/bulk-configure-ratings', [auth, yearContext, requireAdmin], 
     }
 });
 
-// @route   DELETE /api/student-ratings/admin/bulk
-// @desc    Admin bulk deletion of ratings for a subject in a specific month/year
-// @access  Private (Admin / Super Admin)
-router.delete('/admin/bulk', [auth, yearContext, requireOpenYear, requireAdmin, ...adminBulkDeleteValidation], async (req, res) => {
+// ──────────────────────────────────────────────
+//  RATINGS DELETION & RESET HANDLERS
+// ──────────────────────────────────────────────
+
+/**
+ * Admin bulk deletion handler for subject, class, or entire month.
+ * Resiliently handles both JSON body and URL query parameters (in case proxy strips DELETE body).
+ */
+const bulkDeleteHandler = async (req, res) => {
     try {
         const errors = validationResult(req);
         if (!errors.isEmpty()) {
@@ -1016,27 +1026,62 @@ router.delete('/admin/bulk', [auth, yearContext, requireOpenYear, requireAdmin, 
         if (typeof body === 'string') {
             try { body = JSON.parse(body); } catch (_) {}
         }
-        const { subjectId, month, year, reason = '' } = body || {};
+        const subjectId = body?.subjectId || req.query?.subjectId;
+        const classId = body?.classId || req.query?.classId;
+        const allInMonth = body?.allInMonth ?? (req.query?.allInMonth === 'true' || req.query?.allInMonth === true || false);
+        const month = body?.month || req.query?.month;
+        const year = body?.year || req.query?.year;
+        const reason = body?.reason || req.query?.reason || 'Admin bulk deletion of mistaken ratings';
+
         const parsedMonth = parseInt(month, 10);
         const parsedYear = parseInt(year, 10);
 
-        const subject = await Subject.findById(subjectId).populate('class', 'value label name section branch');
-        if (!subject) {
-            return res.status(404).json({ success: false, message: 'Subject not found' });
+        let filter = {
+            month: parsedMonth,
+            year: parsedYear
+        };
+        if (req.academicYearContext) {
+            filter.academicYear = new mongoose.Types.ObjectId(req.academicYearContext);
         }
 
-        const filter = {
-            subject: new mongoose.Types.ObjectId(subjectId),
-            month: parsedMonth,
-            year: parsedYear,
-            academicYear: new mongoose.Types.ObjectId(req.academicYearContext)
-        };
+        let scopeLabel = `month ${MONTH_NAMES[parsedMonth - 1] || parsedMonth} ${parsedYear}`;
+        let entityId = null;
 
-        const existingCount = await StudentRating.countDocuments(filter);
+        if (subjectId) {
+            const subject = await Subject.findById(subjectId).populate('class', 'value label name section branch');
+            if (!subject) {
+                return res.status(404).json({ success: false, message: 'Subject not found' });
+            }
+            filter.subject = new mongoose.Types.ObjectId(subjectId);
+            scopeLabel = `${subject.name} (${MONTH_NAMES[parsedMonth - 1] || parsedMonth} ${parsedYear})`;
+            entityId = subject._id;
+        } else if (classId) {
+            const ClassModel = require('../models/Class');
+            const targetClass = await ClassModel.findById(classId);
+            if (!targetClass) {
+                return res.status(404).json({ success: false, message: 'Class not found' });
+            }
+            filter.class = new mongoose.Types.ObjectId(classId);
+            scopeLabel = `Class ${targetClass.label || targetClass.name} (${MONTH_NAMES[parsedMonth - 1] || parsedMonth} ${parsedYear})`;
+            entityId = targetClass._id;
+        }
+
+        let existingCount = await StudentRating.countDocuments(filter);
+        // Fallback: If 0 found with academicYear, check if ratings exist without academicYear constraint
+        if (existingCount === 0 && filter.academicYear) {
+            const fallbackFilter = { ...filter };
+            delete fallbackFilter.academicYear;
+            const fallbackCount = await StudentRating.countDocuments(fallbackFilter);
+            if (fallbackCount > 0) {
+                filter = fallbackFilter;
+                existingCount = fallbackCount;
+            }
+        }
+
         if (existingCount === 0) {
             return res.status(404).json({
                 success: false,
-                message: `No ratings found for ${subject.name} in ${MONTH_NAMES[parsedMonth - 1] || parsedMonth} ${parsedYear}`
+                message: `No ratings found for ${scopeLabel}`
             });
         }
 
@@ -1047,12 +1092,11 @@ router.delete('/admin/bulk', [auth, yearContext, requireOpenYear, requireAdmin, 
             req,
             action: 'RATINGS_BULK_DELETE',
             entityType: 'StudentRating',
-            entityId: subject._id,
+            entityId,
             details: {
-                subjectId: subject._id,
-                subjectName: subject.name,
-                classId: subject.class?._id,
-                className: subject.class?.label || subject.class?.name,
+                subjectId,
+                classId,
+                allInMonth: Boolean(allInMonth),
                 month: parsedMonth,
                 year: parsedYear,
                 deletedCount: deleteResult.deletedCount,
@@ -1068,12 +1112,12 @@ router.delete('/admin/bulk', [auth, yearContext, requireOpenYear, requireAdmin, 
 
         return res.json({
             success: true,
-            message: `Successfully deleted ${deleteResult.deletedCount} rating(s) for ${subject.name} (${MONTH_NAMES[parsedMonth - 1] || parsedMonth} ${parsedYear}).`,
+            message: `Successfully deleted ${deleteResult.deletedCount} rating(s) for ${scopeLabel}.`,
             data: {
                 deletedCount: deleteResult.deletedCount,
                 subjectId,
-                subjectName: subject.name,
-                classId: subject.class?._id,
+                classId,
+                allInMonth: Boolean(allInMonth),
                 month: parsedMonth,
                 year: parsedYear
             }
@@ -1082,10 +1126,214 @@ router.delete('/admin/bulk', [auth, yearContext, requireOpenYear, requireAdmin, 
         console.error('Error bulk deleting student ratings:', err);
         return res.status(500).json({ success: false, message: 'Server error while deleting ratings' });
     }
-});
+};
+
+// @route   DELETE /api/student-ratings/admin/bulk
+// @desc    Admin bulk deletion of ratings for a subject, class, or entire month
+// @access  Private (Admin / Super Admin)
+router.delete('/admin/bulk', [auth, yearContext, requireOpenYear, requireAdmin, ...adminBulkDeleteValidation], bulkDeleteHandler);
+
+// @route   POST /api/student-ratings/admin/bulk-delete
+// @desc    Admin bulk deletion POST alias (ensures reliability across proxies/CDNs that strip DELETE body)
+// @access  Private (Admin / Super Admin)
+router.post('/admin/bulk-delete', [auth, yearContext, requireOpenYear, requireAdmin, ...adminBulkDeleteValidation], bulkDeleteHandler);
+
+/**
+ * Subject-level rating deletion handler for assigned teachers and admins.
+ * Allows teachers to clear/reset mistaken ratings for their own subjects.
+ */
+const subjectResetHandler = async (req, res) => {
+    try {
+        const { subjectId } = req.params;
+        let body = req.body;
+        if (typeof body === 'string') {
+            try { body = JSON.parse(body); } catch (_) {}
+        }
+        const defaultMY = getISTMonthYear();
+        const month = parseInt(body?.month || req.query?.month, 10) || defaultMY.month;
+        const year = parseInt(body?.year || req.query?.year, 10) || defaultMY.year;
+        const reason = body?.reason || req.query?.reason || 'Teacher/Admin reset ratings for subject';
+
+        const subject = await Subject.findById(subjectId).populate('class', 'value label name section');
+        if (!subject) {
+            return res.status(404).json({ success: false, message: 'Subject not found' });
+        }
+
+        const isAdmin = req.user.role === 'admin' || req.user.role === 'super admin';
+        const isSubjectTeacher = hasObjectIdMatch(subject.teachers, req.user.userId);
+
+        if (!isAdmin && !isSubjectTeacher) {
+            return res.status(403).json({ success: false, message: 'Not authorized to delete ratings for this subject' });
+        }
+
+        let filter = {
+            subject: new mongoose.Types.ObjectId(subjectId),
+            month,
+            year
+        };
+        if (req.academicYearContext) {
+            filter.academicYear = new mongoose.Types.ObjectId(req.academicYearContext);
+        }
+
+        let existingCount = await StudentRating.countDocuments(filter);
+        if (existingCount === 0 && filter.academicYear) {
+            delete filter.academicYear;
+            existingCount = await StudentRating.countDocuments(filter);
+        }
+
+        if (existingCount === 0) {
+            return res.status(404).json({
+                success: false,
+                message: `No ratings found for ${subject.name} in ${MONTH_NAMES[month - 1] || month} ${year}`
+            });
+        }
+
+        const deleteResult = await StudentRating.deleteMany(filter);
+
+        await logAudit({
+            req,
+            action: 'RATINGS_SUBJECT_RESET',
+            entityType: 'Subject',
+            entityId: subject._id,
+            details: {
+                subjectId,
+                month,
+                year,
+                deletedCount: deleteResult.deletedCount,
+                reason
+            }
+        });
+
+        try {
+            await cacheInvalidatePattern('ratings:*');
+            await cacheInvalidatePattern('student-ratings:*');
+        } catch (_) {}
+
+        return res.json({
+            success: true,
+            message: `Successfully cleared ${deleteResult.deletedCount} rating(s) for ${subject.name}.`,
+            data: {
+                deletedCount: deleteResult.deletedCount,
+                subjectId,
+                month,
+                year
+            }
+        });
+    } catch (err) {
+        console.error('Error resetting subject ratings:', err);
+        return res.status(500).json({ success: false, message: 'Server error while resetting subject ratings' });
+    }
+};
+
+// @route   DELETE /api/student-ratings/subject/:subjectId
+// @desc    Reset/delete ratings for a subject (Teachers for their own subject, or Admins)
+router.delete('/subject/:subjectId', [auth, yearContext, requireOpenYear], subjectResetHandler);
+router.post('/subject/:subjectId/reset', [auth, yearContext, requireOpenYear], subjectResetHandler);
+
+/**
+ * Single student rating deletion handler.
+ * Deletes rating for 1 student who was rated by mistake.
+ */
+const singleStudentDeleteHandler = async (req, res) => {
+    try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({ success: false, message: 'Validation failed', errors: errors.array() });
+        }
+
+        const { studentId } = req.params;
+        let body = req.body;
+        if (typeof body === 'string') {
+            try { body = JSON.parse(body); } catch (_) {}
+        }
+        const subjectId = body?.subjectId || req.query?.subjectId;
+        const month = parseInt(body?.month || req.query?.month, 10);
+        const year = parseInt(body?.year || req.query?.year, 10);
+
+        const subject = await Subject.findById(subjectId);
+        if (!subject) {
+            return res.status(404).json({ success: false, message: 'Subject not found' });
+        }
+
+        const isAdmin = req.user.role === 'admin' || req.user.role === 'super admin';
+        const isSubjectTeacher = hasObjectIdMatch(subject.teachers, req.user.userId);
+
+        if (!isAdmin && !isSubjectTeacher) {
+            // Check if teacher is class teacher of the student
+            const studentUser = await User.findById(studentId).select('currentClass');
+            const ClassModel = require('../models/Class');
+            const classObj = studentUser ? await ClassModel.findById(studentUser.currentClass) : null;
+            const isClassTeacher = classObj && classObj.classTeacher && classObj.classTeacher.toString() === req.user.userId;
+            if (!isClassTeacher) {
+                return res.status(403).json({ success: false, message: 'Not authorized to delete ratings for this student' });
+            }
+        }
+
+        let filter = {
+            student: new mongoose.Types.ObjectId(studentId),
+            subject: new mongoose.Types.ObjectId(subjectId),
+            month,
+            year
+        };
+        if (req.academicYearContext) {
+            filter.academicYear = new mongoose.Types.ObjectId(req.academicYearContext);
+        }
+
+        let deletedDoc = await StudentRating.findOneAndDelete(filter);
+        if (!deletedDoc && filter.academicYear) {
+            delete filter.academicYear;
+            deletedDoc = await StudentRating.findOneAndDelete(filter);
+        }
+
+        if (!deletedDoc) {
+            return res.status(404).json({
+                success: false,
+                message: 'No existing rating found for this student to delete'
+            });
+        }
+
+        await logAudit({
+            req,
+            action: 'RATINGS_SINGLE_DELETE',
+            entityType: 'StudentRating',
+            entityId: deletedDoc._id,
+            details: {
+                studentId,
+                subjectId,
+                month,
+                year,
+                previousScore: deletedDoc.averageScore
+            }
+        });
+
+        try {
+            await cacheInvalidatePattern('ratings:*');
+            await cacheInvalidatePattern('student-ratings:*');
+        } catch (_) {}
+
+        return res.json({
+            success: true,
+            message: 'Student rating deleted successfully',
+            data: {
+                studentId,
+                subjectId,
+                month,
+                year
+            }
+        });
+    } catch (err) {
+        console.error('Error deleting single student rating:', err);
+        return res.status(500).json({ success: false, message: 'Server error while deleting student rating' });
+    }
+};
+
+// @route   DELETE /api/student-ratings/student/:studentId
+// @desc    Delete rating for a single student (Teachers for their subject, or Admins)
+router.delete('/student/:studentId', [auth, yearContext, requireOpenYear, ...singleStudentRatingDeleteValidation], singleStudentDeleteHandler);
+router.post('/student/:studentId/delete', [auth, yearContext, requireOpenYear, ...singleStudentRatingDeleteValidation], singleStudentDeleteHandler);
 
 // @route   POST /api/student-ratings/admin/shift-month
-// @desc    Admin correction: Move ratings from mistaken source month to target month
+// @desc    Admin correction: Move ratings from mistaken source month to target month (by subject, class, or entire month)
 // @access  Private (Admin / Super Admin)
 router.post('/admin/shift-month', [auth, yearContext, requireOpenYear, requireAdmin, ...adminShiftMonthValidation], async (req, res) => {
     try {
@@ -1100,6 +1348,8 @@ router.post('/admin/shift-month', [auth, yearContext, requireOpenYear, requireAd
         }
         const {
             subjectId,
+            classId,
+            allInMonth = false,
             sourceMonth,
             sourceYear,
             targetMonth,
@@ -1129,32 +1379,51 @@ router.post('/admin/shift-month', [auth, yearContext, requireOpenYear, requireAd
             });
         }
 
-        const subject = await Subject.findById(subjectId).populate('class', 'value label name section branch');
-        if (!subject) {
-            return res.status(404).json({ success: false, message: 'Subject not found' });
-        }
-
-        const sourceFilter = {
-            subject: new mongoose.Types.ObjectId(subjectId),
+        let sourceFilter = {
             month: sMonth,
             year: sYear,
             academicYear: new mongoose.Types.ObjectId(req.academicYearContext)
         };
+        let targetFilter = {
+            month: tMonth,
+            year: tYear,
+            academicYear: new mongoose.Types.ObjectId(req.academicYearContext)
+        };
+        let scopeLabel = `ratings from ${MONTH_NAMES[sMonth - 1] || sMonth} ${sYear}`;
+        let entityId = null;
 
-        const sourceCount = await StudentRating.countDocuments(sourceFilter);
+        if (subjectId) {
+            const subject = await Subject.findById(subjectId).populate('class', 'value label name section branch');
+            if (!subject) {
+                return res.status(404).json({ success: false, message: 'Subject not found' });
+            }
+            sourceFilter.subject = new mongoose.Types.ObjectId(subjectId);
+            targetFilter.subject = new mongoose.Types.ObjectId(subjectId);
+            scopeLabel = `${subject.name} ratings`;
+            entityId = subject._id;
+        } else if (classId) {
+            const ClassModel = require('../models/Class');
+            const targetClass = await ClassModel.findById(classId);
+            if (!targetClass) {
+                return res.status(404).json({ success: false, message: 'Class not found' });
+            }
+            sourceFilter.class = new mongoose.Types.ObjectId(classId);
+            targetFilter.class = new mongoose.Types.ObjectId(classId);
+            scopeLabel = `Class ${targetClass.label || targetClass.name} ratings`;
+            entityId = targetClass._id;
+        }
+
+        let sourceCount = await StudentRating.countDocuments(sourceFilter);
+        if (sourceCount === 0 && sourceFilter.academicYear) {
+            delete sourceFilter.academicYear;
+            sourceCount = await StudentRating.countDocuments(sourceFilter);
+        }
         if (sourceCount === 0) {
             return res.status(404).json({
                 success: false,
                 message: `No ratings found in source period (${MONTH_NAMES[sMonth - 1] || sMonth} ${sYear}) to move.`
             });
         }
-
-        const targetFilter = {
-            subject: new mongoose.Types.ObjectId(subjectId),
-            month: tMonth,
-            year: tYear,
-            academicYear: new mongoose.Types.ObjectId(req.academicYearContext)
-        };
 
         const targetCount = await StudentRating.countDocuments(targetFilter);
         if (targetCount > 0 && !overwriteTarget) {
@@ -1186,12 +1455,11 @@ router.post('/admin/shift-month', [auth, yearContext, requireOpenYear, requireAd
             req,
             action: 'RATINGS_MONTH_SHIFT',
             entityType: 'StudentRating',
-            entityId: subject._id,
+            entityId,
             details: {
-                subjectId: subject._id,
-                subjectName: subject.name,
-                classId: subject.class?._id,
-                className: subject.class?.label || subject.class?.name,
+                subjectId,
+                classId,
+                allInMonth: Boolean(allInMonth),
                 from: { month: sMonth, year: sYear },
                 to: { month: tMonth, year: tYear },
                 movedCount: updateResult.modifiedCount,
@@ -1208,13 +1476,14 @@ router.post('/admin/shift-month', [auth, yearContext, requireOpenYear, requireAd
 
         return res.json({
             success: true,
-            message: `Successfully moved ${updateResult.modifiedCount} rating(s) from ${MONTH_NAMES[sMonth - 1] || sMonth} ${sYear} to ${MONTH_NAMES[tMonth - 1] || tMonth} ${tYear}.`,
+            message: `Successfully moved ${updateResult.modifiedCount} rating(s) (${scopeLabel}) from ${MONTH_NAMES[sMonth - 1] || sMonth} ${sYear} to ${MONTH_NAMES[tMonth - 1] || tMonth} ${tYear}.`,
             data: {
                 movedCount: updateResult.modifiedCount,
                 from: { month: sMonth, year: sYear },
                 to: { month: tMonth, year: tYear },
-                subjectId: subject._id,
-                subjectName: subject.name
+                subjectId,
+                classId,
+                allInMonth: Boolean(allInMonth)
             }
         });
     } catch (err) {
