@@ -27,35 +27,20 @@ const hasObjectIdMatch = (ids = [], userId) => ids.some((id) => id && id.toStrin
 /**
  * Validates cross-role access to individual student ratings to prevent information leaks.
  * - Admin/Super Admin: allowed.
+ * - Teacher/Staff/Support Staff: allowed read-only access for school-wide holistic student evaluation.
  * - Student: allowed only for their own userId.
- * - Teacher: allowed if assigned as class teacher or subject teacher for the student's class.
  */
-const canAccessStudentRatings = async (callerUser, targetStudentId, academicYearContext) => {
+const canAccessStudentRatings = async (callerUser, targetStudentId, _academicYearContext) => {
     if (!callerUser) return false;
     const role = callerUser.role;
     if (role === 'admin' || role === 'super admin') {
         return true;
     }
+    if (role === 'teacher' || role === 'staff' || role === 'support_staff') {
+        return true;
+    }
     if (role === 'student') {
         return callerUser.userId === targetStudentId.toString();
-    }
-    if (role === 'teacher' || role === 'staff' || role === 'support_staff') {
-        const targetStudent = await User.findById(targetStudentId).select('currentClass').lean();
-        if (!targetStudent || !targetStudent.currentClass) return false;
-
-        const ClassModel = require('../models/Class');
-        const isClassTeacher = await ClassModel.exists({
-            _id: targetStudent.currentClass,
-            classTeacher: callerUser.userId
-        });
-        if (isClassTeacher) return true;
-
-        const isSubjectTeacher = await Subject.exists({
-            class: targetStudent.currentClass,
-            teachers: callerUser.userId,
-            academicYear: academicYearContext
-        });
-        return !!isSubjectTeacher;
     }
     return false;
 };
@@ -1664,6 +1649,264 @@ router.get('/student/:studentId/details', [auth, yearContext], async (req, res) 
         });
     } catch (err) {
         console.error('Error fetching student rating details:', err);
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
+});
+
+// @route   GET /api/student-ratings/school/all-students-dashboard
+// @desc    Get cumulative school-wide student ratings dashboard & leaderboard across all months
+// @access  Private (Admin, Super Admin, Teacher, Staff, Support Staff)
+router.get('/school/all-students-dashboard', [auth, yearContext, checkRole(['admin', 'super admin', 'teacher', 'staff', 'support_staff'])], async (req, res) => {
+    try {
+        const { classId, tier, search, sortBy } = req.query;
+
+        const matchFilter = {
+            academicYear: new mongoose.Types.ObjectId(req.academicYearContext),
+            isExempt: { $ne: true },
+            averageScore: { $ne: null }
+        };
+
+        if (classId && classId !== 'all') {
+            matchFilter.class = new mongoose.Types.ObjectId(classId);
+        }
+
+        // Aggregate ratings grouped by student across all months of the academic year
+        const studentAggregations = await StudentRating.aggregate([
+            { $match: matchFilter },
+            {
+                $group: {
+                    _id: '$student',
+                    overallAverage: { $avg: '$averageScore' },
+                    avgClassEngagement: { $avg: '$classEngagement' },
+                    avgHomeworkClasswork: { $avg: '$homeworkClasswork' },
+                    avgBehaviourSocial: { $avg: '$behaviourSocial' },
+                    avgEnglishComm: { $avg: '$englishComm' },
+                    totalRatings: { $sum: 1 },
+                    evaluatedMonths: { $addToSet: { month: '$month', year: '$year' } },
+                    class: { $first: '$class' },
+                    monthlyScores: {
+                        $push: {
+                            month: '$month',
+                            year: '$year',
+                            averageScore: '$averageScore'
+                        }
+                    }
+                }
+            },
+            {
+                $lookup: {
+                    from: 'users',
+                    localField: '_id',
+                    foreignField: '_id',
+                    as: 'studentInfo'
+                }
+            },
+            { $unwind: '$studentInfo' },
+            {
+                $match: {
+                    'studentInfo.role': 'student',
+                    'studentInfo.isActive': true
+                }
+            },
+            {
+                $lookup: {
+                    from: 'classes',
+                    localField: 'studentInfo.currentClass',
+                    foreignField: '_id',
+                    as: 'classInfo'
+                }
+            },
+            { $unwind: { path: '$classInfo', preserveNullAndEmptyArrays: true } }
+        ]);
+
+        // Total enrolled active students in the school (or filtered class)
+        const enrolledQuery = {
+            role: 'student',
+            academicYear: new mongoose.Types.ObjectId(req.academicYearContext),
+            isActive: true
+        };
+        if (classId && classId !== 'all') {
+            enrolledQuery.currentClass = new mongoose.Types.ObjectId(classId);
+        }
+        const totalEnrolledStudents = await User.countDocuments(enrolledQuery);
+
+        // Process student metrics and assign ranks
+        const processedStudents = studentAggregations.map(s => {
+            const overallAvg = parseFloat(s.overallAverage.toFixed(2));
+            const evalCategory = StudentRating.getPerformanceEvaluation(overallAvg);
+
+            // Compute month-over-month trend if multiple months evaluated
+            let trendDirection = 'stable';
+            let changeVal = 0;
+            if (s.monthlyScores && s.monthlyScores.length > 1) {
+                const monthAverages = {};
+                s.monthlyScores.forEach(ms => {
+                    const key = `${ms.year}-${String(ms.month).padStart(2, '0')}`;
+                    if (!monthAverages[key]) {
+                        monthAverages[key] = { key, scores: [] };
+                    }
+                    monthAverages[key].scores.push(ms.averageScore);
+                });
+                const sortedMonths = Object.values(monthAverages)
+                    .map(m => ({
+                        key: m.key,
+                        avg: m.scores.reduce((a, b) => a + b, 0) / m.scores.length
+                    }))
+                    .sort((a, b) => a.key.localeCompare(b.key));
+
+                if (sortedMonths.length >= 2) {
+                    const latest = sortedMonths[sortedMonths.length - 1].avg;
+                    const prev = sortedMonths[sortedMonths.length - 2].avg;
+                    changeVal = parseFloat((latest - prev).toFixed(2));
+                    if (changeVal > 0.25) trendDirection = 'improving';
+                    else if (changeVal < -0.25) trendDirection = 'declining';
+                }
+            }
+
+            return {
+                student: {
+                    _id: s.studentInfo._id,
+                    name: s.studentInfo.name,
+                    gender: s.studentInfo.gender,
+                    regNo: s.studentInfo.regNo,
+                    profilePhoto: s.studentInfo.profilePhoto
+                },
+                class: s.classInfo ? {
+                    _id: s.classInfo._id,
+                    label: s.classInfo.label,
+                    name: s.classInfo.name,
+                    section: s.classInfo.section,
+                    branch: s.classInfo.branch
+                } : null,
+                overallAverage: overallAvg,
+                evaluation: evalCategory,
+                avgClassEngagement: parseFloat(s.avgClassEngagement.toFixed(2)),
+                avgHomeworkClasswork: parseFloat(s.avgHomeworkClasswork.toFixed(2)),
+                avgBehaviourSocial: parseFloat(s.avgBehaviourSocial.toFixed(2)),
+                avgEnglishComm: parseFloat(s.avgEnglishComm.toFixed(2)),
+                totalRatings: s.totalRatings,
+                monthsCount: s.evaluatedMonths.length,
+                trendDirection,
+                trendChange: changeVal
+            };
+        });
+
+        // Sort by overallAverage descending to establish base school/class rank
+        processedStudents.sort((a, b) => {
+            if (b.overallAverage !== a.overallAverage) {
+                return b.overallAverage - a.overallAverage;
+            }
+            return b.totalRatings - a.totalRatings;
+        });
+
+        // Assign Leaderboard Rank & Medal
+        processedStudents.forEach((st, idx) => {
+            st.rank = idx + 1;
+            if (st.rank === 1) st.medal = 'gold';
+            else if (st.rank === 2) st.medal = 'silver';
+            else if (st.rank === 3) st.medal = 'bronze';
+            else st.medal = null;
+        });
+
+        // Compute School-Wide / Selection-Wide Cumulative KPIs
+        const totalEvaluated = processedStudents.length;
+        const schoolAverage = totalEvaluated > 0
+            ? parseFloat((processedStudents.reduce((acc, st) => acc + st.overallAverage, 0) / totalEvaluated).toFixed(2))
+            : null;
+
+        const schoolCriteriaAverages = {
+            classEngagement: totalEvaluated > 0
+                ? parseFloat((processedStudents.reduce((acc, st) => acc + st.avgClassEngagement, 0) / totalEvaluated).toFixed(2))
+                : 0,
+            homeworkClasswork: totalEvaluated > 0
+                ? parseFloat((processedStudents.reduce((acc, st) => acc + st.avgHomeworkClasswork, 0) / totalEvaluated).toFixed(2))
+                : 0,
+            behaviourSocial: totalEvaluated > 0
+                ? parseFloat((processedStudents.reduce((acc, st) => acc + st.avgBehaviourSocial, 0) / totalEvaluated).toFixed(2))
+                : 0,
+            englishComm: totalEvaluated > 0
+                ? parseFloat((processedStudents.reduce((acc, st) => acc + st.avgEnglishComm, 0) / totalEvaluated).toFixed(2))
+                : 0
+        };
+
+        // Distribution tiers counts
+        const tierCounts = {
+            excellent: processedStudents.filter(s => s.overallAverage >= 4.5).length,
+            good: processedStudents.filter(s => s.overallAverage >= 3.5 && s.overallAverage < 4.5).length,
+            meets: processedStudents.filter(s => s.overallAverage >= 2.5 && s.overallAverage < 3.5).length,
+            needs_improvement: processedStudents.filter(s => s.overallAverage >= 2.0 && s.overallAverage < 2.5).length,
+            needs_significant_improvement: processedStudents.filter(s => s.overallAverage < 2.0).length,
+            unrated: Math.max(0, totalEnrolledStudents - totalEvaluated)
+        };
+
+        // Filter and sort for the response
+        let filteredStudents = [...processedStudents];
+
+        // Apply Search Filter (Name, RegNo)
+        if (search && search.trim()) {
+            const q = search.trim().toLowerCase();
+            filteredStudents = filteredStudents.filter(s => {
+                const name = (s.student?.name || '').toLowerCase();
+                const regNo = (s.student?.regNo || '').toLowerCase();
+                return name.includes(q) || regNo.includes(q);
+            });
+        }
+
+        // Apply Tier Filter
+        if (tier && tier !== 'all') {
+            if (tier === 'top_performers' || tier === 'excellent') {
+                filteredStudents = filteredStudents.filter(s => s.overallAverage >= 4.5);
+            } else if (tier === 'good') {
+                filteredStudents = filteredStudents.filter(s => s.overallAverage >= 3.5 && s.overallAverage < 4.5);
+            } else if (tier === 'meets') {
+                filteredStudents = filteredStudents.filter(s => s.overallAverage >= 2.5 && s.overallAverage < 3.5);
+            } else if (tier === 'attention' || tier === 'needs_attention') {
+                filteredStudents = filteredStudents.filter(s => s.overallAverage < 3.0);
+            } else if (tier === 'needs_improvement') {
+                filteredStudents = filteredStudents.filter(s => s.overallAverage >= 2.0 && s.overallAverage < 2.5);
+            } else if (tier === 'needs_significant_improvement') {
+                filteredStudents = filteredStudents.filter(s => s.overallAverage < 2.0);
+            }
+        }
+
+        // Apply Custom Sort if specified
+        if (sortBy === 'lowest') {
+            filteredStudents.sort((a, b) => a.overallAverage - b.overallAverage);
+        } else if (sortBy === 'name') {
+            filteredStudents.sort((a, b) => (a.student?.name || '').localeCompare(b.student?.name || ''));
+        } else if (sortBy === 'most_rated') {
+            filteredStudents.sort((a, b) => b.totalRatings - a.totalRatings);
+        } else if (sortBy === 'least_rated') {
+            filteredStudents.sort((a, b) => a.totalRatings - b.totalRatings);
+        } else if (sortBy === 'improving') {
+            filteredStudents.sort((a, b) => (b.trendChange || 0) - (a.trendChange || 0));
+        }
+
+        // Fetch distinct classes for filter dropdown
+        const ClassModel = require('../models/Class');
+        const classes = await ClassModel.find({ academicYear: req.academicYearContext })
+            .select('value label name section branch')
+            .sort({ value: 1, section: 1 })
+            .lean();
+
+        res.json({
+            success: true,
+            schoolAverage,
+            totalEnrolledStudents,
+            totalEvaluatedStudents: totalEvaluated,
+            evaluationCoveragePercent: totalEnrolledStudents > 0
+                ? Math.round((totalEvaluated / totalEnrolledStudents) * 100)
+                : 0,
+            schoolCriteriaAverages,
+            tierCounts,
+            totalStudentsCount: filteredStudents.length,
+            students: filteredStudents,
+            classes,
+            dataPoints: StudentRating.DATA_POINTS,
+            ratingLabels: StudentRating.RATING_LABELS
+        });
+    } catch (err) {
+        console.error('Error fetching school all-students dashboard:', err);
         res.status(500).json({ success: false, message: 'Server error' });
     }
 });
