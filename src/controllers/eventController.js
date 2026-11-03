@@ -86,12 +86,19 @@ const getEventById = async (req, res) => {
   try {
     const eventId = req.params.id;
 
-    // Find the event and check if it belongs to the user
-    const event = await Event.findOne({ _id: eventId, createdBy: req.user.userId });
+    if (!eventId || !eventId.match(/^[0-9a-fA-F]{24}$/)) {
+      return res.status(404).json({
+        success: false,
+        message: 'Event not found'
+      });
+    }
+
+    // Find the event (accessible to all authenticated and public users)
+    const event = await Event.findById(eventId);
     if (!event) {
       return res.status(404).json({
         success: false,
-        message: 'Event not found or you do not have permission to view it'
+        message: 'Event not found'
       });
     }
 
