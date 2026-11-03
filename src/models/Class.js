@@ -34,6 +34,14 @@ const classSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User'
     },
+    examWeights: {
+        FA1: { type: Number, min: 0, max: 100 },
+        FA2: { type: Number, min: 0, max: 100 },
+        SA1: { type: Number, min: 0, max: 100 },
+        FA3: { type: Number, min: 0, max: 100 },
+        FA4: { type: Number, min: 0, max: 100 },
+        SA2: { type: Number, min: 0, max: 100 }
+    },
     createdAt: {
         type: Date,
         default: Date.now

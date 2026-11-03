@@ -518,7 +518,7 @@ router.get('/performance/class/:classId', auth, async (req, res) => {
             if (activeYear) yearId = activeYear._id;
         }
 
-        const classDoc = await Class.findById(req.params.classId).select('name section').lean();
+        const classDoc = await Class.findById(req.params.classId).select('name section value label examWeights').lean();
         const exams = await Exam.find({ class: req.params.classId, academicYear: yearId, isStandardized: true })
             .populate('subject', 'name')
             .lean();
@@ -536,14 +536,11 @@ router.get('/performance/class/:classId', auth, async (req, res) => {
             return 'C';
         };
 
-        const EXAM_WEIGHTS = { FA1: 10, FA2: 10, SA1: 30, FA3: 10, FA4: 10, SA2: 30 };
+        const { getClassExamWeights, computeClassWeightedMarks } = require('../utils/examWeightResolver');
+        const classWeights = getClassExamWeights(classDoc);
         const computeWeightedPercentage = (completedTypeScores) => {
-            const totalWeight = Object.keys(completedTypeScores)
-                .reduce((sum, type) => sum + (EXAM_WEIGHTS[type] || 0), 0);
-            if (totalWeight === 0) return 0;
-            const weightedSum = Object.entries(completedTypeScores)
-                .reduce((sum, [type, pct]) => sum + pct * (EXAM_WEIGHTS[type] || 0), 0);
-            return parseFloat((weightedSum / totalWeight).toFixed(1));
+            const result = computeClassWeightedMarks(completedTypeScores, classWeights);
+            return result !== null ? result : 0;
         };
 
         const examTypes = ['FA1', 'FA2', 'SA1', 'FA3', 'FA4', 'SA2'];

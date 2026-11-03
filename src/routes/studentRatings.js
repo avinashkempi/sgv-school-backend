@@ -1654,25 +1654,63 @@ router.get('/student/:studentId/details', [auth, yearContext], async (req, res) 
 });
 
 // @route   GET /api/student-ratings/school/all-students-dashboard
-// @desc    Get cumulative school-wide student ratings dashboard & leaderboard across all months
+// @desc    Get cumulative school-wide comprehensive student leaderboard across marks (50%) & ratings (50%)
 // @access  Private (Admin, Super Admin, Teacher, Staff, Support Staff)
 router.get('/school/all-students-dashboard', [auth, yearContext, checkRole(['admin', 'super admin', 'teacher', 'staff', 'support_staff'])], async (req, res) => {
     try {
-        const { classId, tier, search, sortBy } = req.query;
+        const { classId, tier, search, sortBy, mode = 'comprehensive' } = req.query;
+        const marksWeight = req.query.marksWeight !== undefined && !isNaN(Number(req.query.marksWeight))
+            ? Number(req.query.marksWeight)
+            : 50;
+        const ratingsWeight = req.query.ratingsWeight !== undefined && !isNaN(Number(req.query.ratingsWeight))
+            ? Number(req.query.ratingsWeight)
+            : 50;
 
-        const matchFilter = {
+        const Exam = require('../models/Exam');
+        const Marks = require('../models/Marks');
+        const ClassModel = require('../models/Class');
+        const {
+            getClassExamWeights,
+            computeClassWeightedMarks,
+            STANDARDIZED_EXAM_TYPES,
+            EXAM_WEIGHTS_BY_CLASS
+        } = require('../utils/examWeightResolver');
+
+        // 1. Fetch active enrolled students in the target academic year (and class if filtered)
+        const enrolledQuery = {
+            role: 'student',
             academicYear: new mongoose.Types.ObjectId(req.academicYearContext),
-            isExempt: { $ne: true },
-            averageScore: { $ne: null }
+            isActive: true
         };
-
         if (classId && classId !== 'all') {
-            matchFilter.class = new mongoose.Types.ObjectId(classId);
+            enrolledQuery.currentClass = new mongoose.Types.ObjectId(classId);
         }
 
-        // Aggregate ratings grouped by student across all months of the academic year
-        const studentAggregations = await StudentRating.aggregate([
-            { $match: matchFilter },
+        const enrolledStudents = await User.find(enrolledQuery)
+            .select('_id name gender regNo profilePhoto currentClass rollNumber')
+            .populate('currentClass', 'label name section branch value examWeights')
+            .lean();
+
+        const totalEnrolledStudents = enrolledStudents.length;
+        const studentIds = enrolledStudents.map(s => s._id);
+
+        const studentClassById = {};
+        enrolledStudents.forEach(s => {
+            if (s.currentClass && s.currentClass._id) {
+                studentClassById[s._id.toString()] = s.currentClass._id.toString();
+            }
+        });
+
+        // 2. Aggregate monthly ratings for these students
+        const ratingsFilter = {
+            academicYear: new mongoose.Types.ObjectId(req.academicYearContext),
+            isExempt: { $ne: true },
+            averageScore: { $ne: null },
+            student: { $in: studentIds }
+        };
+
+        const ratingAggregations = await StudentRating.aggregate([
+            { $match: ratingsFilter },
             {
                 $group: {
                     _id: '$student',
@@ -1683,7 +1721,6 @@ router.get('/school/all-students-dashboard', [auth, yearContext, checkRole(['adm
                     avgEnglishComm: { $avg: '$englishComm' },
                     totalRatings: { $sum: 1 },
                     evaluatedMonths: { $addToSet: { month: '$month', year: '$year' } },
-                    class: { $first: '$class' },
                     monthlyScores: {
                         $push: {
                             month: '$month',
@@ -1692,206 +1729,400 @@ router.get('/school/all-students-dashboard', [auth, yearContext, checkRole(['adm
                         }
                     }
                 }
-            },
-            {
-                $lookup: {
-                    from: 'users',
-                    localField: '_id',
-                    foreignField: '_id',
-                    as: 'studentInfo'
-                }
-            },
-            { $unwind: '$studentInfo' },
-            {
-                $match: {
-                    'studentInfo.role': 'student',
-                    'studentInfo.isActive': true
-                }
-            },
-            {
-                $lookup: {
-                    from: 'classes',
-                    localField: 'studentInfo.currentClass',
-                    foreignField: '_id',
-                    as: 'classInfo'
-                }
-            },
-            { $unwind: { path: '$classInfo', preserveNullAndEmptyArrays: true } }
+            }
         ]);
 
-        // Total enrolled active students in the school (or filtered class)
-        const enrolledQuery = {
-            role: 'student',
+        const ratingsByStudent = {};
+        ratingAggregations.forEach(r => {
+            ratingsByStudent[r._id.toString()] = r;
+        });
+
+        // 3. Fetch standardized exams for this academic year (and class if filtered)
+        const examFilter = {
             academicYear: new mongoose.Types.ObjectId(req.academicYearContext),
-            isActive: true
+            isStandardized: true,
+            status: { $ne: 'cancelled' }
         };
         if (classId && classId !== 'all') {
-            enrolledQuery.currentClass = new mongoose.Types.ObjectId(classId);
+            examFilter.class = new mongoose.Types.ObjectId(classId);
         }
-        const totalEnrolledStudents = await User.countDocuments(enrolledQuery);
+        const exams = await Exam.find(examFilter)
+            .select('_id name standardizedType class subject totalMarks')
+            .lean();
 
-        // Process student metrics and assign ranks
-        const processedStudents = studentAggregations.map(s => {
-            const overallAvg = parseFloat(s.overallAverage.toFixed(2));
-            const evalCategory = StudentRating.getPerformanceEvaluation(overallAvg);
+        const examIds = exams.map(e => e._id);
+        const examById = {};
+        exams.forEach(e => {
+            examById[e._id.toString()] = e;
+        });
 
-            // Compute month-over-month trend if multiple months evaluated
+        // 4. Fetch all marks entered for these exams
+        const marksRecords = await Marks.find({
+            exam: { $in: examIds },
+            student: { $in: studentIds }
+        }).select('student exam marksObtained percentage').lean();
+
+        // Group marks by student and standardized exam type
+        const marksByStudent = {};
+        marksRecords.forEach(m => {
+            const studentIdStr = m.student.toString();
+            const exam = examById[m.exam.toString()];
+            if (!exam) return;
+
+            // Only count marks for exams belonging to the student's current class
+            const currentClassId = studentClassById[studentIdStr];
+            if (exam.class && currentClassId && exam.class.toString() !== currentClassId) {
+                return;
+            }
+
+            if (!marksByStudent[studentIdStr]) {
+                marksByStudent[studentIdStr] = {};
+            }
+            const stdType = exam.standardizedType;
+            if (!marksByStudent[studentIdStr][stdType]) {
+                marksByStudent[studentIdStr][stdType] = {
+                    totalObtained: 0,
+                    totalMax: 0,
+                    count: 0
+                };
+            }
+            marksByStudent[studentIdStr][stdType].totalObtained += m.marksObtained;
+            marksByStudent[studentIdStr][stdType].totalMax += exam.totalMarks;
+            marksByStudent[studentIdStr][stdType].count += 1;
+        });
+
+        // 5. Process each student: calculate class-specific weighted marks, rating scores, and 50/50 composite score
+        const processedStudents = enrolledStudents.map(studentDoc => {
+            const studentIdStr = studentDoc._id.toString();
+            const ratingData = ratingsByStudent[studentIdStr];
+            const studentMarksData = marksByStudent[studentIdStr] || {};
+            const classObj = studentDoc.currentClass;
+
+            // Class-specific exam weights (Class 1, 2, 3 have distinct configs; class DB weights override)
+            const classExamWeights = getClassExamWeights(classObj);
+
+            // Compute exam scores and breakdown
+            const completedTypeScores = {};
+            const examBreakdown = [];
+
+            STANDARDIZED_EXAM_TYPES.forEach(type => {
+                const typeData = studentMarksData[type];
+                const weight = classExamWeights[type] || 0;
+                if (typeData && typeData.totalMax > 0) {
+                    const pct = parseFloat(((typeData.totalObtained / typeData.totalMax) * 100).toFixed(1));
+                    completedTypeScores[type] = pct;
+                    examBreakdown.push({
+                        type,
+                        weight,
+                        totalObtained: typeData.totalObtained,
+                        totalMax: typeData.totalMax,
+                        percentage: pct
+                    });
+                } else {
+                    examBreakdown.push({
+                        type,
+                        weight,
+                        totalObtained: null,
+                        totalMax: null,
+                        percentage: null
+                    });
+                }
+            });
+
+            const marksScore = computeClassWeightedMarks(completedTypeScores, classExamWeights);
+
+            // Rating calculations
+            let overallAvg = null;
+            let ratingsScore = null;
+            let evalCategory = null;
             let trendDirection = 'stable';
             let changeVal = 0;
-            if (s.monthlyScores && s.monthlyScores.length > 1) {
-                const monthAverages = {};
-                s.monthlyScores.forEach(ms => {
-                    const key = `${ms.year}-${String(ms.month).padStart(2, '0')}`;
-                    if (!monthAverages[key]) {
-                        monthAverages[key] = { key, scores: [] };
-                    }
-                    monthAverages[key].scores.push(ms.averageScore);
-                });
-                const sortedMonths = Object.values(monthAverages)
-                    .map(m => ({
-                        key: m.key,
-                        avg: m.scores.reduce((a, b) => a + b, 0) / m.scores.length
-                    }))
-                    .sort((a, b) => a.key.localeCompare(b.key));
+            let totalRatings = 0;
+            let monthsCount = 0;
+            let avgClassEngagement = null;
+            let avgHomeworkClasswork = null;
+            let avgBehaviourSocial = null;
+            let avgEnglishComm = null;
 
-                if (sortedMonths.length >= 2) {
-                    const latest = sortedMonths[sortedMonths.length - 1].avg;
-                    const prev = sortedMonths[sortedMonths.length - 2].avg;
-                    changeVal = parseFloat((latest - prev).toFixed(2));
-                    if (changeVal > 0.25) trendDirection = 'improving';
-                    else if (changeVal < -0.25) trendDirection = 'declining';
+            if (ratingData) {
+                overallAvg = parseFloat(ratingData.overallAverage.toFixed(2));
+                // Rating normalized to 100%: (average / 5.0) * 100
+                ratingsScore = parseFloat(((overallAvg / 5.0) * 100).toFixed(1));
+                evalCategory = StudentRating.getPerformanceEvaluation(overallAvg);
+                totalRatings = ratingData.totalRatings;
+                monthsCount = ratingData.evaluatedMonths.length;
+                avgClassEngagement = parseFloat(ratingData.avgClassEngagement.toFixed(2));
+                avgHomeworkClasswork = parseFloat(ratingData.avgHomeworkClasswork.toFixed(2));
+                avgBehaviourSocial = parseFloat(ratingData.avgBehaviourSocial.toFixed(2));
+                avgEnglishComm = parseFloat(ratingData.avgEnglishComm.toFixed(2));
+
+                // Trend calculation across months
+                if (ratingData.monthlyScores && ratingData.monthlyScores.length > 1) {
+                    const monthAverages = {};
+                    ratingData.monthlyScores.forEach(ms => {
+                        const key = `${ms.year}-${String(ms.month).padStart(2, '0')}`;
+                        if (!monthAverages[key]) {
+                            monthAverages[key] = { key, scores: [] };
+                        }
+                        monthAverages[key].scores.push(ms.averageScore);
+                    });
+                    const sortedMonths = Object.values(monthAverages)
+                        .map(m => ({
+                            key: m.key,
+                            avg: m.scores.reduce((a, b) => a + b, 0) / m.scores.length
+                        }))
+                        .sort((a, b) => a.key.localeCompare(b.key));
+
+                    if (sortedMonths.length >= 2) {
+                        const latest = sortedMonths[sortedMonths.length - 1].avg;
+                        const prev = sortedMonths[sortedMonths.length - 2].avg;
+                        changeVal = parseFloat((latest - prev).toFixed(2));
+                        if (changeVal > 0.25) trendDirection = 'improving';
+                        else if (changeVal < -0.25) trendDirection = 'declining';
+                    }
                 }
+            }
+
+            // 50/50 Composite Score Calculation
+            let compositeScore = null;
+            let evaluationStatus = 'unrated'; // 'complete' | 'marks_only' | 'ratings_only' | 'unrated'
+
+            if (marksScore !== null && ratingsScore !== null) {
+                const totalWeights = marksWeight + ratingsWeight;
+                compositeScore = parseFloat(
+                    (((marksWeight * marksScore) + (ratingsWeight * ratingsScore)) / totalWeights).toFixed(2)
+                );
+                evaluationStatus = 'complete';
+            } else if (marksScore !== null) {
+                compositeScore = marksScore;
+                evaluationStatus = 'marks_only';
+            } else if (ratingsScore !== null) {
+                compositeScore = ratingsScore;
+                evaluationStatus = 'ratings_only';
+            }
+
+            // Quadrant Placement:
+            // High Marks threshold: >= 75%
+            // High Ratings threshold: >= 3.5 stars (70%)
+            let quadrant = 'needs_support';
+            const isHighMarks = marksScore !== null && marksScore >= 75;
+            const isHighRatings = overallAvg !== null && overallAvg >= 3.5;
+
+            if (marksScore !== null && overallAvg !== null) {
+                if (isHighMarks && isHighRatings) quadrant = 'all_rounder';
+                else if (isHighMarks && !isHighRatings) quadrant = 'academic_star';
+                else if (!isHighMarks && isHighRatings) quadrant = 'diligent_striver';
+                else quadrant = 'needs_support';
+            } else if (isHighMarks) {
+                quadrant = 'academic_star';
+            } else if (isHighRatings) {
+                quadrant = 'diligent_striver';
             }
 
             return {
                 student: {
-                    _id: s.studentInfo._id,
-                    name: s.studentInfo.name,
-                    gender: s.studentInfo.gender,
-                    regNo: s.studentInfo.regNo,
-                    profilePhoto: s.studentInfo.profilePhoto
+                    _id: studentDoc._id,
+                    name: studentDoc.name,
+                    gender: studentDoc.gender,
+                    regNo: studentDoc.regNo,
+                    rollNumber: studentDoc.rollNumber,
+                    profilePhoto: studentDoc.profilePhoto
                 },
-                class: s.classInfo ? {
-                    _id: s.classInfo._id,
-                    label: s.classInfo.label,
-                    name: s.classInfo.name,
-                    section: s.classInfo.section,
-                    branch: s.classInfo.branch
+                class: classObj ? {
+                    _id: classObj._id,
+                    label: classObj.label,
+                    name: classObj.name,
+                    section: classObj.section,
+                    branch: classObj.branch,
+                    value: classObj.value
                 } : null,
-                overallAverage: overallAvg,
+                classExamWeights,
+                // Composite & Dimension Scores
+                compositeScore,
+                marksScore,
+                ratingsScore,
+                overallAverage: overallAvg, // Star rating (1-5) for backward compatibility
                 evaluation: evalCategory,
-                avgClassEngagement: parseFloat(s.avgClassEngagement.toFixed(2)),
-                avgHomeworkClasswork: parseFloat(s.avgHomeworkClasswork.toFixed(2)),
-                avgBehaviourSocial: parseFloat(s.avgBehaviourSocial.toFixed(2)),
-                avgEnglishComm: parseFloat(s.avgEnglishComm.toFixed(2)),
-                totalRatings: s.totalRatings,
-                monthsCount: s.evaluatedMonths.length,
+                evaluationStatus,
+                quadrant,
+                examBreakdown,
+                completedExamsCount: Object.keys(completedTypeScores).length,
+                // Ratings pillars
+                avgClassEngagement,
+                avgHomeworkClasswork,
+                avgBehaviourSocial,
+                avgEnglishComm,
+                totalRatings,
+                monthsCount,
                 trendDirection,
                 trendChange: changeVal
             };
         });
 
-        // Sort by overallAverage descending to establish base school/class rank
+        // 6. Filter evaluated students for base ranking
+        const evaluatedStudents = processedStudents.filter(s => s.compositeScore !== null);
+        const totalEvaluated = evaluatedStudents.length;
+
+        // Establish component-specific ranks
+        const sortedByMarks = [...evaluatedStudents].filter(s => s.marksScore !== null)
+            .sort((a, b) => b.marksScore - a.marksScore);
+        sortedByMarks.forEach((s, idx) => { s.marksRank = idx + 1; });
+
+        const sortedByRatings = [...evaluatedStudents].filter(s => s.overallAverage !== null)
+            .sort((a, b) => b.overallAverage - a.overallAverage);
+        sortedByRatings.forEach((s, idx) => { s.ratingsRank = idx + 1; });
+
+        // Base Leaderboard Sort: Default to comprehensive compositeScore descending
         processedStudents.sort((a, b) => {
-            if (b.overallAverage !== a.overallAverage) {
-                return b.overallAverage - a.overallAverage;
+            const scoreA = a.compositeScore !== null ? a.compositeScore : -1;
+            const scoreB = b.compositeScore !== null ? b.compositeScore : -1;
+            if (scoreB !== scoreA) {
+                return scoreB - scoreA;
             }
-            return b.totalRatings - a.totalRatings;
+            if ((b.marksScore || 0) !== (a.marksScore || 0)) {
+                return (b.marksScore || 0) - (a.marksScore || 0);
+            }
+            return (b.overallAverage || 0) - (a.overallAverage || 0);
         });
 
-        // Assign Leaderboard Rank & Medal
-        processedStudents.forEach((st, idx) => {
-            st.rank = idx + 1;
-            if (st.rank === 1) st.medal = 'gold';
-            else if (st.rank === 2) st.medal = 'silver';
-            else if (st.rank === 3) st.medal = 'bronze';
-            else st.medal = null;
+        // Assign Overall Leaderboard Rank & Medal
+        let rankCounter = 1;
+        processedStudents.forEach((st) => {
+            if (st.compositeScore !== null) {
+                st.rank = rankCounter++;
+                if (st.rank === 1) st.medal = 'gold';
+                else if (st.rank === 2) st.medal = 'silver';
+                else if (st.rank === 3) st.medal = 'bronze';
+                else st.medal = null;
+            } else {
+                st.rank = null;
+                st.medal = null;
+            }
         });
 
         // Compute School-Wide / Selection-Wide Cumulative KPIs
-        const totalEvaluated = processedStudents.length;
-        const schoolAverage = totalEvaluated > 0
-            ? parseFloat((processedStudents.reduce((acc, st) => acc + st.overallAverage, 0) / totalEvaluated).toFixed(2))
+        const studentsWithRatings = processedStudents.filter(s => s.overallAverage !== null);
+        const schoolAverage = studentsWithRatings.length > 0
+            ? parseFloat((studentsWithRatings.reduce((acc, st) => acc + st.overallAverage, 0) / studentsWithRatings.length).toFixed(2))
+            : null;
+
+        const studentsWithMarks = processedStudents.filter(s => s.marksScore !== null);
+        const schoolMarksAverage = studentsWithMarks.length > 0
+            ? parseFloat((studentsWithMarks.reduce((acc, st) => acc + st.marksScore, 0) / studentsWithMarks.length).toFixed(1))
+            : null;
+
+        const schoolCompositeAverage = totalEvaluated > 0
+            ? parseFloat((evaluatedStudents.reduce((acc, st) => acc + st.compositeScore, 0) / totalEvaluated).toFixed(1))
             : null;
 
         const schoolCriteriaAverages = {
-            classEngagement: totalEvaluated > 0
-                ? parseFloat((processedStudents.reduce((acc, st) => acc + st.avgClassEngagement, 0) / totalEvaluated).toFixed(2))
+            classEngagement: studentsWithRatings.length > 0
+                ? parseFloat((studentsWithRatings.reduce((acc, st) => acc + (st.avgClassEngagement || 0), 0) / studentsWithRatings.length).toFixed(2))
                 : 0,
-            homeworkClasswork: totalEvaluated > 0
-                ? parseFloat((processedStudents.reduce((acc, st) => acc + st.avgHomeworkClasswork, 0) / totalEvaluated).toFixed(2))
+            homeworkClasswork: studentsWithRatings.length > 0
+                ? parseFloat((studentsWithRatings.reduce((acc, st) => acc + (st.avgHomeworkClasswork || 0), 0) / studentsWithRatings.length).toFixed(2))
                 : 0,
-            behaviourSocial: totalEvaluated > 0
-                ? parseFloat((processedStudents.reduce((acc, st) => acc + st.avgBehaviourSocial, 0) / totalEvaluated).toFixed(2))
+            behaviourSocial: studentsWithRatings.length > 0
+                ? parseFloat((studentsWithRatings.reduce((acc, st) => acc + (st.avgBehaviourSocial || 0), 0) / studentsWithRatings.length).toFixed(2))
                 : 0,
-            englishComm: totalEvaluated > 0
-                ? parseFloat((processedStudents.reduce((acc, st) => acc + st.avgEnglishComm, 0) / totalEvaluated).toFixed(2))
+            englishComm: studentsWithRatings.length > 0
+                ? parseFloat((studentsWithRatings.reduce((acc, st) => acc + (st.avgEnglishComm || 0), 0) / studentsWithRatings.length).toFixed(2))
                 : 0
         };
 
         // Distribution tiers counts
         const tierCounts = {
-            excellent: processedStudents.filter(s => s.overallAverage >= 4.5).length,
-            good: processedStudents.filter(s => s.overallAverage >= 3.5 && s.overallAverage < 4.5).length,
-            meets: processedStudents.filter(s => s.overallAverage >= 2.5 && s.overallAverage < 3.5).length,
-            needs_improvement: processedStudents.filter(s => s.overallAverage >= 2.0 && s.overallAverage < 2.5).length,
-            needs_significant_improvement: processedStudents.filter(s => s.overallAverage < 2.0).length,
+            excellent: processedStudents.filter(s => (s.overallAverage || 0) >= 4.5).length,
+            good: processedStudents.filter(s => (s.overallAverage || 0) >= 3.5 && (s.overallAverage || 0) < 4.5).length,
+            meets: processedStudents.filter(s => (s.overallAverage || 0) >= 2.5 && (s.overallAverage || 0) < 3.5).length,
+            needs_improvement: processedStudents.filter(s => s.overallAverage !== null && s.overallAverage >= 2.0 && s.overallAverage < 2.5).length,
+            needs_significant_improvement: processedStudents.filter(s => s.overallAverage !== null && s.overallAverage < 2.0).length,
             unrated: Math.max(0, totalEnrolledStudents - totalEvaluated)
+        };
+
+        // Quadrant counts for filtering
+        const quadrantCounts = {
+            all_rounders: processedStudents.filter(s => s.quadrant === 'all_rounder').length,
+            academic_stars: processedStudents.filter(s => s.quadrant === 'academic_star').length,
+            diligent_strivers: processedStudents.filter(s => s.quadrant === 'diligent_striver').length,
+            needs_support: processedStudents.filter(s => s.quadrant === 'needs_support').length
         };
 
         // Filter and sort for the response
         let filteredStudents = [...processedStudents];
 
-        // Apply Search Filter (Name, RegNo)
+        // Apply Search Filter (Name, RegNo, RollNumber)
         if (search && search.trim()) {
             const q = search.trim().toLowerCase();
             filteredStudents = filteredStudents.filter(s => {
                 const name = (s.student?.name || '').toLowerCase();
                 const regNo = (s.student?.regNo || '').toLowerCase();
-                return name.includes(q) || regNo.includes(q);
+                const roll = String(s.student?.rollNumber || '').toLowerCase();
+                return name.includes(q) || regNo.includes(q) || roll.includes(q);
             });
         }
 
-        // Apply Tier Filter
+        // Apply Tier / Quadrant Filter
         if (tier && tier !== 'all') {
-            if (tier === 'top_performers' || tier === 'excellent') {
-                filteredStudents = filteredStudents.filter(s => s.overallAverage >= 4.5);
+            if (tier === 'all_rounders') {
+                filteredStudents = filteredStudents.filter(s => s.quadrant === 'all_rounder');
+            } else if (tier === 'academic_stars') {
+                filteredStudents = filteredStudents.filter(s => s.quadrant === 'academic_star');
+            } else if (tier === 'diligent_strivers') {
+                filteredStudents = filteredStudents.filter(s => s.quadrant === 'diligent_striver');
+            } else if (tier === 'needs_support') {
+                filteredStudents = filteredStudents.filter(s => s.quadrant === 'needs_support');
+            } else if (tier === 'top_academics') {
+                filteredStudents = filteredStudents.filter(s => (s.marksScore || 0) >= 80);
+            } else if (tier === 'top_performers' || tier === 'excellent') {
+                filteredStudents = filteredStudents.filter(s => (s.overallAverage || 0) >= 4.5);
             } else if (tier === 'good') {
-                filteredStudents = filteredStudents.filter(s => s.overallAverage >= 3.5 && s.overallAverage < 4.5);
+                filteredStudents = filteredStudents.filter(s => (s.overallAverage || 0) >= 3.5 && (s.overallAverage || 0) < 4.5);
             } else if (tier === 'meets') {
-                filteredStudents = filteredStudents.filter(s => s.overallAverage >= 2.5 && s.overallAverage < 3.5);
+                filteredStudents = filteredStudents.filter(s => (s.overallAverage || 0) >= 2.5 && (s.overallAverage || 0) < 3.5);
             } else if (tier === 'attention' || tier === 'needs_attention') {
-                filteredStudents = filteredStudents.filter(s => s.overallAverage < 3.0);
+                filteredStudents = filteredStudents.filter(s => s.overallAverage !== null && s.overallAverage < 3.0);
             } else if (tier === 'needs_improvement') {
-                filteredStudents = filteredStudents.filter(s => s.overallAverage >= 2.0 && s.overallAverage < 2.5);
+                filteredStudents = filteredStudents.filter(s => s.overallAverage !== null && s.overallAverage >= 2.0 && s.overallAverage < 2.5);
             } else if (tier === 'needs_significant_improvement') {
-                filteredStudents = filteredStudents.filter(s => s.overallAverage < 2.0);
+                filteredStudents = filteredStudents.filter(s => s.overallAverage !== null && s.overallAverage < 2.0);
             }
         }
 
-        // Apply Custom Sort if specified
-        if (sortBy === 'lowest') {
-            filteredStudents.sort((a, b) => a.overallAverage - b.overallAverage);
-        } else if (sortBy === 'name') {
+        // Apply Custom Sort
+        const activeSort = sortBy || (mode === 'marks' ? 'marks' : mode === 'ratings' ? 'ratings' : 'composite');
+
+        if (activeSort === 'marks') {
+            filteredStudents.sort((a, b) => (b.marksScore || -1) - (a.marksScore || -1));
+        } else if (activeSort === 'ratings' || activeSort === 'highest') {
+            filteredStudents.sort((a, b) => (b.overallAverage || -1) - (a.overallAverage || -1));
+        } else if (activeSort === 'lowest') {
+            filteredStudents.sort((a, b) => (a.compositeScore !== null ? a.compositeScore : 999) - (b.compositeScore !== null ? b.compositeScore : 999));
+        } else if (activeSort === 'name') {
             filteredStudents.sort((a, b) => (a.student?.name || '').localeCompare(b.student?.name || ''));
-        } else if (sortBy === 'most_rated') {
+        } else if (activeSort === 'most_rated') {
             filteredStudents.sort((a, b) => b.totalRatings - a.totalRatings);
-        } else if (sortBy === 'least_rated') {
+        } else if (activeSort === 'least_rated') {
             filteredStudents.sort((a, b) => a.totalRatings - b.totalRatings);
-        } else if (sortBy === 'improving') {
+        } else if (activeSort === 'improving') {
             filteredStudents.sort((a, b) => (b.trendChange || 0) - (a.trendChange || 0));
         }
 
         // Fetch distinct classes for filter dropdown
-        const ClassModel = require('../models/Class');
         const classes = await ClassModel.find({ academicYear: req.academicYearContext })
-            .select('value label name section branch')
+            .select('value label name section branch examWeights')
             .sort({ value: 1, section: 1 })
             .lean();
 
         res.json({
             success: true,
-            schoolAverage,
+            mode,
+            marksWeight,
+            ratingsWeight,
+            schoolCompositeAverage,
+            schoolMarksAverage,
+            schoolAverage, // backward compatible rating average
+            schoolRatingAverage: schoolAverage,
             totalEnrolledStudents,
             totalEvaluatedStudents: totalEvaluated,
             evaluationCoveragePercent: totalEnrolledStudents > 0
@@ -1899,6 +2130,8 @@ router.get('/school/all-students-dashboard', [auth, yearContext, checkRole(['adm
                 : 0,
             schoolCriteriaAverages,
             tierCounts,
+            quadrantCounts,
+            defaultWeightsByClass: EXAM_WEIGHTS_BY_CLASS,
             totalStudentsCount: filteredStudents.length,
             students: filteredStudents,
             classes,

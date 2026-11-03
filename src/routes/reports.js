@@ -10,6 +10,7 @@ const { requireStudentAccessParam, requireClassAccessParam } = require('../middl
 
 const Attendance = require('../models/Attendance');
 const { yearContext } = require('../middleware/yearContext');
+const { getClassExamWeights, computeClassWeightedMarks } = require('../utils/examWeightResolver');
 
 // Helper to get grade: 90-100 A+, 70-89 A, 50-69 B+, 30-49 B, Below 30 C
 const getGrade = (percentage) => {
@@ -28,26 +29,19 @@ const getActiveYearId = async (providedId, reqYearContext) => {
     return activeYear ? activeYear._id : null;
 };
 
-// Exam-type weights: FA1=10%, FA2=10%, SA1=30%, FA3=10%, FA4=10%, SA2=30%
-const EXAM_WEIGHTS = { FA1: 10, FA2: 10, SA1: 30, FA3: 10, FA4: 10, SA2: 30 };
-
 /**
  * Compute weighted overall percentage for a student.
+ * Uses class-specific distinct weights if provided, or defaults.
  * Each completed exam type contributes: (typeObtained/typeMax)*100 * weight.
- * If only some types are done, the denominator is the sum of their weights.
+ * If only some types are done, the denominator is dynamically normalized across completed weights.
  */
-const computeWeightedPercentage = (completedTypeScores) => {
-    // completedTypeScores: { FA1: pct, SA1: pct, ... } — only completed types
-    const totalWeight = Object.keys(completedTypeScores)
-        .reduce((sum, type) => sum + (EXAM_WEIGHTS[type] || 0), 0);
-    if (totalWeight === 0) return 0;
-    const weightedSum = Object.entries(completedTypeScores)
-        .reduce((sum, [type, pct]) => sum + pct * (EXAM_WEIGHTS[type] || 0), 0);
-    return parseFloat((weightedSum / totalWeight).toFixed(1));
+const computeWeightedPercentage = (completedTypeScores, customWeights) => {
+    const result = computeClassWeightedMarks(completedTypeScores, customWeights);
+    return result !== null ? result : 0;
 };
 
 // Helper: compute overall percentage for a student given exams + marks
-const computeStudentOverall = (exams, marks) => {
+const computeStudentOverall = (exams, marks, customWeights) => {
     const examTypes = ['FA1', 'FA2', 'SA1', 'FA3', 'FA4', 'SA2'];
     const completedTypeScores = {};
 
@@ -75,7 +69,7 @@ const computeStudentOverall = (exams, marks) => {
         }
     });
 
-    return computeWeightedPercentage(completedTypeScores);
+    return computeWeightedPercentage(completedTypeScores, customWeights);
 };
 
 // @route   GET /api/reports/student/:studentId
@@ -93,7 +87,7 @@ router.get('/student/:studentId', [auth, yearContext, requireStudentAccessParam(
 
         const student = await User.findById(studentId)
             .select('name email rollNumber admissionNumber profileImage currentClass')
-            .populate('currentClass', 'name section')
+            .populate('currentClass', 'name section value label examWeights')
             .lean();
 
         if (!student) {
@@ -139,6 +133,7 @@ router.get('/student/:studentId', [auth, yearContext, requireStudentAccessParam(
         }).lean();
 
         // Structure data by Exam Type (FA1, FA2...)
+        const classWeights = getClassExamWeights(student.currentClass);
         const examTypes = ['FA1', 'FA2', 'SA1', 'FA3', 'FA4', 'SA2'];
         const reportData = examTypes.map(type => {
             const typeExams = exams.filter(e => e.standardizedType === type);
@@ -202,7 +197,7 @@ router.get('/student/:studentId', [auth, yearContext, requireStudentAccessParam(
 
             return {
                 examType: type,
-                weightage: EXAM_WEIGHTS[type] || 0,
+                weightage: classWeights[type] || 0,
                 status,                         // 'not_initialized' | 'pending' | 'completed'
                 isCompleted: status === 'completed',
                 totalMax,
@@ -264,7 +259,7 @@ router.get('/student/:studentId', [auth, yearContext, requireStudentAccessParam(
                 }
             });
 
-            const pct = computeWeightedPercentage(cmCompletedTypeScores);
+            const pct = computeWeightedPercentage(cmCompletedTypeScores, classWeights);
             return { studentId: cm._id.toString(), percentage: pct, examWisePct };
         });
 
