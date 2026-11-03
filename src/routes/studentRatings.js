@@ -15,7 +15,20 @@ const {
 } = require('../validations/studentRating');
 const { getISTMonthYear } = require('../utils/dateUtils');
 const { logAudit } = require('../utils/auditLogger');
-const { cacheInvalidatePattern } = require('../config/redis');
+const { cacheGet, cacheSet, cacheInvalidatePattern } = require('../config/redis');
+
+// In-memory cache for high-frequency dashboard reads
+const dashboardCache = new Map();
+const DASHBOARD_CACHE_TTL_MS = 3 * 60 * 1000; // 3 minutes in-memory
+const DASHBOARD_REDIS_TTL_SEC = 180; // 3 minutes in Redis
+
+const invalidateRatingCaches = async () => {
+    dashboardCache.clear();
+    try {
+        await cacheInvalidatePattern('student-ratings:*');
+        await cacheInvalidatePattern('ratings:*');
+    } catch (_) {}
+};
 
 const MONTH_NAMES = [
     'January', 'February', 'March', 'April', 'May', 'June',
@@ -413,6 +426,8 @@ router.post('/bulk', [auth, yearContext, requireOpenYear, ...bulkRatingValidatio
         });
 
         const result = await StudentRating.bulkWrite(bulkOps, { ordered: false });
+
+        invalidateRatingCaches().catch(() => {});
 
         res.json({
             success: true,
@@ -1089,11 +1104,8 @@ const bulkDeleteHandler = async (req, res) => {
             }
         });
 
-        // Invalidate Redis cache if available
-        try {
-            await cacheInvalidatePattern('ratings:*');
-            await cacheInvalidatePattern('student-ratings:*');
-        } catch (_) {}
+        // Invalidate cache
+        await invalidateRatingCaches();
 
         return res.json({
             success: true,
@@ -1189,10 +1201,7 @@ const subjectResetHandler = async (req, res) => {
             }
         });
 
-        try {
-            await cacheInvalidatePattern('ratings:*');
-            await cacheInvalidatePattern('student-ratings:*');
-        } catch (_) {}
+        await invalidateRatingCaches();
 
         return res.json({
             success: true,
@@ -1291,10 +1300,7 @@ const singleStudentDeleteHandler = async (req, res) => {
             }
         });
 
-        try {
-            await cacheInvalidatePattern('ratings:*');
-            await cacheInvalidatePattern('student-ratings:*');
-        } catch (_) {}
+        await invalidateRatingCaches();
 
         return res.json({
             success: true,
@@ -1454,10 +1460,7 @@ router.post('/admin/shift-month', [auth, yearContext, requireOpenYear, requireAd
         });
 
         // Invalidate Redis cache
-        try {
-            await cacheInvalidatePattern('ratings:*');
-            await cacheInvalidatePattern('student-ratings:*');
-        } catch (_) {}
+        await invalidateRatingCaches();
 
         return res.json({
             success: true,
@@ -1666,6 +1669,23 @@ router.get('/school/all-students-dashboard', [auth, yearContext, checkRole(['adm
             ? Number(req.query.ratingsWeight)
             : 50;
 
+        const cacheKey = `student-ratings:dashboard:${req.academicYearContext}:${classId || 'all'}:${mode}:${marksWeight}:${ratingsWeight}:${search || ''}:${tier || 'all'}:${sortBy || ''}`;
+
+        // 1. In-memory cache check (0ms)
+        const memCached = dashboardCache.get(cacheKey);
+        if (memCached && (Date.now() - memCached.ts < DASHBOARD_CACHE_TTL_MS)) {
+            return res.json(memCached.data);
+        }
+
+        // 2. Redis cache check (~1ms)
+        try {
+            const redisData = await cacheGet(cacheKey);
+            if (redisData) {
+                dashboardCache.set(cacheKey, { data: redisData, ts: Date.now() });
+                return res.json(redisData);
+            }
+        } catch (_) {}
+
         const Exam = require('../models/Exam');
         const Marks = require('../models/Marks');
         const ClassModel = require('../models/Class');
@@ -1738,17 +1758,43 @@ router.get('/school/all-students-dashboard', [auth, yearContext, checkRole(['adm
         });
 
         // 3. Fetch standardized exams for this academic year (and class if filtered)
+        const yearId = req.academicYearContext;
         const examFilter = {
-            academicYear: new mongoose.Types.ObjectId(req.academicYearContext),
-            isStandardized: true,
-            status: { $ne: 'cancelled' }
+            status: { $ne: 'cancelled' },
+            $or: [
+                { isStandardized: true },
+                { standardizedType: { $in: STANDARDIZED_EXAM_TYPES } }
+            ]
         };
-        if (classId && classId !== 'all') {
-            examFilter.class = new mongoose.Types.ObjectId(classId);
+        if (yearId) {
+            examFilter.academicYear = { $in: [yearId, new mongoose.Types.ObjectId(yearId)] };
         }
-        const exams = await Exam.find(examFilter)
-            .select('_id name standardizedType class subject totalMarks')
+        if (classId && classId !== 'all') {
+            examFilter.class = { $in: [classId, new mongoose.Types.ObjectId(classId)] };
+        }
+        let exams = await Exam.find(examFilter)
+            .select('_id name standardizedType class subject totalMarks isStandardized status academicYear')
             .lean();
+
+        // If no exams found for this year context, fallback to exams with unset/null academicYear
+        if (exams.length === 0 && yearId) {
+            const fallbackFilter = {
+                status: { $ne: 'cancelled' },
+                $or: [
+                    { isStandardized: true },
+                    { standardizedType: { $in: STANDARDIZED_EXAM_TYPES } }
+                ]
+            };
+            if (classId && classId !== 'all') {
+                fallbackFilter.class = { $in: [classId, new mongoose.Types.ObjectId(classId)] };
+            }
+            const fallbackExams = await Exam.find(fallbackFilter)
+                .select('_id name standardizedType class subject totalMarks isStandardized status academicYear')
+                .lean();
+            if (fallbackExams.length > 0) {
+                exams = fallbackExams;
+            }
+        }
 
         const examIds = exams.map(e => e._id);
         const examById = {};
@@ -1762,23 +1808,32 @@ router.get('/school/all-students-dashboard', [auth, yearContext, checkRole(['adm
             student: { $in: studentIds }
         }).select('student exam marksObtained percentage').lean();
 
+        // Standardized Exam Type Normalizer
+        const resolveExamType = (e) => {
+            if (!e) return null;
+            const direct = (e.standardizedType || '').toUpperCase().trim();
+            if (STANDARDIZED_EXAM_TYPES.includes(direct)) return direct;
+            const clean = `${e.standardizedType || ''} ${e.name || ''}`.toUpperCase().replace(/[^A-Z0-9]/g, '');
+            for (const t of STANDARDIZED_EXAM_TYPES) {
+                if (clean.includes(t)) return t;
+            }
+            return null;
+        };
+
         // Group marks by student and standardized exam type
         const marksByStudent = {};
         marksRecords.forEach(m => {
-            const studentIdStr = m.student.toString();
-            const exam = examById[m.exam.toString()];
+            const studentIdStr = (m.student?._id || m.student).toString();
+            const examIdStr = (m.exam?._id || m.exam).toString();
+            const exam = examById[examIdStr];
             if (!exam) return;
 
-            // Only count marks for exams belonging to the student's current class
-            const currentClassId = studentClassById[studentIdStr];
-            if (exam.class && currentClassId && exam.class.toString() !== currentClassId) {
-                return;
-            }
+            const stdType = resolveExamType(exam);
+            if (!stdType) return;
 
             if (!marksByStudent[studentIdStr]) {
                 marksByStudent[studentIdStr] = {};
             }
-            const stdType = exam.standardizedType;
             if (!marksByStudent[studentIdStr][stdType]) {
                 marksByStudent[studentIdStr][stdType] = {
                     totalObtained: 0,
@@ -1786,8 +1841,17 @@ router.get('/school/all-students-dashboard', [auth, yearContext, checkRole(['adm
                     count: 0
                 };
             }
-            marksByStudent[studentIdStr][stdType].totalObtained += m.marksObtained;
-            marksByStudent[studentIdStr][stdType].totalMax += exam.totalMarks;
+
+            const examMaxMarks = (typeof exam.totalMarks === 'number' && exam.totalMarks > 0)
+                ? exam.totalMarks
+                : (Number(exam.totalMarks) > 0 ? Number(exam.totalMarks) : 100);
+
+            const studentObtained = (typeof m.marksObtained === 'number' && !isNaN(m.marksObtained))
+                ? m.marksObtained
+                : (Number(m.marksObtained) >= 0 ? Number(m.marksObtained) : 0);
+
+            marksByStudent[studentIdStr][stdType].totalObtained += studentObtained;
+            marksByStudent[studentIdStr][stdType].totalMax += examMaxMarks;
             marksByStudent[studentIdStr][stdType].count += 1;
         });
 
@@ -2114,7 +2178,7 @@ router.get('/school/all-students-dashboard', [auth, yearContext, checkRole(['adm
             .sort({ value: 1, section: 1 })
             .lean();
 
-        res.json({
+        const responseData = {
             success: true,
             mode,
             marksWeight,
@@ -2137,7 +2201,13 @@ router.get('/school/all-students-dashboard', [auth, yearContext, checkRole(['adm
             classes,
             dataPoints: StudentRating.DATA_POINTS,
             ratingLabels: StudentRating.RATING_LABELS
-        });
+        };
+
+        // Cache response in memory and Redis
+        dashboardCache.set(cacheKey, { data: responseData, ts: Date.now() });
+        cacheSet(cacheKey, responseData, DASHBOARD_REDIS_TTL_SEC).catch(() => {});
+
+        res.json(responseData);
     } catch (err) {
         console.error('Error fetching school all-students dashboard:', err);
         res.status(500).json({ success: false, message: 'Server error' });

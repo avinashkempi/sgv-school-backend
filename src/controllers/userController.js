@@ -1,6 +1,19 @@
 const { validationResult } = require('express-validator');
 const User = require('../models/User');
 const { invalidateUserCache } = require('../middleware/auth');
+const { cacheGet, cacheSet, cacheInvalidatePattern } = require('../config/redis');
+
+// Multi-tier caching for high-frequency user list & search queries
+const userListCache = new Map();
+const USER_CACHE_TTL_MS = 60 * 1000; // 60 seconds in memory
+const USER_REDIS_TTL_SEC = 60; // 60 seconds in Redis
+
+const invalidateUsersCache = async () => {
+  userListCache.clear();
+  try {
+    await cacheInvalidatePattern('users:*');
+  } catch (_) {}
+};
 
 const MAX_PAGE_LIMIT = 100;
 const ALLOWED_SORT_FIELDS = new Set(['createdAt', 'name', 'role', 'phone', 'email']);
@@ -37,8 +50,25 @@ const ensureCanAssignRole = async (requestUser, targetRole, existingUser = null)
 const getAllUsers = async (req, res) => {
   try {
     const { page, limit, skip } = parsePagination(req.query);
-
     const { role, search, sortBy, order } = req.query;
+
+    const targetYear = req.academicYearContext ? req.academicYearContext.toString() : 'global';
+    const cacheKey = `users:list:${targetYear}:${role || 'all'}:${search || ''}:${sortBy || 'createdAt'}:${order || 'desc'}:${page}:${limit}`;
+
+    // 1. In-memory cache check (0ms)
+    const memCached = userListCache.get(cacheKey);
+    if (memCached && (Date.now() - memCached.ts < USER_CACHE_TTL_MS)) {
+      return res.json(memCached.data);
+    }
+
+    // 2. Redis check (~1ms)
+    try {
+      const redisData = await cacheGet(cacheKey);
+      if (redisData) {
+        userListCache.set(cacheKey, { data: redisData, ts: Date.now() });
+        return res.json(redisData);
+      }
+    } catch (_) {}
 
     // Build query filter
     const filter = {};
@@ -112,8 +142,7 @@ const getAllUsers = async (req, res) => {
       id: user._id
     }));
 
-    // Return paginated response
-    res.json({
+    const responsePayload = {
       success: true,
       data: usersWithId,
       pagination: {
@@ -122,7 +151,13 @@ const getAllUsers = async (req, res) => {
         total,
         limit
       }
-    });
+    };
+
+    userListCache.set(cacheKey, { data: responsePayload, ts: Date.now() });
+    cacheSet(cacheKey, responsePayload, USER_REDIS_TTL_SEC).catch(() => {});
+
+    // Return paginated response
+    res.json(responsePayload);
   } catch (error) {
     console.error('Get all users error:', error);
     res.status(500).json({
@@ -231,6 +266,8 @@ const createUser = async (req, res) => {
       mustChangePassword: true
     });
     await user.save();
+
+    invalidateUsersCache().catch(() => {});
 
     res.status(201).json({
       success: true,
@@ -357,6 +394,8 @@ const updateUser = async (req, res) => {
 
     await user.save();
 
+    invalidateUsersCache().catch(() => {});
+
     // Clear auth cache for this user so changes take effect immediately
     invalidateUserCache(user._id);
 
@@ -394,6 +433,7 @@ const deleteUser = async (req, res) => {
 
     // Clear auth cache for deleted user
     invalidateUserCache(id);
+    invalidateUsersCache().catch(() => {});
 
     res.json({
       success: true,
@@ -420,6 +460,25 @@ const searchUsers = async (req, res) => {
       });
     }
 
+    const targetYearId = req.query.academicYearId || req.academicYearContext;
+    const cleanQuery = query.trim().toLowerCase();
+    const cacheKey = `users:search:${targetYearId || 'global'}:${role || 'all'}:${req.query.classId || 'all'}:${cleanQuery}:${req.query.page || 1}:${req.query.limit || 20}`;
+
+    // 1. In-memory cache check (0ms)
+    const memCached = userListCache.get(cacheKey);
+    if (memCached && (Date.now() - memCached.ts < USER_CACHE_TTL_MS)) {
+      return res.json(memCached.data);
+    }
+
+    // 2. Redis check (~1ms)
+    try {
+      const redisData = await cacheGet(cacheKey);
+      if (redisData) {
+        userListCache.set(cacheKey, { data: redisData, ts: Date.now() });
+        return res.json(redisData);
+      }
+    } catch (_) {}
+
     // Build search filter
     const filter = {};
 
@@ -434,7 +493,6 @@ const searchUsers = async (req, res) => {
     }
 
     // Apply Academic Year context
-    const targetYearId = req.query.academicYearId || req.academicYearContext;
     let yearFilterOr = null;
 
     if (targetYearId) {
@@ -482,7 +540,7 @@ const searchUsers = async (req, res) => {
       id: user._id
     }));
 
-    res.json({
+    const responsePayload = {
       success: true,
       data: usersWithId,
       pagination: {
@@ -491,7 +549,12 @@ const searchUsers = async (req, res) => {
         total,
         limit
       }
-    });
+    };
+
+    userListCache.set(cacheKey, { data: responsePayload, ts: Date.now() });
+    cacheSet(cacheKey, responsePayload, USER_REDIS_TTL_SEC).catch(() => {});
+
+    res.json(responsePayload);
   } catch (error) {
     console.error('Search users error:', error);
     res.status(500).json({
@@ -565,6 +628,8 @@ const revertStudentPromotion = async (req, res) => {
     await StudentHistory.findByIdAndDelete(latestHistory._id);
 
     await user.save();
+
+    invalidateUsersCache().catch(() => {});
 
     res.json({
       success: true,

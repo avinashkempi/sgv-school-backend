@@ -222,6 +222,12 @@ userSchema.index({ currentClass: 1 });
 userSchema.index({ academicYear: 1 });
 userSchema.index({ name: 1 });
 userSchema.index({ email: 1 });
+userSchema.index({ phone: 1 });
+userSchema.index({ regNo: 1 });
+userSchema.index({ rollNumber: 1 });
 userSchema.index({ role: 1, currentClass: 1 });
+userSchema.index({ role: 1, academicYear: 1, isActive: 1 });
+userSchema.index({ role: 1, academicYear: 1, currentClass: 1, isActive: 1 });
+userSchema.index({ role: 1, academicYear: 1, name: 1 });
 
 module.exports = mongoose.model('User', userSchema);
