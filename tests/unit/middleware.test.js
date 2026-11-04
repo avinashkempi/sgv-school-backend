@@ -3,7 +3,6 @@ const mongoose = require('mongoose');
 const User = require('../../src/models/User');
 const Class = require('../../src/models/Class');
 const AcademicYear = require('../../src/models/AcademicYear');
-const Subject = require('../../src/models/Subject');
 const {
   authenticateToken,
   requireAdmin,

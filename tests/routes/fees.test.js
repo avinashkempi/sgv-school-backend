@@ -6,7 +6,6 @@ const Class = require('../../src/models/Class');
 const AcademicYear = require('../../src/models/AcademicYear');
 const FeeStructure = require('../../src/models/FeeStructure');
 const StudentFee = require('../../src/models/StudentFee');
-const FeePayment = require('../../src/models/FeePayment');
 const { invalidateUserCache } = require('../../src/middleware/auth');
 
 describe('Fees & Finance API Routes (/api/fees)', () => {

@@ -1,11 +1,9 @@
 const request = require('supertest');
-const mongoose = require('mongoose');
 const jwt = require('jsonwebtoken');
 const app = require('../../index');
 const User = require('../../src/models/User');
 const Class = require('../../src/models/Class');
 const AcademicYear = require('../../src/models/AcademicYear');
-const Attendance = require('../../src/models/Attendance');
 const StudentFee = require('../../src/models/StudentFee');
 
 describe('Dashboard API Routes (/api/dashboard)', () => {

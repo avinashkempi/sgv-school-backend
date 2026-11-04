@@ -1,5 +1,4 @@
 const request = require('supertest');
-const mongoose = require('mongoose');
 const jwt = require('jsonwebtoken');
 const app = require('../../index');
 const User = require('../../src/models/User');
@@ -8,8 +7,8 @@ const AcademicYear = require('../../src/models/AcademicYear');
 const LeaveRequest = require('../../src/models/LeaveRequest');
 
 describe('Leave Management API Routes (/api/leaves)', () => {
-  let adminUser, teacherUser, studentUser;
-  let adminToken, teacherToken, studentToken;
+  let teacherUser, studentUser;
+  let teacherToken, studentToken;
   let academicYear, sampleClass;
 
   beforeEach(async () => {
@@ -18,16 +17,6 @@ describe('Leave Management API Routes (/api/leaves)', () => {
       startDate: new Date('2025-06-01'),
       endDate: new Date('2026-04-30'),
       isActive: true,
-    });
-
-    adminUser = await User.create({
-      name: 'Admin Leave',
-      phone: '9888833301',
-      password: 'password123',
-      role: 'admin',
-      isActive: true,
-      tokenVersion: 0,
-      academicYear: academicYear._id,
     });
 
     teacherUser = await User.create({
@@ -64,10 +53,6 @@ describe('Leave Management API Routes (/api/leaves)', () => {
     sampleClass.students = [studentUser._id];
     await sampleClass.save();
 
-    adminToken = jwt.sign(
-      { userId: adminUser._id, phone: adminUser.phone, role: 'admin', tokenVersion: 0 },
-      process.env.JWT_SECRET
-    );
     teacherToken = jwt.sign(
       { userId: teacherUser._id, phone: teacherUser.phone, role: 'teacher', tokenVersion: 0 },
       process.env.JWT_SECRET

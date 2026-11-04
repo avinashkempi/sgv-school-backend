@@ -113,9 +113,10 @@ router.get('/my-timetable', auth, async (req, res) => {
             return res.status(404).json({ message: 'User not found' });
         }
 
-        // Handle assigned currentClass for student or any role
-        if (user.currentClass) {
-            const classId = user.currentClass._id || user.currentClass;
+        // Handle assigned currentClass or class for student or any role
+        const classRef = user.currentClass || user.class;
+        if (classRef) {
+            const classId = classRef._id || classRef;
             const timetable = await Timetable.findOne({ class: classId })
                 .populate({
                     path: 'schedule.periods.subject',
@@ -148,7 +149,7 @@ router.get('/my-timetable', auth, async (req, res) => {
             }
         }
 
-        if (user.role === 'student' && !user.currentClass) {
+        if (user.role === 'student' && !classRef) {
             return res.status(400).json({ message: 'Student not assigned to a class' });
         }
 

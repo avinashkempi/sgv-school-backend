@@ -39,6 +39,14 @@ export default [
             "no-console": "off",
             "no-undef": "error"
         }
+    },
+    {
+        files: ["tests/**"],
+        languageOptions: {
+            globals: {
+                ...globals.jest
+            }
+        }
     }
 ];
 

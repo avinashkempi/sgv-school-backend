@@ -15,7 +15,7 @@ jest.mock('../../src/services/notificationService', () => ({
 
 describe('Events API Routes (/api/events)', () => {
   let adminUser, teacherUser, studentUser;
-  let adminToken, teacherToken, studentToken;
+  let adminToken, teacherToken;
   let academicYear;
 
   beforeEach(async () => {
@@ -62,10 +62,6 @@ describe('Events API Routes (/api/events)', () => {
     );
     teacherToken = jwt.sign(
       { userId: teacherUser._id, phone: teacherUser.phone, role: 'teacher', tokenVersion: 0 },
-      process.env.JWT_SECRET
-    );
-    studentToken = jwt.sign(
-      { userId: studentUser._id, phone: studentUser.phone, role: 'student', tokenVersion: 0 },
       process.env.JWT_SECRET
     );
   });

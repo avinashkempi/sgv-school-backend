@@ -10,7 +10,6 @@ const Marks = require('../../src/models/Marks');
 const { invalidateUserCache } = require('../../src/middleware/auth');
 
 describe('Marks API Routes (/api/marks)', () => {
-  let adminToken;
   let subjectTeacher;
   let subjectTeacherToken;
   let unassignedTeacherToken;
@@ -33,19 +32,6 @@ describe('Marks API Routes (/api/marks)', () => {
       isActive: true,
       status: 'current'
     });
-
-    const admin = await User.create({
-      name: 'Admin Head',
-      phone: '9876543401',
-      password: 'password123',
-      role: 'admin',
-      isActive: true,
-      tokenVersion: 0
-    });
-    adminToken = jwt.sign(
-      { userId: admin._id, role: 'admin', tokenVersion: 0 },
-      process.env.JWT_SECRET
-    );
 
     subjectTeacher = await User.create({
       name: 'Maths Teacher',

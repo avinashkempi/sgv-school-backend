@@ -8,7 +8,6 @@ const Attendance = require('../../src/models/Attendance');
 const { invalidateUserCache } = require('../../src/middleware/auth');
 
 describe('Attendance API Routes (/api/attendance)', () => {
-  let adminToken;
   let unassignedTeacherToken;
   let assignedTeacherToken;
   let testClass;
@@ -49,19 +48,6 @@ describe('Attendance API Routes (/api/attendance)', () => {
     });
     unassignedTeacherToken = jwt.sign(
       { userId: unassignedTeacher._id, role: 'teacher', tokenVersion: 0 },
-      process.env.JWT_SECRET
-    );
-
-    const admin = await User.create({
-      name: 'Admin User',
-      phone: '9876543222',
-      password: 'password123',
-      role: 'admin',
-      isActive: true,
-      tokenVersion: 0
-    });
-    adminToken = jwt.sign(
-      { userId: admin._id, role: 'admin', tokenVersion: 0 },
       process.env.JWT_SECRET
     );
 

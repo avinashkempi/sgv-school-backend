@@ -1,16 +1,13 @@
 const {
   normalizeClassKey,
   getClassExamWeights,
-  computeClassWeightedMarks,
-  STANDARDIZED_EXAM_TYPES,
-  EXAM_WEIGHTS_BY_CLASS
+  computeClassWeightedMarks
 } = require('../../src/utils/examWeightResolver');
 const {
   getISTDateString,
   getISTMonthYear,
   isISTSunday,
   getISTDayBounds,
-  formatISTDate,
   validateAttendanceDate
 } = require('../../src/utils/dateUtils');
 const toTitleCase = require('../../src/utils/titleCase');

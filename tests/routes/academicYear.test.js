@@ -9,12 +9,11 @@ describe('Academic Year API Routes (/api/academic-year)', () => {
   let adminToken;
   let superAdminToken;
   let studentToken;
-  let activeYear;
 
   beforeEach(async () => {
     invalidateUserCache();
 
-    activeYear = await AcademicYear.create({
+    await AcademicYear.create({
       name: '2026-2027',
       startDate: new Date('2026-06-01'),
       endDate: new Date('2027-04-30'),

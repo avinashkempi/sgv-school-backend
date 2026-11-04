@@ -9,6 +9,7 @@ const Class = require('../models/Class');
 const Exam = require('../models/Exam');
 const AcademicYear = require('../models/AcademicYear');
 const Subject = require('../models/Subject');
+const StudentRating = require('../models/StudentRating');
 const {
     getISTDateString,
     getISTDayBounds,
@@ -843,7 +844,9 @@ exports.getStudentStats = async (req, res) => {
             appPayments,
             recentMarks,
             nextExam,
-            latestRatingRecords
+            latestRatingRecords,
+            totalRatableSubjects,
+            classRatingAgg
         ] = await Promise.all([
             // Attendance for full academic year
             Attendance.countDocuments({
@@ -939,14 +942,42 @@ exports.getStudentStats = async (req, res) => {
                     .populate('subject', 'name')
                     .lean();
             })(),
-            // Latest holistic ratings for student
-            require('../models/StudentRating').find({
+            // Holistic ratings for student in academic year
+            StudentRating.find({
                 student: studentId,
                 ...(activeYear ? { academicYear: activeYear._id } : {})
             })
                 .populate('subject', 'name ratingEnabled')
                 .sort({ year: -1, month: -1 })
-                .lean()
+                .lean(),
+            // Total ratable subjects for student's class
+            classId
+                ? Subject.countDocuments({
+                    class: classId,
+                    ...(activeYear ? { academicYear: activeYear._id } : {}),
+                    ratingEnabled: { $ne: false }
+                })
+                : 0,
+            // Class ratings aggregation for cumulative class benchmark & comparison
+            classId
+                ? StudentRating.aggregate([
+                    {
+                        $match: {
+                            class: new mongoose.Types.ObjectId(classId),
+                            ...(activeYear ? { academicYear: new mongoose.Types.ObjectId(activeYear._id) } : {}),
+                            isExempt: { $ne: true },
+                            averageScore: { $ne: null }
+                        }
+                    },
+                    {
+                        $group: {
+                            _id: '$student',
+                            studentAvg: { $avg: '$averageScore' }
+                        }
+                    },
+                    { $sort: { studentAvg: -1 } }
+                ])
+                : []
         ]);
 
         // 1. Attendance % (academic year)
@@ -980,54 +1011,172 @@ exports.getStudentStats = async (req, res) => {
             ? (nextExam.subject?.name || nextExam.name || nextExam.standardizedType || null)
             : null;
 
-        // 5. Holistic Student Rating Summary (Latest Available Month)
-        let latestRatingSummary = null;
-        if (latestRatingRecords && latestRatingRecords.length > 0) {
-            // Keep valid ratings that are not exempt and have a score
-            const validRatings = latestRatingRecords.filter(r => !r.isExempt && r.averageScore != null && r.subject);
-            if (validRatings.length > 0) {
-                const topMonth = validRatings[0].month;
-                const topYear = validRatings[0].year;
-                const topRatings = validRatings.filter(r => r.month === topMonth && r.year === topYear);
-                
-                if (topRatings.length > 0) {
-                    const avg = parseFloat((topRatings.reduce((s, r) => s + r.averageScore, 0) / topRatings.length).toFixed(1));
+        // 5. Holistic Student Rating Summary (Cumulative + Class Comparison + Current Month Status)
+        const validRatings = (latestRatingRecords || []).filter(
+            r => !r.isExempt && r.averageScore != null && r.subject && r.subject.ratingEnabled !== false
+        );
 
-                    let label = 'Meets Expectation';
-                    let variant = 'primary';
-                    if (avg >= 4.5) { label = 'Excellent'; variant = 'success'; }
-                    else if (avg >= 3.5) { label = 'Good'; variant = 'success'; }
-                    else if (avg >= 2.5) { label = 'Meets Expectation'; variant = 'primary'; }
-                    else if (avg >= 2.0) { label = 'Needs Improvement'; variant = 'warning'; }
-                    else { label = 'Needs Significant Imp.'; variant = 'error'; }
+        // 5a. Cumulative Academic Year Rating
+        let cumulativeAverage = null;
+        const cumulativeCount = validRatings.length;
+        if (cumulativeCount > 0) {
+            cumulativeAverage = parseFloat(
+                (validRatings.reduce((s, r) => s + r.averageScore, 0) / cumulativeCount).toFixed(1)
+            );
+        }
+        const cumEval = StudentRating.getPerformanceEvaluation(cumulativeAverage);
+        const cumEngagement = cumulativeCount > 0
+            ? parseFloat((validRatings.reduce((s, r) => s + (r.classEngagement || 0), 0) / cumulativeCount).toFixed(1))
+            : null;
+        const cumHomework = cumulativeCount > 0
+            ? parseFloat((validRatings.reduce((s, r) => s + (r.homeworkClasswork || 0), 0) / cumulativeCount).toFixed(1))
+            : null;
+        const cumBehaviour = cumulativeCount > 0
+            ? parseFloat((validRatings.reduce((s, r) => s + (r.behaviourSocial || 0), 0) / cumulativeCount).toFixed(1))
+            : null;
+        const cumEnglish = cumulativeCount > 0
+            ? parseFloat((validRatings.reduce((s, r) => s + (r.englishComm || 0), 0) / cumulativeCount).toFixed(1))
+            : null;
 
-                    const avgEngagement = parseFloat((topRatings.reduce((s, r) => s + r.classEngagement, 0) / topRatings.length).toFixed(1));
-                    const avgHomework = parseFloat((topRatings.reduce((s, r) => s + r.homeworkClasswork, 0) / topRatings.length).toFixed(1));
-                    const avgBehaviour = parseFloat((topRatings.reduce((s, r) => s + r.behaviourSocial, 0) / topRatings.length).toFixed(1));
-                    const avgEnglish = parseFloat((topRatings.reduce((s, r) => s + r.englishComm, 0) / topRatings.length).toFixed(1));
+        // 5b. Class Cumulative Benchmark & Peer Comparison
+        let classComparison = null;
+        if (classRatingAgg && classRatingAgg.length > 0) {
+            const classSum = classRatingAgg.reduce((s, c) => s + c.studentAvg, 0);
+            const classCumulativeAverage = parseFloat((classSum / classRatingAgg.length).toFixed(1));
+            const studentIdx = classRatingAgg.findIndex(c => c._id.toString() === studentId.toString());
+            const studentRank = studentIdx !== -1 ? studentIdx + 1 : null;
+            const diff = cumulativeAverage != null
+                ? parseFloat((cumulativeAverage - classCumulativeAverage).toFixed(1))
+                : null;
 
-                    latestRatingSummary = {
-                        averageScore: avg,
-                        average: avg, // Frontend StudentDashboard compatibility
-                        month: topMonth,
-                        year: topYear,
-                        label,
-                        variant,
-                        ratedSubjectCount: topRatings.length,
-                        ratedCount: topRatings.length, // Frontend StudentDashboard compatibility
-                        classEngagement: avgEngagement,
-                        homeworkClasswork: avgHomework,
-                        behaviourSocial: avgBehaviour,
-                        englishComm: avgEnglish,
-                        criteriaAverages: {
-                            classEngagement: avgEngagement,
-                            homeworkClasswork: avgHomework,
-                            behaviourSocial: avgBehaviour,
-                            englishComm: avgEnglish
-                        }
-                    };
-                }
+            let standingLabel = 'On Par with Class';
+            if (studentRank === 1) standingLabel = 'Top Performer';
+            else if (diff != null && diff >= 0.4) standingLabel = 'Well Above Class Avg';
+            else if (diff != null && diff > 0.0) standingLabel = 'Above Class Average';
+            else if (diff != null && diff === 0.0) standingLabel = 'On Par with Class';
+            else if (diff != null) standingLabel = 'Below Class Average';
+
+            classComparison = {
+                classCumulativeAverage,
+                difference: diff,
+                rank: studentRank,
+                totalStudentsRated: classRatingAgg.length,
+                standingLabel
+            };
+        }
+
+        // 5c. Current Calendar Month Live Status & Provisional Rating
+        const currentMY = getISTMonthYear();
+        const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        const curMonthRatings = validRatings.filter(r => r.month === currentMY.month && r.year === currentMY.year);
+        const curRatedCount = curMonthRatings.length;
+        const totalSubjectsCount = totalRatableSubjects || (curRatedCount > 0 ? curRatedCount : 0);
+        let curStatus = 'not_started';
+        if (totalSubjectsCount > 0 && curRatedCount >= totalSubjectsCount) {
+            curStatus = 'completed';
+        } else if (curRatedCount > 0) {
+            curStatus = 'in_progress';
+        }
+
+        let provisionalAvg = null;
+        if (curRatedCount > 0) {
+            provisionalAvg = parseFloat(
+                (curMonthRatings.reduce((s, r) => s + r.averageScore, 0) / curRatedCount).toFixed(1)
+            );
+        }
+        const curEval = StudentRating.getPerformanceEvaluation(provisionalAvg);
+
+        const currentMonth = {
+            month: currentMY.month,
+            year: currentMY.year,
+            monthName: MONTH_NAMES[currentMY.month - 1],
+            status: curStatus,
+            isCurrentMonth: true,
+            ratedCount: curRatedCount,
+            totalSubjects: totalSubjectsCount,
+            provisionalAverage: provisionalAvg,
+            label: curEval.label,
+            variant: curEval.variant
+        };
+
+        // 5d. Latest Month Fallback for Backwards Compatibility
+        let topMonth = currentMY.month;
+        let topYear = currentMY.year;
+        let topAvg = provisionalAvg || cumulativeAverage;
+        let topLabel = cumEval.label;
+        let topVariant = cumEval.variant;
+        let topRatings = curMonthRatings;
+
+        if (validRatings.length > 0) {
+            topMonth = validRatings[0].month;
+            topYear = validRatings[0].year;
+            topRatings = validRatings.filter(r => r.month === topMonth && r.year === topYear);
+            if (topRatings.length > 0) {
+                topAvg = parseFloat((topRatings.reduce((s, r) => s + r.averageScore, 0) / topRatings.length).toFixed(1));
+                const e = StudentRating.getPerformanceEvaluation(topAvg);
+                topLabel = e.label;
+                topVariant = e.variant;
             }
+        }
+
+        let latestRatingSummary = null;
+        if (cumulativeCount > 0 || curRatedCount > 0 || (classRatingAgg && classRatingAgg.length > 0)) {
+            const displayAvg = cumulativeAverage ?? topAvg;
+            const displayLabel = cumulativeAverage != null ? cumEval.label : topLabel;
+            const displayVariant = cumulativeAverage != null ? cumEval.variant : topVariant;
+
+            latestRatingSummary = {
+                // Primary Holistic Cumulative Metrics
+                cumulativeAverage,
+                cumulativeCount,
+                cumulativeLabel: cumEval.label,
+                cumulativeVariant: cumEval.variant,
+
+                // Class Peer Comparison
+                classComparison,
+
+                // Current Month Live Status & In-Progress Metrics
+                currentMonth,
+
+                // Backward compatibility properties for existing consumers
+                averageScore: displayAvg,
+                average: displayAvg,
+                month: topMonth,
+                year: topYear,
+                label: displayLabel,
+                variant: displayVariant,
+                ratedSubjectCount: cumulativeCount || topRatings.length,
+                ratedCount: cumulativeCount || topRatings.length,
+                classEngagement: cumEngagement,
+                homeworkClasswork: cumHomework,
+                behaviourSocial: cumBehaviour,
+                englishComm: cumEnglish,
+                criteriaAverages: {
+                    classEngagement: cumEngagement,
+                    homeworkClasswork: cumHomework,
+                    behaviourSocial: cumBehaviour,
+                    englishComm: cumEnglish
+                }
+            };
+        } else {
+            // Friendly zero-state: evaluation active in current academic year
+            latestRatingSummary = {
+                cumulativeAverage: null,
+                cumulativeCount: 0,
+                cumulativeLabel: 'Not Rated',
+                cumulativeVariant: 'neutral',
+                classComparison,
+                currentMonth,
+                averageScore: null,
+                average: null,
+                month: currentMY.month,
+                year: currentMY.year,
+                label: 'Not Rated',
+                variant: 'neutral',
+                ratedSubjectCount: 0,
+                ratedCount: 0,
+                criteriaAverages: null
+            };
         }
 
         const responseData = {

@@ -10,7 +10,6 @@ describe('User Management API Routes (/api/users)', () => {
   let adminToken;
   let teacherToken;
   let student1Token;
-  let student2Token;
   let student1;
   let student2;
   let testClass;
@@ -87,10 +86,6 @@ describe('User Management API Routes (/api/users)', () => {
       isActive: true,
       tokenVersion: 0
     });
-    student2Token = jwt.sign(
-      { userId: student2._id, role: 'student', tokenVersion: 0 },
-      process.env.JWT_SECRET
-    );
   });
 
   describe('POST /api/users (Create User)', () => {

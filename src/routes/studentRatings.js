@@ -675,7 +675,7 @@ router.get('/my-ratings', [auth, yearContext, checkRole(['student'])], async (re
             }
         }
 
-        // 7. Student trend (last 6 months in academic year)
+        // 7. Student trend (all months in academic year)
         const allStudentRatings = await StudentRating.find({
             student: studentId,
             academicYear: req.academicYearContext
@@ -684,9 +684,15 @@ router.get('/my-ratings', [auth, yearContext, checkRole(['student'])], async (re
             .sort({ year: 1, month: 1 })
             .lean();
 
+        const currentMY = getISTMonthYear();
+        const MONTH_NAMES = [
+            'January', 'February', 'March', 'April', 'May', 'June',
+            'July', 'August', 'September', 'October', 'November', 'December'
+        ];
+
         const trendMonthMap = {};
         allStudentRatings
-            .filter(r => !r.isExempt && r.averageScore != null && r.subject)
+            .filter(r => !r.isExempt && r.averageScore != null && r.subject && r.subject.ratingEnabled !== false)
             .forEach(r => {
                 const key = `${r.year}-${String(r.month).padStart(2, '0')}`;
                 if (!trendMonthMap[key]) {
@@ -703,17 +709,207 @@ router.get('/my-ratings', [auth, yearContext, checkRole(['student'])], async (re
             month: m.month,
             year: m.year,
             averageScore: parseFloat((m.scores.reduce((a, b) => a + b, 0) / m.scores.length).toFixed(2)),
-            ratedSubjectCount: m.scores.length
+            ratedSubjectCount: m.scores.length,
+            isCurrentMonth: (m.month === currentMY.month && m.year === currentMY.year)
         })).sort((a, b) => `${a.year}-${String(a.month).padStart(2, '0')}`.localeCompare(`${b.year}-${String(b.month).padStart(2, '0')}`));
 
-        // 8. Cumulative Academic Year Average for this student
+        // 8. Cumulative Academic Year Metrics for this student
+        const validYearRatings = allStudentRatings.filter(
+            r => !r.isExempt && r.averageScore != null && r.subject && r.subject.ratingEnabled !== false
+        );
+        const cumulativeCount = validYearRatings.length;
         let yearAverage = null;
-        if (allStudentRatings.length > 0) {
-            const validYearRatings = allStudentRatings.filter(r => !r.isExempt && r.averageScore != null && r.subject);
-            if (validYearRatings.length > 0) {
-                yearAverage = parseFloat((validYearRatings.reduce((s, r) => s + r.averageScore, 0) / validYearRatings.length).toFixed(2));
+        let cumEngagement = 0, cumHomework = 0, cumBehaviour = 0, cumEnglish = 0;
+
+        if (cumulativeCount > 0) {
+            yearAverage = parseFloat(
+                (validYearRatings.reduce((s, r) => s + r.averageScore, 0) / cumulativeCount).toFixed(2)
+            );
+            cumEngagement = parseFloat(
+                (validYearRatings.reduce((s, r) => s + (r.classEngagement || 0), 0) / cumulativeCount).toFixed(2)
+            );
+            cumHomework = parseFloat(
+                (validYearRatings.reduce((s, r) => s + (r.homeworkClasswork || 0), 0) / cumulativeCount).toFixed(2)
+            );
+            cumBehaviour = parseFloat(
+                (validYearRatings.reduce((s, r) => s + (r.behaviourSocial || 0), 0) / cumulativeCount).toFixed(2)
+            );
+            cumEnglish = parseFloat(
+                (validYearRatings.reduce((s, r) => s + (r.englishComm || 0), 0) / cumulativeCount).toFixed(2)
+            );
+        }
+
+        const cumulativeEvaluation = StudentRating.getPerformanceEvaluation(yearAverage);
+        const cumulativeDataPoints = {
+            classEngagement: cumEngagement,
+            homeworkClasswork: cumHomework,
+            behaviourSocial: cumBehaviour,
+            englishComm: cumEnglish
+        };
+
+        // 9. Class Cumulative Benchmark & Peer Comparison
+        let classCumulativeBenchmark = null;
+        let classComparison = null;
+        if (student.currentClass) {
+            const classRatingAgg = await StudentRating.aggregate([
+                {
+                    $match: {
+                        class: student.currentClass,
+                        academicYear: new mongoose.Types.ObjectId(req.academicYearContext),
+                        isExempt: { $ne: true },
+                        averageScore: { $ne: null }
+                    }
+                },
+                {
+                    $group: {
+                        _id: '$student',
+                        studentAvg: { $avg: '$averageScore' }
+                    }
+                },
+                { $sort: { studentAvg: -1 } }
+            ]);
+
+            if (classRatingAgg.length > 0) {
+                const classSum = classRatingAgg.reduce((s, c) => s + c.studentAvg, 0);
+                classCumulativeBenchmark = parseFloat((classSum / classRatingAgg.length).toFixed(2));
+                const studentIdx = classRatingAgg.findIndex(c => c._id.toString() === studentId.toString());
+                const studentRank = studentIdx !== -1 ? studentIdx + 1 : null;
+                const diff = yearAverage != null
+                    ? parseFloat((yearAverage - classCumulativeBenchmark).toFixed(2))
+                    : null;
+
+                let standingLabel = 'On Par with Class';
+                if (studentRank === 1) standingLabel = 'Top Performer';
+                else if (diff != null && diff >= 0.4) standingLabel = 'Well Above Class Avg';
+                else if (diff != null && diff > 0.0) standingLabel = 'Above Class Average';
+                else if (diff != null && diff === 0.0) standingLabel = 'On Par with Class';
+                else if (diff != null) standingLabel = 'Below Class Average';
+
+                classComparison = {
+                    classCumulativeAverage: classCumulativeBenchmark,
+                    difference: diff,
+                    rank: studentRank,
+                    totalStudents: classRatingAgg.length,
+                    standingLabel
+                };
             }
         }
+
+        // 10. Current Calendar Month Live Summary & Provisional Rating
+        const currentMonthRatings = allStudentRatings.filter(
+            r => r.month === currentMY.month && r.year === currentMY.year && !r.isExempt && r.averageScore != null && r.subject && r.subject.ratingEnabled !== false
+        );
+        const curRatedCount = currentMonthRatings.length;
+        const ratableSubjectsList = classSubjects.filter(s => s.ratingEnabled !== false);
+        const ratableSubjectCount = ratableSubjectsList.length;
+
+        let curStatus = 'not_started';
+        if (ratableSubjectCount > 0 && curRatedCount >= ratableSubjectCount) {
+            curStatus = 'completed';
+        } else if (curRatedCount > 0) {
+            curStatus = 'in_progress';
+        }
+
+        let provisionalAvg = null;
+        if (curRatedCount > 0) {
+            provisionalAvg = parseFloat(
+                (currentMonthRatings.reduce((s, r) => s + r.averageScore, 0) / curRatedCount).toFixed(2)
+            );
+        }
+        const curEval = StudentRating.getPerformanceEvaluation(provisionalAvg);
+
+        const currentMonthSummary = {
+            month: currentMY.month,
+            year: currentMY.year,
+            monthName: MONTH_NAMES[currentMY.month - 1],
+            status: curStatus,
+            ratedCount: curRatedCount,
+            totalSubjects: ratableSubjectCount,
+            provisionalAverage: provisionalAvg,
+            label: curEval.label,
+            variant: curEval.variant,
+            isCurrentMonth: (month === currentMY.month && year === currentMY.year)
+        };
+
+        // 11. Cumulative Subject Performance & Qualitative Remarks Feed (for Tab 3)
+        const subjectRatingsMap = new Map();
+        // Initialize with all class ratable subjects
+        ratableSubjectsList.forEach(sub => {
+            subjectRatingsMap.set(sub._id.toString(), {
+                subjectId: sub._id,
+                subjectName: sub.name,
+                ratingEnabled: sub.ratingEnabled,
+                ratings: []
+            });
+        });
+
+        const teacherRemarksFeed = [];
+        allStudentRatings.forEach(r => {
+            if (r.subject) {
+                const sid = r.subject._id.toString();
+                if (!subjectRatingsMap.has(sid)) {
+                    subjectRatingsMap.set(sid, {
+                        subjectId: r.subject._id,
+                        subjectName: r.subjectName || r.subject.name,
+                        ratingEnabled: r.subject.ratingEnabled,
+                        ratings: []
+                    });
+                }
+                const entry = subjectRatingsMap.get(sid);
+                entry.ratings.push(r);
+
+                // Collect remarks for feed
+                if (r.remarks && r.remarks.trim()) {
+                    teacherRemarksFeed.push({
+                        id: r._id,
+                        subjectId: r.subject._id,
+                        subjectName: r.subjectName || r.subject.name,
+                        month: r.month,
+                        year: r.year,
+                        monthName: MONTH_NAMES[r.month - 1] || `Month ${r.month}`,
+                        remarks: r.remarks.trim(),
+                        averageScore: r.averageScore,
+                        isExempt: Boolean(r.isExempt),
+                        submittedAt: r.submittedAt || r.updatedAt
+                    });
+                }
+            }
+        });
+
+        // Sort remarks chronologically descending (newest first)
+        teacherRemarksFeed.sort((a, b) => new Date(b.submittedAt) - new Date(a.submittedAt));
+
+        const cumulativeSubjects = Array.from(subjectRatingsMap.values()).map(sub => {
+            const validSubRatings = sub.ratings.filter(
+                r => !r.isExempt && r.averageScore != null
+            );
+            const count = validSubRatings.length;
+            const subAvg = count > 0
+                ? parseFloat((validSubRatings.reduce((s, r) => s + r.averageScore, 0) / count).toFixed(2))
+                : null;
+            const subEval = StudentRating.getPerformanceEvaluation(subAvg);
+
+            return {
+                subjectId: sub.subjectId,
+                subjectName: sub.subjectName,
+                ratingEnabled: sub.ratingEnabled,
+                evaluatedMonthsCount: count,
+                cumulativeAverage: subAvg,
+                evaluation: subEval,
+                criteriaAverages: {
+                    classEngagement: count > 0 ? parseFloat((validSubRatings.reduce((s, r) => s + (r.classEngagement || 0), 0) / count).toFixed(2)) : null,
+                    homeworkClasswork: count > 0 ? parseFloat((validSubRatings.reduce((s, r) => s + (r.homeworkClasswork || 0), 0) / count).toFixed(2)) : null,
+                    behaviourSocial: count > 0 ? parseFloat((validSubRatings.reduce((s, r) => s + (r.behaviourSocial || 0), 0) / count).toFixed(2)) : null,
+                    englishComm: count > 0 ? parseFloat((validSubRatings.reduce((s, r) => s + (r.englishComm || 0), 0) / count).toFixed(2)) : null,
+                },
+                remarksCount: sub.ratings.filter(r => r.remarks && r.remarks.trim()).length
+            };
+        });
+
+        const isCurrentMonth = (month === currentMY.month && year === currentMY.year);
+        const monthStatus = isCurrentMonth
+            ? curStatus
+            : (scorableRatings.length >= ratableSubjectCount ? 'completed' : 'finalized');
 
         const evaluation = StudentRating.getPerformanceEvaluation(overallAverage);
 
@@ -725,8 +921,12 @@ router.get('/my-ratings', [auth, yearContext, checkRole(['student'])], async (re
                 regNo: student.regNo,
                 gender: student.gender
             },
+            // Selected Month details (for Tab 2: Month-by-Month)
             month,
             year,
+            monthName: MONTH_NAMES[month - 1] || `Month ${month}`,
+            isCurrentMonth,
+            monthStatus,
             overallAverage,
             evaluation,
             dataPointAverages: {
@@ -737,7 +937,23 @@ router.get('/my-ratings', [auth, yearContext, checkRole(['student'])], async (re
             },
             subjects: subjectBreakdown,
             classBenchmark,
-            yearAverage,
+
+            // Cumulative Academic Year Metrics (for Tab 1 & Dashboard)
+            yearAverage, // Backward compatibility
+            cumulativeAverage: yearAverage,
+            cumulativeCount,
+            cumulativeEvaluation,
+            cumulativeDataPoints,
+            classCumulativeBenchmark,
+            classComparison,
+
+            // Current Month Real-Time Status
+            currentMonth: currentMonthSummary,
+
+            // Cumulative Subject Performance & Qualitative Remarks (for Tab 3)
+            cumulativeSubjects,
+            teacherRemarksFeed,
+
             trend,
             dataPoints: StudentRating.DATA_POINTS,
             ratingLabels: StudentRating.RATING_LABELS
