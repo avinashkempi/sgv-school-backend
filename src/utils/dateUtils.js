@@ -58,6 +58,17 @@ function getISTMonthYear(dateInput = new Date()) {
 }
 
 /**
+ * Extracts year and 1-based month for the previous month in Asia/Kolkata (IST).
+ * @param {Date|string|number} dateInput 
+ * @returns {{ year: number, month: number }}
+ */
+function getPreviousMonthYear(dateInput = new Date()) {
+    const { year, month } = getISTMonthYear(dateInput);
+    if (month === 1) return { year: year - 1, month: 12 };
+    return { year, month: month - 1 };
+}
+
+/**
  * Returns detailed date components in Asia/Kolkata.
  * @param {Date|string|number} dateInput 
  * @returns {{ year: number, month: number, day: number, weekday: string }}
@@ -235,6 +246,7 @@ module.exports = {
     getISTDateString,
     getISTToday,
     getISTMonthYear,
+    getPreviousMonthYear,
     getISTDateComponents,
     isISTSunday,
     getISTDateObject,

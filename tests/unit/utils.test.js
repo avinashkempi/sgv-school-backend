@@ -6,6 +6,7 @@ const {
 const {
   getISTDateString,
   getISTMonthYear,
+  getPreviousMonthYear,
   isISTSunday,
   getISTDayBounds,
   validateAttendanceDate
@@ -116,6 +117,18 @@ describe('Backend Core Utilities', () => {
       it('extracts year and 1-based month', () => {
         const result = getISTMonthYear('2026-11-03');
         expect(result).toEqual({ year: 2026, month: 11 });
+      });
+    });
+
+    describe('getPreviousMonthYear', () => {
+      it('extracts previous month and year for normal months', () => {
+        const result = getPreviousMonthYear('2026-11-03');
+        expect(result).toEqual({ year: 2026, month: 10 });
+      });
+
+      it('wraps to previous year and December when given January', () => {
+        const result = getPreviousMonthYear('2026-01-15');
+        expect(result).toEqual({ year: 2025, month: 12 });
       });
     });
 

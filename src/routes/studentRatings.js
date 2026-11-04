@@ -13,7 +13,7 @@ const {
     adminShiftMonthValidation,
     singleStudentRatingDeleteValidation
 } = require('../validations/studentRating');
-const { getISTMonthYear } = require('../utils/dateUtils');
+const { getISTMonthYear, getPreviousMonthYear } = require('../utils/dateUtils');
 const { logAudit } = require('../utils/auditLogger');
 const { cacheGet, cacheSet, cacheInvalidatePattern } = require('../config/redis');
 
@@ -461,7 +461,7 @@ router.post('/bulk', [auth, yearContext, requireOpenYear, ...bulkRatingValidatio
 router.get('/class/:classId/summary', [auth, yearContext, requireAdmin], async (req, res) => {
     try {
         const { classId } = req.params;
-        const defaultMY = getISTMonthYear();
+        const defaultMY = getPreviousMonthYear();
         const month = parseInt(req.query.month) || defaultMY.month;
         const year = parseInt(req.query.year) || defaultMY.year;
 
@@ -562,7 +562,7 @@ router.get('/class/:classId/summary', [auth, yearContext, requireAdmin], async (
 router.get('/my-ratings', [auth, yearContext, checkRole(['student'])], async (req, res) => {
     try {
         const studentId = req.user.userId;
-        const defaultMY = getISTMonthYear();
+        const defaultMY = getPreviousMonthYear();
         const month = parseInt(req.query.month) || defaultMY.month;
         const year = parseInt(req.query.year) || defaultMY.year;
 
@@ -1797,7 +1797,7 @@ router.get('/student/:studentId/trend', [auth, yearContext], async (req, res) =>
 router.get('/student/:studentId/details', [auth, yearContext], async (req, res) => {
     try {
         const { studentId } = req.params;
-        const defaultMY = getISTMonthYear();
+        const defaultMY = getPreviousMonthYear();
         const month = parseInt(req.query.month) || defaultMY.month;
         const year = parseInt(req.query.year) || defaultMY.year;
 
@@ -2435,7 +2435,7 @@ router.get('/school/all-students-dashboard', [auth, yearContext, checkRole(['adm
 // @access  Private (Admin)
 router.get('/school/summary', [auth, yearContext, requireAdmin], async (req, res) => {
     try {
-        const defaultMY = getISTMonthYear();
+        const defaultMY = getPreviousMonthYear();
         const month = parseInt(req.query.month) || defaultMY.month;
         const year = parseInt(req.query.year) || defaultMY.year;
 
@@ -2517,7 +2517,7 @@ router.get('/school/summary', [auth, yearContext, requireAdmin], async (req, res
 // @access  Private (Admin)
 router.get('/school/movers', [auth, yearContext, requireAdmin], async (req, res) => {
     try {
-        const defaultMY = getISTMonthYear();
+        const defaultMY = getPreviousMonthYear();
         const month = parseInt(req.query.month) || defaultMY.month;
         const year = parseInt(req.query.year) || defaultMY.year;
         const classId = req.query.classId; // Optional class filter
