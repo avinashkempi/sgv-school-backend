@@ -1,0 +1,4 @@
+## 2024-05-18 - [CRITICAL] Fix Plaintext Password Storage
+**Vulnerability:** User passwords were saved and compared in plaintext. The `pre('save')` hook for hashing was intentionally commented out as "disabled as per request", allowing insecure storage in the database.
+**Learning:** Legacy design or temporary feature requests may sometimes bypass critical security protocols (like password hashing) without being reverted. Re-evaluating intentionally disabled security features is crucial.
+**Prevention:** Never store passwords in plaintext under any circumstance. Ensure all password creation and updates pass through strong cryptographic hashing (e.g., bcrypt) in a `pre('save')` hook or similar mechanism. We have now enforced bcrypt hashing while maintaining backwards compatibility for existing plaintext passwords.
